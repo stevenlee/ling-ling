@@ -1,0 +1,228 @@
+{
+  "main": {
+    "id": "1563003f92059f86",
+    "type": "split",
+    "children": [
+      {
+        "id": "f7fae38b71bbe343",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "0a829b5e6d07794d",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "toranomaki/@ling-merge.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "@ling-merge"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "615c824c4ad9c8fc",
+    "type": "split",
+    "children": [
+      {
+        "id": "47757afbd3e4bcab",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "6c2b7e22d045a2e0",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "檔案瀏覽器"
+            }
+          },
+          {
+            "id": "cac662f9fcf31ac4",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "tag:#macroeconomics",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "搜尋"
+            }
+          },
+          {
+            "id": "4defd5ca5113cc93",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "書籤"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "ae63eff339843fec",
+    "type": "split",
+    "children": [
+      {
+        "id": "f6b70389e5941d72",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "61112cca0c9675ba",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "2026-04-15.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "2026-04-15 的反向連結"
+            }
+          },
+          {
+            "id": "58b12f94864cf08a",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "2026-04-15.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "2026-04-15 的對外連結"
+            }
+          },
+          {
+            "id": "cef3ad11005383a4",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "標籤"
+            }
+          },
+          {
+            "id": "1bb561609313caac",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "所有屬性"
+            }
+          },
+          {
+            "id": "84134509614ce0f6",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "2026-04-15.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "2026-04-15 的大綱"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:開啟快速切換": false,
+      "graph:查看關聯圖": false,
+      "canvas:建立新畫布": false,
+      "daily-notes:開啟今天的每日筆記": false,
+      "templates:插入模板": false,
+      "command-palette:開啟命令面板": false,
+      "bases:建立新的 base": false
+    }
+  },
+  "active": "0a829b5e6d07794d",
+  "lastOpenFiles": [
+    "toLingLing/@ling-zip-test2.md",
+    "raw/prompts/@ling-zip-test.md",
+    "fromLingLing/💌re-@ling-zip-test.md",
+    "toLingLing/@ling-zip-test.md",
+    "Insights/🎐insight-20260423-083204.md",
+    "toranomaki/@ling-insight.md",
+    "toLingLing/@ling-insight 2.md",
+    "raw/prompts/@ling-insight 2.md",
+    "fromLingLing/💌re-@ling-insight 2.md",
+    "Insights/🎐full-insight-20260423-082112.md",
+    "toLingLing/@ling-insight 1.md",
+    "raw/prompts/@ling-insight 1_1776903948.md",
+    "Insights/🎐insight-20260423-082548.md",
+    "Insights/🎐insight-20260423-081550.md",
+    "raw/prompts/@ling-insight 1_1776903672.md",
+    "Insights/🎐insight-20260423-080409.md",
+    "raw/prompts/@ling-insight-test2.md",
+    "fromLingLing/💌re-@ling-insight-test2.md",
+    "toLingLing/@ling-insight-test2.md",
+    "pages/_tagScrapbook.md",
+    "raw/clippings/OPEC.md",
+    "pages/OPEC.md",
+    "raw/clippings/Understanding Operating Margin Definition & Calculation Formula.md",
+    "pages/Understanding Operating Margin Definition & Calculation Formula.md",
+    "raw/clippings/Understanding Null Hypothesis in Investment Analysis.md",
+    "pages/Understanding Null Hypothesis in Investment Analysis.md",
+    "Skills",
+    "raw/prompts",
+    "raw/clippings",
+    "raw/assets",
+    "raw",
+    "Backlog.zip",
+    "MomSaid",
+    "Backlog",
+    "Assets/截圖 2026-04-03 上午11.59.26.png",
+    "Database/raw/clippings/截圖 2026-04-03 上午11.59.26.png",
+    "Database/chroma_db/chroma.sqlite3-journal",
+    "toranomaki",
+    "Clippings/截圖 2026-04-03 上午11.59.26.png"
+  ]
+}

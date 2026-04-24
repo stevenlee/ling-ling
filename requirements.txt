@@ -1,0 +1,7 @@
+watchdog
+openai
+google-genai
+pydantic
+python-dotenv
+chromadb
+PyYAML

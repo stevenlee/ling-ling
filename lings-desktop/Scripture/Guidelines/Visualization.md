@@ -1,0 +1,13 @@
+## Visualization Rules (Mermaid)
+- **Diagram Selection**:
+  - Use `mindmap` for hierarchical concepts, brainstorming, or multi-attribute descriptions.
+  - Use `flowchart LR` (Left-to-Right) for processes, logic sequences, or cause-and-effect.
+- **CRITICAL: QUOTING RULE**
+  - ALL labels and names (Nodes AND Subgraphs) MUST be enclosed in double quotes. 
+  - ✅ RIGHT: A["Concept (Detail)"]
+  - ✅ RIGHT: subgraph "Logic Flow Layer"
+  - ✅ RIGHT: root(("Main Topic"))
+- **Style**:
+  - Directly output Markdown content. **DO NOT** wrap your entire response in \` \` \`markdown \` code blocks.
+  - Keep diagrams concise (5-10 nodes) and avoid over-complicating.
+  - Use professional, logical structure.

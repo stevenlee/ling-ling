@@ -1,0 +1,240 @@
+{
+  "main": {
+    "id": "898ea5f042599fff",
+    "type": "split",
+    "children": [
+      {
+        "id": "3e1cd81fb2d171d7",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "bb49ca8b44beb103",
+            "type": "leaf",
+            "state": {
+              "type": "empty",
+              "state": {},
+              "icon": "lucide-file",
+              "title": "新分頁"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "215096f21867d6d1",
+    "type": "split",
+    "children": [
+      {
+        "id": "bac90eb73bda5382",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "eb0b61fd80360a74",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "檔案瀏覽器"
+            }
+          },
+          {
+            "id": "a1b4c3f725fd1209",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": true,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "搜尋"
+            }
+          },
+          {
+            "id": "e0a7a78183525863",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "書籤"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "6ef3006fdb4576c2",
+    "type": "split",
+    "children": [
+      {
+        "id": "21d3d70393d76327",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "462eb420655f84e8",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "歡迎.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "歡迎 的反向連結"
+            }
+          },
+          {
+            "id": "f698ed55f6196193",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "歡迎.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "歡迎 的對外連結"
+            }
+          },
+          {
+            "id": "6dd88cbd5e721191",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "標籤"
+            }
+          },
+          {
+            "id": "3da3014173413fd7",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "所有屬性"
+            }
+          },
+          {
+            "id": "7dbbe1e0d4f428ca",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "pages/GitHub Agentic Workflows 安全架構與設計.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "GitHub Agentic Workflows 安全架構與設計 的大綱"
+            }
+          },
+          {
+            "id": "391b5c1ecbe18e54",
+            "type": "leaf",
+            "state": {
+              "type": "mermaid-toolbar-view",
+              "state": {},
+              "icon": "trident-custom",
+              "title": "Mermaid Toolbar"
+            }
+          }
+        ],
+        "currentTab": 5
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:開啟快速切換": false,
+      "graph:查看關聯圖": false,
+      "canvas:建立新畫布": false,
+      "daily-notes:開啟今天的每日筆記": false,
+      "templates:插入模板": false,
+      "command-palette:開啟命令面板": false,
+      "bases:建立新的 base": false,
+      "obsidian-excalidraw-plugin:New drawing": false,
+      "mermaid-tools:Open Mermaid Toolbar": false
+    }
+  },
+  "active": "bb49ca8b44beb103",
+  "lastOpenFiles": [
+    "Wiki_Vault/Commands/大腦巡邏.md",
+    "Wiki_Vault/Commands/合併檔案.md",
+    "Wiki_Vault/fromLLM/大腦巡邏報告_20260413_145803.md",
+    "Wiki_Vault/fromLLM/大腦手術報告_20260413_154659.md",
+    "Wiki_Vault/fromLLM/回應_Test.md",
+    "Wiki_Vault/fromLLM/回應_RAG Test.md",
+    "Wiki_Vault/fromLLM/回應_Check Hacker News.md",
+    "Database/raw/prompts/大腦巡邏.md",
+    "Database/raw/prompts/合併檔案.md",
+    "Database/raw/prompts/Test.md",
+    "Database/raw/prompts/RAG Test.md",
+    "Database/raw/prompts/Check Hacker News.md",
+    "Database/raw/clippings/openclaw-github.md",
+    "Database/raw/clippings/Security Architecture.md",
+    "Database/raw/clippings/Github-Agentic-Workflows-How-They-Work.md",
+    "Database/raw/clippings/Continuous AI.md",
+    "Database/raw/clippings/Agentic Workflows.md",
+    "Database/raw/clippings/AI Engines (aka Coding Agents).md",
+    "Database/chroma_db/b8b8547d-48b9-4b29-a686-83b13c83f485/link_lists.bin",
+    "Database/chroma_db/b8b8547d-48b9-4b29-a686-83b13c83f485/length.bin",
+    "Database/chroma_db/b8b8547d-48b9-4b29-a686-83b13c83f485/header.bin",
+    "Database/chroma_db/b8b8547d-48b9-4b29-a686-83b13c83f485/data_level0.bin",
+    "Database/raw/prompts",
+    "Database/raw/clippings",
+    "Database/raw/assets",
+    "Database/chroma_db/chroma.sqlite3",
+    "Database/chroma_db/b8b8547d-48b9-4b29-a686-83b13c83f485",
+    "Database/raw",
+    "System_Engine/DesignDoc/analysis-architecture.md",
+    "System_Engine/DesignDoc/MergeAgent_implementation_plan.md",
+    "System_Engine/DesignDoc/Healthcheck_implementation_plan.md",
+    "System_Engine/DesignDoc/RAG_implementation_plan.md",
+    "System_Engine/DesignDoc/FileSystem_implementation_plan.md",
+    "System_Engine/DesignDoc/FileIPC_implementation_plan.md",
+    "Wiki_Vault/Excalidraw/agentic_arch.excalidraw.md",
+    "Wiki_Vault/Excalidraw/Drawing 2026-04-13 13.45.59.excalidraw.md",
+    "venv/lib/python3.12/site-packages/sympy/plotting/tests/test_region_xor.png",
+    "venv/lib/python3.12/site-packages/sympy/plotting/tests/test_region_or.png",
+    "venv/lib/python3.12/site-packages/sympy/plotting/tests/test_region_not.png",
+    "venv/lib/python3.12/site-packages/sympy/plotting/tests/test_region_and.png",
+    "test canvas.canvas",
+    "未命名.canvas"
+  ]
+}
