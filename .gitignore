@@ -53,4 +53,5 @@ daemon_startup.log
 # Private Knowledge (Uncomment if you want to keep your notes private)
 lings-desktop/pages/
 lings-desktop/Notes/
-lings-desktop/.obsidian/
+# Obsidian settings (Global)
+**/.obsidian/
