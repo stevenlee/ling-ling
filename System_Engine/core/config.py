@@ -34,6 +34,7 @@ SCRIPTURE_FILE = SCRIPTURE_DIR / "Scripture.md"
 PERSONAS_DIR = SCRIPTURE_DIR / "Personas"
 GUIDELINES_DIR = SCRIPTURE_DIR / "Guidelines"
 TEMPLATES_DIR = WIKI_VAULT_DIR / "Templates"
+PROMPTS_DIR = TEMPLATES_DIR / "Prompts"
 PAGES_DIR = WIKI_VAULT_DIR / "pages"
 NOTES_DIR = WIKI_VAULT_DIR / "Notes"
 TAG_MAP_FILE = PAGES_DIR / "_tagScrapbook.md"
@@ -96,6 +97,7 @@ class DynamicSettings:
 settings = DynamicSettings()
 
 CLIPPINGS_DIR = WIKI_VAULT_DIR / "Clippings"
+CONSOLIDATE_DIR = WIKI_VAULT_DIR / "Consolidate"
 TO_LLM_DIR = WIKI_VAULT_DIR / "toLingLing"
 FROM_LLM_DIR = WIKI_VAULT_DIR / "fromLingLing"
 EXCALIDRAW_DIR = WIKI_VAULT_DIR / "Excalidraw"
@@ -105,17 +107,17 @@ BACKUPS_DIR = PROJECT_ROOT / "Backups"
 
 DATABASE_DIR = WIKI_VAULT_DIR / "Database"
 RAW_DIR = WIKI_VAULT_DIR / "raw"
-RAW_CLIPPINGS_DIR = RAW_DIR / "clippings"
+RAW_CONSOLIDATE_DIR = RAW_DIR / "consolidate"
 RAW_PROMPTS_DIR = RAW_DIR / "prompts"
 RAW_ASSETS_DIR = RAW_DIR / "assets"
 
 def ensure_directories():
     """Ensure all required directories exist."""
     directories = [
-        CLIPPINGS_DIR, TO_LLM_DIR, FROM_LLM_DIR, PAGES_DIR, NOTES_DIR,
-        EXCALIDRAW_DIR, ASSETS_DIR, RAW_CLIPPINGS_DIR, RAW_PROMPTS_DIR, 
+        CLIPPINGS_DIR, CONSOLIDATE_DIR, TO_LLM_DIR, FROM_LLM_DIR, PAGES_DIR, NOTES_DIR,
+        EXCALIDRAW_DIR, ASSETS_DIR, RAW_CONSOLIDATE_DIR, RAW_PROMPTS_DIR, 
         RAW_ASSETS_DIR, SCRIPTURE_DIR, PERSONAS_DIR, GUIDELINES_DIR, 
-        SKILLS_DIR, BACKUPS_DIR, TEMPLATES_DIR
+        SKILLS_DIR, BACKUPS_DIR, TEMPLATES_DIR, PROMPTS_DIR
     ]
     for directory in directories:
         directory.mkdir(parents=True, exist_ok=True)

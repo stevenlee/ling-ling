@@ -66,3 +66,34 @@ def dump_markdown_with_metadata(metadata: dict, content: str) -> str:
             
     frontmatter = yaml.safe_dump(clean_meta, allow_unicode=True, sort_keys=False).strip()
     return f"---\n{frontmatter}\n---\n\n{content}"
+
+def clean_llm_response(text: str) -> str:
+    """
+    Safely unwraps the LLM response if it's wrapped in a response container (like ```markdown).
+    Preserves functional code blocks (like ```mermaid, ```python).
+    """
+    if not text:
+        return ""
+    
+    text = text.strip()
+    
+    # Match an outer code block
+    pattern = r'^```(\w*)\n(.*?)\n```$'
+    match = re.match(pattern, text, re.DOTALL | re.IGNORECASE)
+    
+    if match:
+        lang = match.group(1).lower()
+        content = match.group(2).strip()
+        
+        # Whitelist of languages that are likely used as "response containers"
+        # If the block uses one of these (or no language), we unwrap it.
+        # If it's anything else (mermaid, python, etc.), it's likely intended functional code.
+        container_langs = ['', 'markdown', 'md', 'txt', 'text', 'markdown-math']
+        
+        if lang in container_langs:
+            return content
+        else:
+            # It's a functional block (e.g. ```mermaid), keep the wrapper
+            return text
+            
+    return text

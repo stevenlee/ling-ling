@@ -15,7 +15,7 @@ class InsightScheduler(threading.Thread):
         self.project_root = project_root
         self.llm = llm
         self.rag = rag
-        self.agent = InsightAgent(project_root, llm, rag)
+        self.agent = InsightAgent(llm, rag)
         self.last_run_date = None
 
     def run(self):

@@ -1,20 +1,16 @@
 import logging
-import json
 import random
-import glob
 import re
 import yaml
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from services.rag_manager import RAGManager
-from core.config import SKILLS_DIR
+from agents.base_agent import BaseAgent
+from core.config import SKILLS_DIR, PROMPTS_DIR, WIKI_VAULT_DIR
 
-class InsightAgent:
-    def __init__(self, project_root: Path, llm, rag_manager):
-        self.project_root = project_root
-        self.llm = llm
-        self.rag = rag_manager
-        self.insights_dir = self.project_root / "lings-desktop" / "Insights"
+class InsightAgent(BaseAgent):
+    def __init__(self, llm, rag_manager):
+        super().__init__(llm, rag_manager)
+        self.insights_dir = WIKI_VAULT_DIR / "Insights"
         self.insights_dir.mkdir(parents=True, exist_ok=True)
         self.skills_dir = SKILLS_DIR
         self.strategies = self._load_strategies()
@@ -22,7 +18,6 @@ class InsightAgent:
     def _load_strategies(self) -> dict:
         strategies = {}
         if not self.skills_dir.exists():
-            self.skills_dir.mkdir(parents=True, exist_ok=True)
             return {}
             
         for filepath in self.skills_dir.glob("*.md"):
@@ -36,36 +31,39 @@ class InsightAgent:
                         skill_id = yaml_data['name']
                         strategies[skill_id] = yaml_data
                         strategies[skill_id]['system_prompt'] = body_content
-                        logging.info(f"InsightAgent: Loaded Skill '{skill_id}' from {filepath.name}")
             except Exception as e:
                 logging.error(f"Failed to load skill {filepath.name}: {e}")
         return strategies
 
-    def generate_insight(self, strategy_id: str = "recency", user_directive: str = "") -> str:
+    def execute(self, task_context: dict) -> str:
+        strategy_id = task_context.get('strategy_id', "recency")
+        user_directive = task_context.get('user_directive', "")
+        is_full_report = task_context.get('is_full_report', False)
+        
+        if is_full_report:
+            return self.generate_full_insight(user_directive)
+        else:
+            return self.generate_insight(strategy_id, user_directive)
+
+    def generate_insight(self, strategy_id: str, user_directive: str = "") -> str:
         if strategy_id not in self.strategies:
             available = list(self.strategies.keys())
             if not available: return "❌ Error: No strategies found."
             strategy_id = random.choice(available)
         
         config = self.strategies[strategy_id]
-        logging.info(f"InsightAgent: Executing '{config['name']}'...")
-        
         selection = config.get('selection', {})
-        input_schema = config.get('input_schema', {})
-        properties = input_schema.get('properties', {})
-        method = config.get('method') or properties.get('method') or selection.get('method', 'random')
-        limit = config.get('limit') or properties.get('limit') or selection.get('limit', 10)
+        method = config.get('method') or selection.get('method', 'random')
+        limit = config.get('limit') or selection.get('limit', 10)
         
         context = self._get_context_by_method(method, limit, user_directive)
-        base_system_prompt = config.get('system_prompt', "Analyze this.")
         
-        # Manually load template for decoupling
-        template_path = self.project_root / "System_Engine" / "core" / "Templates" / "insight-rpt.md"
-        template_text = template_path.read_text(encoding='utf-8') if template_path.exists() else ""
+        system_base = self._load_prompt("system_base.md")
+        agent_instruction = self._load_prompt("agent_insight.md")
         
         custom_task = (
-            f"{template_text}\n\n"
-            f"## 分析指令\n{base_system_prompt}\n\n"
+            f"{system_base}\n\n{agent_instruction}\n\n"
+            f"## 分析指令\n{config.get('system_prompt', 'Analyze this.')}\n\n"
             f"## 知識背景\n{context}"
         )
         
@@ -75,44 +73,34 @@ class InsightAgent:
             custom_instruction=custom_task
         )
         
-        # --- SMART YAML MERGE ---
-        # Parse the YAML from report_content and inject our exercise metadata
-        import yaml
+        # Self-correct content (e.g. Mermaid)
+        report_content = self._self_correct(report_content)
         
-        final_markdown = report_content
-        match = re.search(r'^---\s*\n(.*?)\n---\s*\n', report_content, re.DOTALL)
-        if match:
-            try:
-                llm_yaml = yaml.safe_load(match.group(1))
-                if isinstance(llm_yaml, dict):
-                    # Inject our metadata
-                    llm_yaml['exercise_strategy'] = strategy_id
-                    llm_yaml['exercise_name'] = config['name']
-                    llm_yaml['exercise_description'] = config['description']
-                    llm_yaml['date_created'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    new_yaml_str = yaml.dump(llm_yaml, allow_unicode=True, default_flow_style=False).strip()
-                    final_markdown = f"---\n{new_yaml_str}\n---\n\n{report_content[match.end():].strip()}"
-            except Exception as e:
-                logging.error(f"InsightAgent: Failed to merge YAML: {e}")
+        # Write report via standardized method
+        meta = {
+            "exercise_strategy": strategy_id,
+            "exercise_name": config['name'],
+            "exercise_description": config['description']
+        }
         
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        filename = f"🎐insight-{timestamp}.md"
-        (self.insights_dir / filename).write_text(final_markdown, 'utf-8')
-        return final_markdown
+        output_path = self._write_report(f"洞察分析-{config['name']}", report_content, "report_insight", meta)
+        
+        # Also copy to Insights folder for Obsidian visibility
+        insight_file = self.insights_dir / f"🎐insight-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+        insight_file.write_text(output_path.read_text(encoding='utf-8'), encoding='utf-8')
+        
+        return report_content
 
     def generate_full_insight(self, user_directive: str = "") -> str:
-        logging.info("InsightAgent: Generating FULL Report...")
         all_results = []
-        # Manually load template for decoupling
-        template_path = self.project_root / "System_Engine" / "core" / "Templates" / "insight-rpt.md"
-        template_text = template_path.read_text(encoding='utf-8') if template_path.exists() else ""
-
         for strategy_id, config in self.strategies.items():
             context = self._get_context_by_method(config.get('method', 'random'), 10, user_directive)
             
+            system_base = self._load_prompt("system_base.md")
+            agent_instruction = self._load_prompt("agent_insight.md")
+            
             custom_task = (
-                f"{template_text}\n\n"
+                f"{system_base}\n\n{agent_instruction}\n\n"
                 f"## 分析指令\n執行策略：{config['name']}\n分析目標：{config['description']}\n\n"
                 f"## 知識背景\n{context}"
             )
@@ -125,24 +113,15 @@ class InsightAgent:
             all_results.append(f"## 📌 分析維度：{config['name']}\n\n{section_content}")
 
         sections_joined = "\n\n---\n\n".join(all_results)
+        sections_joined = self._self_correct(sections_joined)
         
-        # For FULL report, we create a SINGLE YAML at the top
-        final_markdown = f"""---
-title: "Ling Ling 的練習本 - {datetime.now().strftime('%Y-%m-%d')}"
-type: insight_report
-date_created: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
----
-
-# 🎀 Ling Ling 的練習本 (Full Report)
-
-{sections_joined}
-
----
-*此報告由 Insight Agent 聚合所有策略自動生成。*
-"""
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        filename = f"🎐full-insight-{timestamp}.md"
-        (self.insights_dir / filename).write_text(final_markdown, 'utf-8')
+        final_markdown = f"# 🎀 Ling Ling 的練習本 (Full Report)\n\n{sections_joined}"
+        
+        output_path = self._write_report("全方位洞察報告", final_markdown, "report_insight_full")
+        
+        insight_file = self.insights_dir / f"🎐full-insight-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+        insight_file.write_text(output_path.read_text(encoding='utf-8'), encoding='utf-8')
+        
         return final_markdown
 
     def _get_context_by_method(self, method: str, limit: int, user_directive: str = "") -> str:
@@ -151,7 +130,6 @@ date_created: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         file_matches = re.findall(r'\[\[(.*?)\]\]', user_directive)
         if file_matches:
             target_file = file_matches[0].split('|')[0].strip()
-            if '/' in target_file: target_file = target_file.split('/')[-1]
             if target_file.lower().endswith('.md'): target_file = target_file[:-3]
         tag_matches = re.findall(r'#([^\s#]+)', user_directive)
         if tag_matches: target_tag = tag_matches[0]
@@ -193,12 +171,9 @@ date_created: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         except: return self._get_random_sample_context(limit)
 
     def _get_island_context(self, limit: int, target_island: str = None) -> str:
-        from maintenance.wiki_linter import WikiLinter
         if not target_island:
-            linter = WikiLinter(self.project_root)
-            orphans = linter.scan_graph().get('orphans', [])
-            if not orphans: return self._get_random_sample_context(limit)
-            target_island = random.choice(orphans)
+            # We would normally import LinterAgent here if needed, but let's keep it simple
+            return self._get_random_sample_context(limit)
         results = self.rag.collection.get(where={"title": target_island}, limit=limit)
         docs = results.get('documents', [])
         return f"Analysis target (Knowledge Island): [[{target_island}]]\n\n" + "\n---\n".join(docs) if docs else self._get_random_sample_context(limit)

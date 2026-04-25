@@ -17,8 +17,8 @@ def repair_tags_interactively(report_file_override: Path | None = None):
     
     if not report_file.exists():
         logging.warning(f"{COMMAND_PREFIX}repair-tags.md not found. Generating new report...")
-        agent = TagPatrolAgent()
-        agent.generate_report()
+        agent = TagPatrolAgent(LLMClient())
+        agent.execute()
         print(f"\n⚠️ 指令檔不存在。系統已自動為您掃描並生成了「{COMMAND_PREFIX}repair-tags.md」。")
         return
 

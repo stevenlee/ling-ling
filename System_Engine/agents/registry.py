@@ -1,0 +1,27 @@
+import logging
+from agents.merge_agent import MergeAgent
+from agents.tag_patrol_agent import TagPatrolAgent
+from agents.insight_agent import InsightAgent
+from agents.linter_agent import LinterAgent
+
+class AgentRegistry:
+    def __init__(self, llm, rag):
+        self.llm = llm
+        self.rag = rag
+        self._registry = {
+            "merge": MergeAgent,
+            "patrol_tags": TagPatrolAgent,
+            "tag_patrol": TagPatrolAgent,
+            "insight": InsightAgent,
+            "patrol": LinterAgent,
+            "linter": LinterAgent
+        }
+
+    def get_agent(self, command_key: str):
+        agent_class = self._registry.get(command_key)
+        if agent_class:
+            return agent_class(self.llm, self.rag)
+        return None
+
+    def list_commands(self):
+        return list(self._registry.keys())

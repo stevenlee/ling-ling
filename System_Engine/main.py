@@ -4,7 +4,7 @@ import logging
 import watchdog.observers
 
 from core.config import (
-    LLM_PROVIDER, PROJECT_ROOT, WIKI_VAULT_DIR, CLIPPINGS_DIR, 
+    LLM_PROVIDER, PROJECT_ROOT, WIKI_VAULT_DIR, CLIPPINGS_DIR, CONSOLIDATE_DIR,
     TO_LLM_DIR, PAGES_DIR, NOTES_DIR, SCRIPTURE_DIR, PID_FILE, ensure_directories, settings
 )
 from core.utils import acquire_pid_lock
@@ -39,13 +39,23 @@ def main():
     
     # 4. Schedule Watchdogs
     observer = watchdog.observers.Observer()
-    observer.schedule(event_handler_clippings, str(CLIPPINGS_DIR), recursive=False)
+    
+    # 1. Manual Clippings -> Move from 'Clippings/' to 'Consolidate/' to process
+    observer.schedule(event_handler_clippings, str(CONSOLIDATE_DIR), recursive=False)
+    
+    # 2. System Commands -> Use 'toLingLing/' for @ling- commands
     observer.schedule(event_handler_prompts, str(TO_LLM_DIR), recursive=False)
+    
     observer.schedule(event_handler_vault, str(WIKI_VAULT_DIR), recursive=True)
     observer.schedule(event_handler_vault, str(PAGES_DIR), recursive=True)
     observer.schedule(event_handler_vault, str(NOTES_DIR), recursive=True)
     observer.schedule(event_handler_vault, str(SCRIPTURE_DIR), recursive=True)
     observer.start()
+    
+    # 5. Startup Scan: Process existing files in Ingest/Command folders
+    ui.info("Scanning for existing files in Consolidate and toLingLing...")
+    event_handler_clippings.scan_existing()
+    event_handler_prompts.scan_existing()
     
     # 5. Start Background Schedulers
     scheduler = InsightScheduler(PROJECT_ROOT, llm_client, rag_manager)

@@ -1,6 +1,5 @@
 import sys
 import os
-import inspect
 from pathlib import Path
 
 # Add System_Engine to sys.path
@@ -8,83 +7,72 @@ sys.path.append(str(Path(__file__).parent.parent.absolute()))
 
 def check_structure():
     print("🔍 Checking Project Structure...")
-    from core.config import ensure_directories, PROJECT_ROOT
+    from core.config import ensure_directories, PROJECT_ROOT, PROMPTS_DIR
     ensure_directories()
     print(f"✅ Directories verified at {PROJECT_ROOT}")
+    
+    required_prompts = ["system_base.md", "mermaid_rules.md", "agent_merge.md", "agent_insight.md", "agent_tag_patrol.md", "agent_linter.md"]
+    for p in required_prompts:
+        if (PROMPTS_DIR / p).exists():
+            print(f"✅ Prompt template found: {p}")
+        else:
+            print(f"❌ Prompt template MISSING: {p}")
 
 def check_agents():
-    print("\n🕵️  Auditing Agent Method Mappings...")
+    print("\n🕵️  Auditing Agent Refactor...")
     errors = 0
     
-    # 1. MergeAgent check
-    try:
-        from agents.merge_agent import MergeAgent
-        merger = MergeAgent(Path("."))
-        if hasattr(merger, 'merge_entities'):
-            print("✅ MergeAgent: merge_entities() found.")
-        else:
-            print("❌ MergeAgent: merge_entities() MISSING!")
+    from services.llm_client import LLMClient
+    llm = LLMClient()
+    
+    agents_to_check = [
+        ("MergeAgent", "agents.merge_agent"),
+        ("TagPatrolAgent", "agents.tag_patrol_agent"),
+        ("InsightAgent", "agents.insight_agent"),
+        ("LinterAgent", "agents.linter_agent")
+    ]
+    
+    for name, module_path in agents_to_check:
+        try:
+            module = __import__(module_path, fromlist=[name])
+            agent_class = getattr(module, name)
+            
+            # Check for BaseAgent inheritance (indirectly via __init__ signature)
+            import inspect
+            sig = inspect.signature(agent_class.__init__)
+            params = list(sig.parameters.keys())
+            
+            # Expected params: self, llm, rag (or similar)
+            if 'llm' in params or 'rag_manager' in params:
+                print(f"✅ {name}: Initialization signature looks correct.")
+            else:
+                print(f"❌ {name}: Unexpected __init__ signature: {params}")
+                errors += 1
+                
+            # Check for execute method
+            if hasattr(agent_class, 'execute'):
+                print(f"✅ {name}: execute() method found.")
+            else:
+                print(f"❌ {name}: execute() method MISSING!")
+                errors += 1
+                
+        except Exception as e:
+            print(f"❌ {name}: Failed to import/init: {e}")
             errors += 1
-    except Exception as e:
-        print(f"❌ MergeAgent: Failed to import/init: {e}")
-        errors += 1
-
-    # 2. TagPatrolAgent check
-    try:
-        from agents.tag_patrol_agent import TagPatrolAgent
-        agent = TagPatrolAgent()
-        if hasattr(agent, 'generate_report'):
-            print("✅ TagPatrolAgent: generate_report() found.")
-        else:
-            print("❌ TagPatrolAgent: generate_report() MISSING!")
-            errors += 1
-    except Exception as e:
-        print(f"❌ TagPatrolAgent: Failed to import/init: {e}")
-        errors += 1
-
-    # 3. InsightAgent check
-    try:
-        from agents.insight_agent import InsightAgent
-        # We need dummy LLM/RAG for init if they are required
-        agent = InsightAgent(Path("."), None, None)
-        if hasattr(agent, 'generate_insight'):
-            print("✅ InsightAgent: generate_insight() found.")
-        else:
-            print("❌ InsightAgent: generate_insight() MISSING!")
-            errors += 1
-    except Exception as e:
-        print(f"❌ InsightAgent: Failed to import/init: {e}")
-        errors += 1
-
-    # 4. WikiLinter check
-    try:
-        from maintenance.wiki_linter import WikiLinter
-        linter = WikiLinter(Path("."))
-        if hasattr(linter, 'perform_repair') and hasattr(linter, 'generate_report'):
-            print("✅ WikiLinter: Methods found.")
-        else:
-            print("❌ WikiLinter: Methods MISSING!")
-            errors += 1
-    except Exception as e:
-        print(f"❌ WikiLinter: Failed to import/init: {e}")
-        errors += 1
 
     return errors
 
 def check_parser():
-    print("\n🧪 Testing Parser Utility...")
+    print("\n🧪 Testing Parser Utility (Safe Unwrapping)...")
     try:
-        from core.parser import dump_markdown_with_metadata, parse_markdown_metadata
-        test_meta = {"title": "Test", "tags": ["a", "b"]}
-        test_content = "Hello World"
-        md = dump_markdown_with_metadata(test_meta, test_content)
-        parsed = parse_markdown_metadata(md)
-        
-        if "Test" in md and parsed.get("title") == "Test":
-            print("✅ Parser: dump/parse cycle successful.")
+        from core.parser import clean_llm_response
+        test_input = "```markdown\n# Hello\n```"
+        cleaned = clean_llm_response(test_input)
+        if cleaned == "# Hello":
+            print("✅ Parser: clean_llm_response works correctly.")
             return 0
         else:
-            print("❌ Parser: Data mismatch during cycle.")
+            print(f"❌ Parser: clean_llm_response failed. Got: {repr(cleaned)}")
             return 1
     except Exception as e:
         print(f"❌ Parser: Test failed: {e}")
@@ -92,19 +80,19 @@ def check_parser():
 
 def main():
     print("="*50)
-    print("🛡️  LING-LING SYSTEM HEALTH CHECK")
+    print("🛡️  LING-LING SYSTEM HEALTH CHECK (Refactored)")
     print("="*50)
     
     errors = 0
-    errors += check_structure() or 0
+    check_structure()
     errors += check_agents()
     errors += check_parser()
     
     print("\n" + "="*50)
     if errors == 0:
-        print("🎉 [PASSED] System is healthy and ready for release!")
+        print("🎉 [PASSED] System is healthy and following the new Agent pattern!")
     else:
-        print(f"🚩 [FAILED] Found {errors} issues. Please fix them before release.")
+        print(f"🚩 [FAILED] Found {errors} issues. Please fix them.")
     print("="*50)
     
     sys.exit(errors)

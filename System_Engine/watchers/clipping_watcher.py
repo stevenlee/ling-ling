@@ -12,7 +12,7 @@ from services.text_splitter import TextSplitter
 from services.media_processor import process_image
 from core.config import (
     INDEX_FILE, LOG_FILE, EXCALIDRAW_DIR, PAGES_DIR, 
-    RAW_CLIPPINGS_DIR, ASSETS_DIR, settings
+    RAW_CONSOLIDATE_DIR, ASSETS_DIR, settings
 )
 from core.ui import ui
 from core.vault_utils import update_wiki_index
@@ -26,34 +26,58 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
         self.splitter = TextSplitter()
 
     def on_created(self, event):
+        self._handle_event(event)
+
+    def on_moved(self, event):
+        if not event.is_directory:
+            # ONLY handle if the file is being moved INTO the monitored directory
+            from core.config import CONSOLIDATE_DIR
+            dest_path = Path(event.dest_path)
+            if CONSOLIDATE_DIR in dest_path.parents:
+                self._handle_event(event, is_move=True)
+
+    def _handle_event(self, event, is_move=False):
         if event.is_directory:
             return
             
         if global_busy_state.is_busy():
             return
         
-        filepath = Path(event.src_path)
+        filepath = Path(event.dest_path) if is_move else Path(event.src_path)
+        if filepath.name.startswith((".", "@")):
+            return
+            
         supported_extensions = ['.md', '.png', '.jpg', '.jpeg']
         if filepath.suffix.lower() not in supported_extensions:
             return
         
         global_busy_state.set_busy(True)
         try:
-            ui.set_status(f"正在預處理剪輯：{filepath.name}")
-            time.sleep(2)
+            ui.set_status(f"Preparing: {filepath.name}")
+            time.sleep(1) # Small buffer for file system stability
             
-            filepath = Path(event.src_path)
             if not filepath.exists():
                 return
                 
-            ui.set_status(f"正在消化新資料：{filepath.name}")
             self.process_file(filepath)
-            ui.success(f"資料消化完畢：{filepath.name}")
+            ui.success(f"Successfully Consolidated: {filepath.name}")
         except Exception as e:
-            ui.error(f"資料處理失敗：{e}")
+            ui.error(f"Consolidation Failed: {e}")
         finally:
             ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)
             global_busy_state.set_busy(False)
+
+    def scan_existing(self):
+        """Scan for files already in the directory at startup."""
+        from core.config import CONSOLIDATE_DIR
+        if CONSOLIDATE_DIR.exists():
+            for f in CONSOLIDATE_DIR.glob("*.md"):
+                if f.is_file() and not f.name.startswith((".", "@")):
+                    ui.info(f"Startup scan found: {f.name}")
+                    self.process_file(f)
+            for f in CONSOLIDATE_DIR.glob("*.png"):
+                if f.is_file():
+                    self.process_file(f)
         
     def process_file(self, filepath: Path):
         ext = filepath.suffix.lower()
@@ -69,12 +93,7 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
             
             base_title = filepath.stem
             entity_dir = PAGES_DIR / base_title
-            synthesis_file = entity_dir / f"{base_title}.md"
-            
-            # --- Pre-cleanup: Avoid zombie files from previous failed runs ---
-            if entity_dir.exists() and not synthesis_file.exists():
-                logging.info(f"Clipping: Found incomplete directory for {base_title}. Cleaning up...")
-                shutil.rmtree(entity_dir)
+            synthesis_file = entity_dir / f"{base_title} (Synthesis).md"
             
             # Detect long document
             if len(content) > self.splitter.chunk_size + 1000:
@@ -87,7 +106,7 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
                 total_output_chars = 0
                 
                 for i, chunk in enumerate(chunks):
-                    ui.set_status(f"正在消化第 {i+1}/{len(chunks)} 部分...")
+                    ui.set_status(f"Distilling Part {i+1} of {len(chunks)}...")
                     
                     context_hint = f"Part {i+1}/{len(chunks)}."
                     if i > 0 and pending_concepts:
@@ -114,22 +133,25 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
                         part_summaries.append(f"- [[{base_title} (Part {i+1})]]: {first_line}")
 
                 # --- Final Synthesis ---
-                ui.set_status(f"正在生成實體總結：{base_title}...")
+                ui.set_status(f"Synthesizing: {base_title}...")
                 synthesis_text = self.llm.generate_synthesis(base_title, part_summaries, pending_concepts)
                 
                 
+                from core.version import VERSION
                 final_meta = {
-                    "title": base_title,
+                    "title": f"{base_title} (Synthesis)",
                     "tags": (master_tags or []) + ["synthesis", "completed"],
                     "status": "#PerfectPitch",
+                    "version": VERSION,
                     "date_completed": datetime.now().strftime("%Y-%m-%d"),
                     "model": self.llm.model,
-                    "stats": {
-                        "input_chars": len(content),
-                        "output_chars": total_output_chars,
-                        "parts": len(chunks)
-                    }
+                    "input_chars": len(content),
+                    "output_chars": total_output_chars,
+                    "parts_count": len(chunks)
                 }
+                
+                # Synthesis Navigation
+                syn_nav = f"\n\n---\n## 🔗 原始溯源\n*   📄 **[[{base_title}|查看完整原始檔 (Original)]]**"
                 
                 final_content = f"""# ✨ {base_title} (Synthesis)
 ---
@@ -138,7 +160,7 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
 {synthesis_text}
 
 ## 📂 Navigation
-{chr(10).join(part_summaries)}
+{chr(10).join(part_summaries)}{syn_nav}
 
 ## 🗺️ Knowledge Map
 (Tags: {" ".join([f"#{t}" for t in (master_tags or []) if "part-" not in t])})
@@ -160,9 +182,9 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
                 self._ingest_to_wiki(content, filepath)
                 
             # Archive
-            dest = RAW_CLIPPINGS_DIR / filepath.name
+            dest = RAW_CONSOLIDATE_DIR / filepath.name
             if dest.exists():
-                dest = RAW_CLIPPINGS_DIR / f"{filepath.stem}_{datetime.now().strftime('%Y%m%d-%H%M%S')}{filepath.suffix}"
+                dest = RAW_CONSOLIDATE_DIR / f"{filepath.stem}_{datetime.now().strftime('%Y%m%d-%H%M%S')}{filepath.suffix}"
             shutil.move(str(filepath), str(dest))
             ui.success(f"Clipping complete: [bold]{base_title}[/bold] (Synthesis generated)")
             
@@ -185,7 +207,7 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
                     raise ValueError("LLM generation failed.")
             
             base_title = source_filepath.stem.strip().replace("/", "-").replace("\\", "-")
-            title = base_title
+            title = f"{base_title} (Synthesis)"
             
             if part_info:
                 title = f"{base_title} (Part {part_info['current']})"
@@ -197,21 +219,25 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
             page_type = llm_result.get('type', 'entity')
             body_content = llm_result.get('content', '')
             
-            # Navigation
+            # Enhanced Navigation
+            nav = "\n\n---\n## 🔗 知識導航\n"
             if part_info:
-                lang = settings.OUTPUT_LANGUAGE.lower()
-                nav_labels = {
-                    "chinese": ("← 上一頁", "下一頁 →", "第"),
-                    "japanese": ("← 前へ", "次へ →", "第"),
-                }.get(next((k for k in ["chinese", "japanese"] if k in lang), "english"), ("← Previous", "Next →", "Part"))
+                nav += f"*   🔙 **[[{base_title} (Synthesis)|查看全文總結 (Synthesis)]]**\n"
+                nav += f"*   📄 **[[{base_title}|查看完整原始檔 (Original)]]**\n"
                 
-                nav = "\n\n---\n"
+                adj_links = []
                 if part_info['current'] > 1:
-                    nav += f"[[{base_title} (Part {part_info['current']-1})|{nav_labels[0]}]] | "
-                nav += f"{nav_labels[2]} {part_info['current']} / {part_info['total']}"
+                    adj_links.append(f"[[{base_title} (Part {part_info['current']-1})|◀ 上一篇]]")
                 if part_info['current'] < part_info['total']:
-                    nav += f" | [[{base_title} (Part {part_info['current']+1})|{nav_labels[1]}]]"
-                body_content += nav
+                    adj_links.append(f"[[{base_title} (Part {part_info['current']+1})|下一篇 ▶]]")
+                
+                if adj_links:
+                    nav += f"*   📑 {' | '.join(adj_links)}\n"
+            else:
+                # Single-page synthesis navigation
+                nav += f"*   📄 **[[{base_title}|查看完整原始檔 (Original)]]**\n"
+            
+            body_content += nav
 
             date_created = datetime.now().strftime("%Y-%m-%d")
             
@@ -223,12 +249,10 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
             }
             wiki_markdown = dump_markdown_with_metadata(wiki_meta, body_content)
             
-            if part_info:
-                page_folder = PAGES_DIR / base_title
-                page_folder.mkdir(parents=True, exist_ok=True)
-                page_path = page_folder / f"{title}.md"
-            else:
-                page_path = PAGES_DIR / f"{title}.md"
+            # Always save in a dedicated entity folder
+            page_folder = PAGES_DIR / base_title
+            page_folder.mkdir(parents=True, exist_ok=True)
+            page_path = page_folder / f"{title}.md"
 
             with open(page_path, 'w', encoding='utf-8') as f:
                 f.write(wiki_markdown)

@@ -1,20 +1,17 @@
 import logging
-import time
 from pathlib import Path
-from datetime import datetime
-from core.config import PROJECT_ROOT, TAG_MAP_FILE, PAGES_DIR, NOTES_DIR, COMMAND_PREFIX
+from agents.base_agent import BaseAgent
+from core.config import TAG_MAP_FILE, PAGES_DIR, NOTES_DIR, COMMAND_PREFIX, WIKI_VAULT_DIR
 from core.parser import parse_markdown_metadata
 from core.tag_manager import TagManager
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-class TagPatrolAgent:
-    def __init__(self):
+class TagPatrolAgent(BaseAgent):
+    def __init__(self, llm, rag=None):
+        super().__init__(llm, rag)
         self.tm = TagManager(TAG_MAP_FILE)
         self.pages_dir = PAGES_DIR
         self.notes_dir = NOTES_DIR
-        self.report_file = PROJECT_ROOT / "lings-desktop" / f"{COMMAND_PREFIX}repair-tags.md"
+        self.report_file_name = f"{COMMAND_PREFIX}repair-tags.md"
 
     def audit_tags(self) -> dict:
         """
@@ -57,14 +54,16 @@ class TagPatrolAgent:
                     logging.error(f"TagPatrol: Failed to audit {filepath.name}: {e}")
         return grouped_issues
 
-    def generate_report(self):
+    def execute(self, task_context: dict = None) -> str:
         logging.info("✂️✨ TagPatrolAgent: Starting audit...")
         grouped_issues = self.audit_tags()
         
+        # Load Instructions for stats/prompt tracking
+        self._load_prompt("agent_tag_patrol.md")
+        
         if not grouped_issues:
-            content = "# ✂️✨ 標籤巡邏報告 (Tag Patrol Report)\n\n🎉 太棒了！目前全庫標籤都符合規範，沒有發現問題。\n"
-            self.report_file.write_text(content, encoding='utf-8')
-            logging.info("TagPatrol: Vault is healthy. Empty report generated.")
+            content = "🎉 太棒了！目前全庫標籤都符合規範，沒有發現問題。\n"
+            self._write_report("標籤巡邏報告", content, "report_tags")
             return content
 
         rows = ["> [!TIP]\n> **✂️✨ 標籤修復指令**：請在下方勾選 `- [x]` 並將此檔案拖入 `toLingLing/` 資料夾即可執行批量修復。\n"]
@@ -79,13 +78,13 @@ class TagPatrolAgent:
             paths_str = ";".join([str(f.absolute()) for f in filepaths])
             rows.append(f"- [ ] {reason}: `{bad}` -> `{good}` (影響: {affected_links}) | PATHS: `{paths_str}`")
             
-        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        content = f"{chr(10).join(rows)}\n\n---\n*最後編修時間: {now_str}*"
-        
-        self.report_file.write_text(content, encoding='utf-8')
-        logging.info(f"TagPatrol: Grouped report generated with {len(grouped_issues)} unique issues.")
+        content = "\n".join(rows)
+        self._write_report("標籤巡邏報告", content, "report_tags")
         return content
 
 if __name__ == "__main__":
-    agent = TagPatrolAgent()
-    agent.generate_report()
+    # For standalone testing
+    from services.llm_client import LLMClient
+    llm = LLMClient()
+    agent = TagPatrolAgent(llm)
+    agent.execute()

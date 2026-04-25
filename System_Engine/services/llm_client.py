@@ -69,10 +69,10 @@ class LLMClient:
         return f"{role_instructions}\n\n{template_instructions}\n\n{common_rules}"
 
     def generate_entity_page(self, markdown_content: str = None, filename: str = None, index_content: str = "", image_path: Path = None, context_hint: str = None) -> dict:
-        lang_hint = self._get_lang_hint()
-        instruction_type = f"Convert this material into a structured Wiki entity page in {lang_hint}."
+        instruction_type = "Convert this material into a structured Wiki entity page."
         system_prompt = self._build_system_prompt(instruction_type)
 
+        lang_hint = self._get_lang_hint()
         labels = {
             "Traditional Chinese (繁體中文)": {"file": "檔案名稱", "content": "素材內容"},
             "Japanese (日本語)": {"file": "ファイル名", "content": "素材内容"}

@@ -10,7 +10,9 @@ Ling Ling 是一個將標準 Obsidian 筆記庫轉化為「活體知識系統」
 ## ✨ 今日玲玲又進化了什麼？ (Core Features)
 
 - **📚 Scripture-Driven Logic (聖典驅動)**: 所有的 AI 行為（角色性格、輸出語言、智力參數）都定義在 Wiki 內的 `Scripture/Scripture.md`。改筆記就能改大腦，無需重啟程式。
-- **📥 Clipping & Synthesis (長文消化與合成)**: 遇到萬字長文也不怕。Ling Ling 會自動精確切割（避開表格與代碼塊）、帶入前情提要進行接力讀取，最後生成一份帶有「執行摘要」與「導覽連結」的 **完工合成頁**。
+- **📥 Consolidate & Synthesis (清洗、消化與合成)**: 遇到雜訊多、萬字長的長文也不怕。現在您可以先在 `Clippings/` 手動清洗雜訊，再拉入 `Consolidate/` 觸發 AI 精煉。Ling Ling 會自動精確切割、帶入前情提要進行接力讀取，最後生成帶有「執行摘要」與「跨頁導覽連結」的合成頁。
+- **🔗 E-book Style Navigation (電子書導航)**: 自動在解析後的 Part 與 Synthesis 之間建立連結，支援「查看原始碼」、「上一篇/下一篇」與「返回總結」，讓長文閱讀如同翻閱電子書。
+- **🛡️ High Reliability (高可靠性監測)**: 支援跨資料夾「拖拉搬移」偵測，並具備「啟動自動掃描」功能，確保任何遺漏的指令或剪輯都能在開機時自動補齊。
 - **🎀 Knowledge Dashboard (自動知識地圖)**: 專業的 `index.md` 自動維護系統。支援 **自然排序**（Part 1 在 Part 10 前面）與 **Obsidian Callouts** 階層化顯示，讓你的知識庫再大也不亂。
 - **🤖 Agentic Command Workflow**: 在 `toLingLing/` 丟入指令檔（如 `@ling-patrol-tags`），玲玲會自動執行標籤稽核、合併筆記或生成洞察。
 - **🏷️ Bulk Tag Repair (批量標籤修復)**: 革命性的彙整稽核。同一個標籤問題只會出現一次，勾選一行即可修復全庫所有受影響的檔案。
@@ -30,9 +32,20 @@ Ling Ling 是一個將標準 Obsidian 筆記庫轉化為「活體知識系統」
 
 ### 2. 安裝與執行
 ```bash
+
+#clone the repo
 git clone <repo-url>
 cd ling-ling
-./start.sh
+
+# copy .env.example to .env
+cp .env.example .env 
+
+# update environment variables, like ip/port, api key, etc...
+vim .env
+
+# start the daemon process
+./start.sh 
+
 ```
 
 ### 3. 配置 Scripture (智慧調教)
@@ -49,7 +62,8 @@ cd ling-ling
 ```text
 lings-desktop/
 ├── Scripture/            # 📜 玲玲的靈魂設定 (性格、智力參數、語系)
-├── Clippings/            # 📥 外部剪報入口 (長文會自動切割處理)
+├── Clippings/            # 📥 外部剪報暫存區 (手動清洗、刪除廣告與版權宣告處)
+├── Consolidate/          # ⚙️ 知識精煉區 (整理好的檔案拉進這裡，立即觸發 AI 解析)
 ├── toLingLing/           # ⌨️ 互動指令入口 (@ling-* )
 ├── fromLingLing/         # 💌 玲玲產出的報告與分析
 ├── pages/                # 🤖 玲玲自動寫出的實體頁面與 Synthesis 合成頁

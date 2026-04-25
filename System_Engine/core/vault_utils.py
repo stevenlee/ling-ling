@@ -3,7 +3,7 @@ import yaml
 import re
 from pathlib import Path
 from datetime import datetime
-from core.config import INDEX_FILE, PAGES_DIR, NOTES_DIR
+from core.config import INDEX_FILE, PAGES_DIR, NOTES_DIR, WIKI_VAULT_DIR, RAW_CONSOLIDATE_DIR
 
 def update_wiki_index(filepath: Path = None, title: str = None):
     """
@@ -11,6 +11,7 @@ def update_wiki_index(filepath: Path = None, title: str = None):
     Groups files by folder, sorts alphabetically, and extracts YAML metadata.
     """
     def natural_sort_key(s):
+        s = str(s or "")
         return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
 
     try:
@@ -25,14 +26,20 @@ def update_wiki_index(filepath: Path = None, title: str = None):
             try:
                 content = f_path.read_text(encoding='utf-8')
                 fm_match = re.search(r'^---\s*\n(.*?)\n---\s*', content, re.DOTALL)
-                meta = {"title": f_path.stem, "tags": [], "date": ""}
+                # Default date from file modification time
+                mtime = datetime.fromtimestamp(f_path.stat().st_mtime).strftime("%Y-%m-%d")
+                meta = {"title": f_path.stem, "tags": [], "date": mtime}
+                
                 if fm_match:
                     data = yaml.safe_load(fm_match.group(1))
                     if isinstance(data, dict):
-                        meta["title"] = data.get("title", f_path.stem)
+                        meta["title"] = str(data.get("title") or f_path.stem)
                         meta["tags"] = data.get("tags", [])
                         if not isinstance(meta["tags"], list): meta["tags"] = [meta["tags"]]
-                        meta["date"] = data.get("date_created", "")
+                        # Override mtime only if YAML has a valid date
+                        yaml_date = str(data.get("date_created") or data.get("created") or data.get("date") or "")
+                        if yaml_date:
+                            meta["date"] = yaml_date
                 return meta
             except:
                 return {"title": f_path.stem, "tags": [], "date": ""}
@@ -53,8 +60,21 @@ def update_wiki_index(filepath: Path = None, title: str = None):
                 
                 s_info["files"][folder_name].append(get_metadata(f))
 
+        # 2. Specially scan RAW_CONSOLIDATE_DIR and inject into Entities
+        if RAW_CONSOLIDATE_DIR.exists():
+            for f in RAW_CONSOLIDATE_DIR.glob("*.md"):
+                if f.name.startswith(".") or f.name.startswith("_"): continue
+                # Use the stem as the folder name to group with the processed entity folder
+                folder_name = f.stem
+                if folder_name not in sections["Entities"]["files"]:
+                    sections["Entities"]["files"][folder_name] = []
+                
+                meta = get_metadata(f)
+                sections["Entities"]["files"][folder_name].append(meta)
+
         # 2. Build Markdown
-        lines = ["# 🎀 Knowledge Dashboard", "---", ""]
+        from core.version import VERSION
+        lines = [f"# 🎀 Knowledge Dashboard (v{VERSION})", "---", ""]
         
         for s_name, s_info in sections.items():
             lines.append(f"## {s_info['icon']} {s_name}")
@@ -73,11 +93,12 @@ def update_wiki_index(filepath: Path = None, title: str = None):
                         lines.append(f"- [[{meta['title']}]] {tag_str}{date_str}")
                 else:
                     # Collapsible Callout for subdirectories
-                    lines.append(f"> [!abstract]- 📂 {folder} ({len(files)} items)")
+                    folder_date = files[0]["date"] if files and files[0]["date"] else ""
+                    date_suffix = f" | 📅 {folder_date}" if folder_date else ""
+                    lines.append(f"> [!abstract]- 📂 {folder} ({len(files)} items){date_suffix}")
                     for meta in files:
                         tag_str = f" `{'` `'.join(meta['tags'][:3])}`" if meta["tags"] else ""
-                        date_str = f" | 📅 {meta['date']}" if meta['date'] else ""
-                        lines.append(f"> - [[{meta['title']}]] {tag_str}{date_str}")
+                        lines.append(f"> - [[{meta['title']}]] {tag_str}")
                 lines.append("")
             lines.append("")
 
@@ -118,3 +139,36 @@ def update_file_tags(filepath: Path, tags: list[str]):
         filepath.write_text(new_content, encoding='utf-8')
     except Exception as e:
         raise ValueError(f"YAML update failed: {e}")
+
+def find_note(title: str) -> Path | None:
+    """Finds a note by its title (stem) in Pages/ or Notes/."""
+    for directory in [PAGES_DIR, NOTES_DIR]:
+        if not directory.exists(): continue
+        p = next(directory.rglob(f"{title}.md"), None)
+        if p: return p
+    return None
+
+def get_note_content(title_or_path: str | Path) -> str:
+    """Retrieves the content of a note by title or Path."""
+    if isinstance(title_or_path, str):
+        path = find_note(title_or_path)
+    else:
+        path = title_or_path
+        
+    if path and path.exists():
+        return path.read_text(encoding='utf-8')
+    return ""
+
+def update_note_with_meta(filepath: Path, body: str, meta: dict):
+    """Writes a note with provided body and metadata (merging with existing if needed)."""
+    from core.parser import dump_markdown_with_metadata, parse_markdown_metadata
+    
+    existing_meta = {}
+    if filepath.exists():
+        existing_meta = parse_markdown_metadata(filepath.read_text(encoding='utf-8'))
+        
+    # Merge: meta overrides existing_meta
+    existing_meta.update(meta)
+    
+    new_content = dump_markdown_with_metadata(existing_meta, body)
+    filepath.write_text(new_content, encoding='utf-8')
