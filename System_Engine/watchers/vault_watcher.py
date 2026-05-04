@@ -22,7 +22,8 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             return
             
         if global_busy_state.is_busy():
-            # If busy (including KB lock), skip auto-sync
+            # If busy, reschedule for later instead of dropping
+            self._schedule_process(filepath, filepath.stem, delay=30.0)
             return
 
         filepath = Path(event.src_path)
@@ -81,6 +82,11 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                 del self._timers[title]
                 
         if not filepath.exists():
+            return
+            
+        if global_busy_state.is_busy():
+            # Reschedule and try again later to avoid lock clashing
+            self._schedule_process(filepath, title, delay=10.0)
             return
             
         # 0. Whitelist Filter: Only index pages/ and Notes/

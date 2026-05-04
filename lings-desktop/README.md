@@ -7,7 +7,14 @@ Ling Ling 是一個將標準 Obsidian 筆記庫轉化為「活體知識系統」
 
 ---
 
-## ✨ 今日玲玲又進化了什麼？ (Core Features)
+## 2026-05-04 Bug Fixed:
+
+### ✅ 1. 併發與 Lock 競態條件已修復
+### ✅ 2. 修正 Gemini 的 Payload 與語法錯誤
+### ✅ 3. 修補 Vault Watcher 的檔案漏接
+### ✅ 4. YAML 更新的正則寬容度提升
+
+## ✨ Core Features
 
 - **📚 Scripture-Driven Logic (聖典驅動)**: 所有的 AI 行為（角色性格、輸出語言、智力參數）都定義在 Wiki 內的 `Scripture/Scripture.md`。改筆記就能改大腦，無需重啟程式。
 - **📥 Consolidate & Synthesis (清洗、消化與合成)**: 遇到雜訊多、萬字長的長文也不怕。現在您可以先在 `Clippings/` 手動清洗雜訊，再拉入 `Consolidate/` 觸發 AI 精煉。Ling Ling 會自動精確切割、帶入前情提要進行接力讀取，最後生成帶有「執行摘要」與「跨頁導覽連結」的合成頁。

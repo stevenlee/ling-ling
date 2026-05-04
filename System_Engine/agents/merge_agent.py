@@ -1,9 +1,11 @@
 import logging
 import json
 import time
+import shutil
 from pathlib import Path
+from datetime import datetime
 from agents.base_agent import BaseAgent
-from core.config import PAGES_DIR, WIKI_VAULT_DIR, INDEX_FILE, EXCALIDRAW_DIR, PROJECT_ROOT
+from core.config import PAGES_DIR, WIKI_VAULT_DIR, INDEX_FILE, EXCALIDRAW_DIR, PROJECT_ROOT, RAW_MERGED_DIR
 from core.vault_utils import find_note, get_note_content
 
 class MergeAgent(BaseAgent):
@@ -90,11 +92,13 @@ class MergeAgent(BaseAgent):
         final_body = f"{body_content}\n\n## 來源組合\n- 合併自: {ref_text}"
         
         new_page_path = self.pages_dir / f"{new_title}.md"
+        
         meta = {
             "title": new_title,
             "type": page_type,
             "tags": tags,
-            "merged_from": [f.stem for f in valid_files]
+            "merged_from": [f.stem for f in valid_files],
+            "merged_from_backup": []
         }
         
         # Use BaseAgent._write_report for the actual file writing to ensure stats are tracked
@@ -108,11 +112,28 @@ class MergeAgent(BaseAgent):
         
         if self.rag:
             self.rag.add_document(new_page_path, new_title, full_md, tags=tags)
-            
-        # Cleanup old files
+
+        # Archive originals to raw/merged/ only after the merged page is committed.
+        archived_paths = []
         for filepath in valid_files:
-            filepath.unlink()
+            dest = RAW_MERGED_DIR / filepath.name
+            if dest.exists():
+                timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+                dest = RAW_MERGED_DIR / f"{filepath.stem}_{timestamp}{filepath.suffix}"
+            try:
+                shutil.move(str(filepath), str(dest))
+                archived_paths.append(str(dest.relative_to(WIKI_VAULT_DIR)))
+                logging.info(f"Archived merged source: {filepath.name} -> {dest}")
+                if self.rag:
+                    self.rag.delete_document(filepath.stem)
+            except Exception as e:
+                logging.error(f"Failed to archive {filepath.name}: {e}")
+
+        if archived_paths:
+            meta["merged_from_backup"] = archived_paths
+            full_md = dump_markdown_with_metadata(meta, final_body)
+            new_page_path.write_text(full_md, encoding='utf-8')
             if self.rag:
-                self.rag.delete_document(filepath.stem)
-                
-        return f"✅ 合併成功！\n- **新文章**：[[{new_title}]]\n- **已銷毀舊文**：{ref_text}"
+                self.rag.add_document(new_page_path, new_title, full_md, tags=tags)
+
+        return f"✅ 合併成功！\n- **新文章**：[[{new_title}]]\n- **原文已備份至** raw/merged/（可復原）\n- **來源**：{ref_text}"

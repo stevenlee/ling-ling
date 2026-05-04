@@ -61,6 +61,11 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             ui.info(f"系統鎖定中 (.kb_lock)。跳過處理：{filepath.name}")
             return
 
+        # Respect global busy state — file stays in toLingLing/ for re-scan on idle
+        if global_busy_state.is_busy():
+            ui.info(f"⏳ 系統忙碌中，指令已排隊等待：{filepath.name}")
+            return
+
         ui.cmd_received(filepath.name)
         global_busy_state.set_busy(True)
         try:
@@ -74,13 +79,17 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             global_busy_state.set_busy(False)
             
     def scan_existing(self):
-        """Scan for commands already in the directory at startup."""
+        """Scan for prompts already in the directory at startup or after idle."""
         from core.config import TO_LLM_DIR
+        processed = 0
         if TO_LLM_DIR.exists():
-            for f in TO_LLM_DIR.glob("*.md"):
-                if f.is_file() and f.name.startswith("@"):
-                    ui.info(f"Startup scan found command: {f.name}")
+            for f in sorted(TO_LLM_DIR.iterdir()):
+                if f.is_file() and f.suffix.lower() in ['.md', '.txt']:
+                    ui.info(f"Startup scan found prompt: {f.name}")
                     self.process_prompt(f)
+                    if not f.exists():
+                        processed += 1
+        return processed
             
     def _remove_from_processed(self, path_str):
         with self._processed_lock:

@@ -70,14 +70,20 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
     def scan_existing(self):
         """Scan for files already in the directory at startup."""
         from core.config import CONSOLIDATE_DIR
+        processed = 0
         if CONSOLIDATE_DIR.exists():
-            for f in CONSOLIDATE_DIR.glob("*.md"):
-                if f.is_file() and not f.name.startswith((".", "@")):
+            supported_extensions = {'.md', '.png', '.jpg', '.jpeg'}
+            for f in sorted(CONSOLIDATE_DIR.iterdir()):
+                if (
+                    f.is_file()
+                    and not f.name.startswith((".", "@"))
+                    and f.suffix.lower() in supported_extensions
+                ):
                     ui.info(f"Startup scan found: {f.name}")
                     self.process_file(f)
-            for f in CONSOLIDATE_DIR.glob("*.png"):
-                if f.is_file():
-                    self.process_file(f)
+                    if not f.exists():
+                        processed += 1
+        return processed
         
     def process_file(self, filepath: Path):
         ext = filepath.suffix.lower()

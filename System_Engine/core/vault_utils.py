@@ -116,8 +116,8 @@ def update_file_tags(filepath: Path, tags: list[str]):
     import re
     content = filepath.read_text(encoding='utf-8')
     
-    # Regex to match frontmatter
-    fm_match = re.search(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+    # Regex to match frontmatter, without enforcing trailing newline
+    fm_match = re.search(r'^---\s*\n(.*?)\n---\s*(?:\n|$)', content, re.DOTALL)
     if not fm_match:
         # If no frontmatter, create it
         tag_str = ", ".join(tags)

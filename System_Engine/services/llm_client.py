@@ -79,8 +79,22 @@ class LLMClient:
         }.get(lang_hint, {"file": "Filename", "content": "Content"})
 
         if image_path:
-            with open(image_path, "rb") as f: encoded_image = base64.b64encode(f.read()).decode('utf-8')
-            user_msg = [{"type": "text", "text": f"{labels['file']}: {filename}"}, {"type": "image_url", "image_url": {"url": f"data:{mimetypes.guess_type(image_path)[0]};base64,{encoded_image}"}}]
+            mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+            with open(image_path, "rb") as f:
+                raw_bytes = f.read()
+                
+            if self.provider == "gemini":
+                from google import genai
+                user_msg = [
+                    f"{labels['file']}: {filename}",
+                    genai.types.Part.from_bytes(data=raw_bytes, mime_type=mime_type)
+                ]
+            else:
+                encoded_image = base64.b64encode(raw_bytes).decode('utf-8')
+                user_msg = [
+                    {"type": "text", "text": f"{labels['file']}: {filename}"}, 
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded_image}"}}
+                ]
         else:
             user_msg = f"{labels['file']}: {filename}\n\n"
             if context_hint:
@@ -98,9 +112,11 @@ class LLMClient:
                 )
                 return self._hybrid_parse(response.choices[0].message.content)
             elif self.provider == "gemini":
+                from google import genai
+                contents_payload = user_msg if isinstance(user_msg, list) else [str(user_msg)]
                 response = self.client.models.generate_content(
-                    model=self.model, contents=[str(user_msg)],
-                    config=settings.genai.types.GenerateContentConfig(
+                    model=self.model, contents=contents_payload,
+                    config=genai.types.GenerateContentConfig(
                         system_instruction=system_prompt, 
                         temperature=settings.CREATIVITY,
                         max_output_tokens=settings.MAX_OUTPUT
@@ -153,9 +169,10 @@ class LLMClient:
             system_prompt = self._build_system_prompt(task)
         try:
             if self.provider == "gemini":
+                from google import genai
                 response = self.client.models.generate_content(
                     model=self.model, contents=[str(query_content)],
-                    config=settings.genai.types.GenerateContentConfig(
+                    config=genai.types.GenerateContentConfig(
                         system_instruction=system_prompt, 
                         temperature=settings.CREATIVITY,
                         max_output_tokens=settings.MAX_OUTPUT
@@ -178,9 +195,10 @@ class LLMClient:
         system_prompt = "Return a JSON mapping of {original_tag: english_equivalent} for these tags."
         try:
             if self.provider == "gemini":
+                from google import genai
                 response = self.client.models.generate_content(
                     model=self.model, contents=[f"Tags: {tags}"],
-                    config=settings.genai.types.GenerateContentConfig(
+                    config=genai.types.GenerateContentConfig(
                         system_instruction=system_prompt, 
                         temperature=0.1,
                         response_mime_type="application/json"
@@ -218,9 +236,10 @@ Do not use a YAML header, just the Markdown content.
         
         try:
             if self.provider == "gemini":
+                from google import genai
                 response = self.client.models.generate_content(
                     model=self.model, contents=[prompt],
-                    config=settings.genai.types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.3)
+                    config=genai.types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.3)
                 )
                 return response.text
             else:

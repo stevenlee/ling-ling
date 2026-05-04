@@ -4,12 +4,8 @@
 ## ✍️ Notes
 
 ## 🤖 Entities
-> [!abstract]- 📂 Move_Test_20260425-165127 (1 items) | 📅 2026-04-25
-> - [[Move_Test_20260425-165127]] 
-
-> [!abstract]- 📂 Startup_Test_20260425-165050 (1 items) | 📅 2026-04-25
-> - [[Startup_Test_20260425-165050]] 
-
-> [!abstract]- 📂 道德經 (1 items) | 📅 2026-04-25
-> - [[道德經]]  `clippings`
-
+> [!abstract]- 📂 孫子兵法 (4 items) | 📅 2026-05-04
+> - [[孫子兵法]]  `clippings`
+> - [[孫子兵法 (Part 1)]]  `ancient-military-strategy` `military-philosophy` `strategy-studies`
+> - [[孫子兵法 (Part 2)]]  `ancient-military-strategy` `military-philosophy` `strategy-studies`
+> - [[孫子兵法 (Synthesis)]]  `ancient-military-strategy` `completed` `military-philosophy`

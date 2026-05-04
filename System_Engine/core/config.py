@@ -46,6 +46,7 @@ class DynamicSettings:
         self.OUTPUT_LANGUAGE = "Traditional Chinese"
         self.DIGEST_LIMIT = 5000
         self.DIGEST_OVERLAP = 500
+        self.DREAMING_FROM = 1
         self.DREAMING_TO = 5
         self.SELF_HEALING = True
         self.CREATIVITY = 0.4
@@ -110,13 +111,14 @@ RAW_DIR = WIKI_VAULT_DIR / "raw"
 RAW_CONSOLIDATE_DIR = RAW_DIR / "consolidate"
 RAW_PROMPTS_DIR = RAW_DIR / "prompts"
 RAW_ASSETS_DIR = RAW_DIR / "assets"
+RAW_MERGED_DIR = RAW_DIR / "merged"
 
 def ensure_directories():
     """Ensure all required directories exist."""
     directories = [
         CLIPPINGS_DIR, CONSOLIDATE_DIR, TO_LLM_DIR, FROM_LLM_DIR, PAGES_DIR, NOTES_DIR,
         EXCALIDRAW_DIR, ASSETS_DIR, RAW_CONSOLIDATE_DIR, RAW_PROMPTS_DIR, 
-        RAW_ASSETS_DIR, SCRIPTURE_DIR, PERSONAS_DIR, GUIDELINES_DIR, 
+        RAW_ASSETS_DIR, RAW_MERGED_DIR, SCRIPTURE_DIR, PERSONAS_DIR, GUIDELINES_DIR, 
         SKILLS_DIR, BACKUPS_DIR, TEMPLATES_DIR, PROMPTS_DIR
     ]
     for directory in directories:

@@ -8,6 +8,7 @@ from core.config import (
     TO_LLM_DIR, PAGES_DIR, NOTES_DIR, SCRIPTURE_DIR, PID_FILE, ensure_directories, settings
 )
 from core.utils import acquire_pid_lock
+from core.state import global_busy_state
 from services.llm_client import LLMClient
 from services.rag_manager import RAGManager
 from watchers.clipping_watcher import ClippingWatcher
@@ -37,6 +38,10 @@ def main():
     event_handler_prompts = PromptWatcher(llm_client, rag_manager)
     event_handler_vault = VaultWatcher(rag_manager)
     
+    # 3.1. Register idle callbacks: re-scan directories on busy→idle to catch dropped events
+    global_busy_state.register_idle_callback(event_handler_clippings.scan_existing)
+    global_busy_state.register_idle_callback(event_handler_prompts.scan_existing)
+    
     # 4. Schedule Watchdogs
     observer = watchdog.observers.Observer()
     
@@ -54,8 +59,12 @@ def main():
     
     # 5. Startup Scan: Process existing files in Ingest/Command folders
     ui.info("Scanning for existing files in Consolidate and toLingLing...")
-    event_handler_clippings.scan_existing()
-    event_handler_prompts.scan_existing()
+    global_busy_state.set_busy(True)
+    try:
+        event_handler_clippings.scan_existing()
+        event_handler_prompts.scan_existing()
+    finally:
+        global_busy_state.set_busy(False)
     
     # 5. Start Background Schedulers
     scheduler = InsightScheduler(PROJECT_ROOT, llm_client, rag_manager)

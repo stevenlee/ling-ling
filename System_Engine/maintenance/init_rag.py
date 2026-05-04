@@ -13,16 +13,15 @@ import logging
 
 def init_rag_from_scratch(wipe: bool = False):
     """
-    Initializes the RAG database by indexing all markdown files in the pages directory.
-    If wipe=True, deletes the existing database first.
+    Initializes the RAG database by indexing all markdown files in pages/ and Notes/.
+    If wipe=True, wipes the existing collection first via ChromaDB API.
     """
-    if wipe:
-        db_path = DATABASE_DIR / "chroma_db"
-        if db_path.exists():
-            logging.info(f"💥 Wiping existing ChromaDB at {db_path}...")
-            shutil.rmtree(db_path)
-            
     manager = RAGManager()
+    
+    if wipe:
+        logging.info("💥 Wiping existing ChromaDB collection...")
+        manager.wipe_collection()
+            
     vault_dir = WIKI_VAULT_DIR
     
     if not vault_dir.exists():
@@ -31,18 +30,15 @@ def init_rag_from_scratch(wipe: bool = False):
         
     logging.info(f"🚀 Starting to index knowledge base in {vault_dir}...")
     
-    # 掃描範圍：根目錄、pages、Notes、以及穩定的 raw/clippings
+    # 掃描範圍：只掃 pages/ 和 Notes/（白名單），使用 rglob 抓 nested 結構
     search_dirs = [
-        vault_dir, 
         vault_dir / "pages", 
         vault_dir / "Notes", 
-        vault_dir / "raw" / "clippings"
     ]
     md_files = []
     for d in search_dirs:
         if d.exists():
-            # 只抓取該層目錄的 .md，不遞迴（避免抓到備份或 raw）
-            md_files.extend(list(d.glob("*.md")))
+            md_files.extend(list(d.rglob("*.md")))
     
     total = len(md_files)
     

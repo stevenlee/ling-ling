@@ -31,10 +31,13 @@ class InsightScheduler(threading.Thread):
                     if not global_busy_state.is_busy():
                         try:
                             logging.info("InsightScheduler: System idle in window. Starting scheduled FULL insight report...")
+                            global_busy_state.set_busy(True)
                             self.agent.generate_full_insight(user_directive="Scheduled daily comprehensive reflection.")
                             self.last_run_date = current_date
                         except Exception as e:
                             logging.error(f"InsightScheduler: Error during execution: {e}")
+                        finally:
+                            global_busy_state.set_busy(False)
                     else:
                         logging.debug("InsightScheduler: System busy, skipping check...")
             
