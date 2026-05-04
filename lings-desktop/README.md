@@ -8,11 +8,10 @@ Ling Ling 是一個將標準 Obsidian 筆記庫轉化為「活體知識系統」
 ---
 
 ## 2026-05-04 Bug Fixed:
-
-### ✅ 1. 併發與 Lock 競態條件已修復
-### ✅ 2. 修正 Gemini 的 Payload 與語法錯誤
-### ✅ 3. 修補 Vault Watcher 的檔案漏接
-### ✅ 4. YAML 更新的正則寬容度提升
+- ✅ 1. 併發與 Lock 競態條件已修復
+- ✅ 2. 修正 Gemini 的 Payload 與語法錯誤
+- ✅ 3. 修補 Vault Watcher 的檔案漏接
+- ✅ 4. YAML 更新的正則寬容度提升
 
 ## ✨ Core Features
 

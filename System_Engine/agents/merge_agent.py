@@ -87,11 +87,18 @@ class MergeAgent(BaseAgent):
         # 3. Final Content Healing (Invisible Repair)
         body_content = self._self_correct(body_content)
         
-        # 4. Save and Update
+        # 4. Pick a merged page path that cannot overwrite or move a source note.
         ref_text = ", ".join([f"[[{f.stem}]]" for f in valid_files])
         final_body = f"{body_content}\n\n## 來源組合\n- 合併自: {ref_text}"
-        
+        source_paths = {f.resolve() for f in valid_files}
         new_page_path = self.pages_dir / f"{new_title}.md"
+        if new_page_path.resolve() in source_paths or new_page_path.exists():
+            base_title = new_title
+            suffix = 1
+            while new_page_path.resolve() in source_paths or new_page_path.exists():
+                suffix += 1
+                new_title = f"{base_title} (Merged {suffix})"
+                new_page_path = self.pages_dir / f"{new_title}.md"
         
         meta = {
             "title": new_title,
@@ -101,11 +108,6 @@ class MergeAgent(BaseAgent):
             "merged_from_backup": []
         }
         
-        # Use BaseAgent._write_report for the actual file writing to ensure stats are tracked
-        # Actually, _write_report is for report_xxx files in fromLingLing.
-        # For wiki pages, we might want a similar method or just use vault_utils.
-        # Let's use vault_utils but manually track stats.
-        
         from core.parser import dump_markdown_with_metadata
         full_md = dump_markdown_with_metadata(meta, final_body)
         new_page_path.write_text(full_md, encoding='utf-8')
@@ -113,7 +115,7 @@ class MergeAgent(BaseAgent):
         if self.rag:
             self.rag.add_document(new_page_path, new_title, full_md, tags=tags)
 
-        # Archive originals to raw/merged/ only after the merged page is committed.
+        # 5. Archive originals to raw/merged/ only after the merged page is committed.
         archived_paths = []
         for filepath in valid_files:
             dest = RAW_MERGED_DIR / filepath.name
@@ -122,6 +124,7 @@ class MergeAgent(BaseAgent):
                 dest = RAW_MERGED_DIR / f"{filepath.stem}_{timestamp}{filepath.suffix}"
             try:
                 shutil.move(str(filepath), str(dest))
+                # Record backup path relative to vault root
                 archived_paths.append(str(dest.relative_to(WIKI_VAULT_DIR)))
                 logging.info(f"Archived merged source: {filepath.name} -> {dest}")
                 if self.rag:
@@ -135,5 +138,5 @@ class MergeAgent(BaseAgent):
             new_page_path.write_text(full_md, encoding='utf-8')
             if self.rag:
                 self.rag.add_document(new_page_path, new_title, full_md, tags=tags)
-
+                
         return f"✅ 合併成功！\n- **新文章**：[[{new_title}]]\n- **原文已備份至** raw/merged/（可復原）\n- **來源**：{ref_text}"
