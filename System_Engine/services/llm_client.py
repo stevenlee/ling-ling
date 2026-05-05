@@ -68,6 +68,18 @@ class LLMClient:
         common_rules = f"\n## Output Language\nPlease output everything in {lang_hint}.{strict_hint}\n\n## Task\n{instruction_type}\n\n{viz_instructions}\n\nUse the standard YAML header (--- title: ... ---) at the beginning of your response."
         return f"{role_instructions}\n\n{template_instructions}\n\n{common_rules}"
 
+    def _load_project_identity(self) -> str:
+        readme_path = PROJECT_ROOT / "README.md"
+        schema_path = PROJECT_ROOT / "SCHEMA.md"
+        parts = []
+        for path in [readme_path, schema_path]:
+            try:
+                if path.exists():
+                    parts.append(path.read_text(encoding='utf-8')[:4000])
+            except Exception:
+                continue
+        return "\n\n---\n\n".join(parts)
+
     def generate_entity_page(self, markdown_content: str = None, filename: str = None, index_content: str = "", image_path: Path = None, context_hint: str = None) -> dict:
         instruction_type = "Convert this material into a structured Wiki entity page."
         system_prompt = self._build_system_prompt(instruction_type)
@@ -164,14 +176,32 @@ class LLMClient:
         if custom_instruction:
             task = custom_instruction
             system_prompt = self._build_system_prompt(task, forced_template="none")
+            user_msg = query_content
         else:
-            task = f"Answer the query based on context:\n{wiki_context}"
-            system_prompt = self._build_system_prompt(task)
+            lang_hint = self._get_lang_hint()
+            system_prompt = f"""You are Ling-Ling's question-answering interface.
+
+Answer the user's question directly in {lang_hint}.
+Use the provided knowledge context only as reference material.
+Do not rewrite, summarize, or continue the context unless the user explicitly asks for that.
+If the context is irrelevant or insufficient, say so briefly and answer from the project identity information.
+When the user asks what Ling-Ling is, describe Ling-Ling as an Obsidian-vault-based agentic RAG knowledge system driven by Scripture, Skills, and Templates.
+Do not include YAML frontmatter.
+"""
+            user_msg = f"""## User Question
+{query_content}
+
+## Project Identity
+{self._load_project_identity() or "(No project identity available.)"}
+
+## Retrieved Knowledge Context
+{wiki_context if wiki_context.strip() else "(No relevant context retrieved.)"}
+"""
         try:
             if self.provider == "gemini":
                 from google import genai
                 response = self.client.models.generate_content(
-                    model=self.model, contents=[str(query_content)],
+                    model=self.model, contents=[str(user_msg)],
                     config=genai.types.GenerateContentConfig(
                         system_instruction=system_prompt, 
                         temperature=settings.CREATIVITY,
@@ -182,7 +212,7 @@ class LLMClient:
             else:
                 response = self.client.chat.completions.create(
                     model=self.model,
-                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": query_content}],
+                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
                     temperature=settings.CREATIVITY,
                     max_tokens=settings.MAX_OUTPUT,
                     extra_body={"num_ctx": settings.MEMORY_LIMIT} if self.provider == "ollama" else {}

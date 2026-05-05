@@ -179,6 +179,8 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             
         except Exception as e:
             logging.error(f"Error answering {filepath.name}: {str(e)}")
+            self._write_error_output(filepath, e)
+            self._archive_raw(filepath)
 
     def _archive_raw(self, filepath: Path):
         if not filepath.exists(): return
@@ -196,3 +198,25 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             shutil.move(str(filepath), str(dest))
         except Exception as e:
             logging.error(f"Failed to archive prompt {filepath} to {dest}: {e}")
+
+    def _write_error_output(self, filepath: Path, error: Exception):
+        request_id = filepath.stem
+        if not request_id.startswith("ocll-"):
+            return
+
+        safe_message = str(error).strip() or error.__class__.__name__
+        output_path = FROM_LLM_DIR / f"❌err-{request_id}.md"
+        body = f"""---
+title: "error: {request_id}"
+type: error
+request_id: "{request_id}"
+---
+
+# Ling-Ling Request Failed
+
+{safe_message}
+"""
+        try:
+            output_path.write_text(body, encoding='utf-8')
+        except Exception as write_error:
+            logging.error(f"Failed to write error output for {request_id}: {write_error}")
