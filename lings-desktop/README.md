@@ -6,12 +6,9 @@
 Ling Ling 是一個將標準 Obsidian 筆記庫轉化為「活體知識系統」的 Agentic RAG 架構。她不只是自動搬運工，更是具備深度綜述能力的知識守護者。
 
 ---
-
-## 2026-05-04 Bug Fixed:
-- ✅ 1. 併發與 Lock 競態條件已修復
-- ✅ 2. 修正 Gemini 的 Payload 與語法錯誤
-- ✅ 3. 修補 Vault Watcher 的檔案漏接
-- ✅ 4. YAML 更新的正則寬容度提升
+# 2026-05-05 New Feature:
+- [v] 準備好接上Open Claw的窗口。
+- [v] 修正小Bug
 
 ## ✨ Core Features
 
