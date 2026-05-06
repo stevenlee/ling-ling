@@ -30,5 +30,15 @@ def test_splitter():
     # It should split at \n\n if possible
     assert any("\n\n" in c for c in chunks)
 
+    # 4. Test Mermaid opener is not split after the backticks
+    text_mermaid = (
+        "A" * 80
+        + "\n```\nprevious block\n```mermaid\ngraph TD\nA-->B\n```\n"
+        + "Z" * 150
+    )
+    chunks = TextSplitter(chunk_size=95, overlap=1).split_text(text_mermaid)
+    print(f"\nMermaid Test: {len(chunks)} chunks")
+    assert not any(c.startswith("mermaid\n") for c in chunks)
+
 if __name__ == "__main__":
     test_splitter()

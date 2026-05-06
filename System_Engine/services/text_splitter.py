@@ -1,11 +1,33 @@
 import re
 import logging
+from typing import Optional
 from core.config import settings
 
 class TextSplitter:
+    FENCE_LINE_RE = re.compile(r'^```.*$', re.MULTILINE)
+
     def __init__(self, chunk_size: int = None, overlap: int = None):
         self.chunk_size = chunk_size or settings.DIGEST_LIMIT
         self.overlap = overlap or settings.DIGEST_OVERLAP
+
+    def _inside_code_block(self, text: str, end: int) -> bool:
+        inside = False
+        for match in self.FENCE_LINE_RE.finditer(text, 0, end):
+            fence_line = match.group(0).strip()
+            if inside:
+                if fence_line == '```':
+                    inside = False
+            else:
+                inside = True
+        return inside
+
+    def _next_closing_fence_line_end(self, text: str, start: int) -> Optional[int]:
+        for match in self.FENCE_LINE_RE.finditer(text, start):
+            if match.group(0).strip() != '```':
+                continue
+            line_end = text.find('\n', match.end())
+            return len(text) if line_end == -1 else line_end + 1
+        return None
 
     def split_text(self, text: str) -> list[str]:
         if len(text) <= self.chunk_size:
@@ -45,14 +67,12 @@ class TextSplitter:
                         pass
 
             # 3. Syntax Protection (Inhibitors)
-            # Check if we are inside a code block
-            pre_content = text[:end]
-            code_blocks = pre_content.count('```')
-            if code_blocks % 2 != 0:
-                # Inside a code block! Seek for the closing tag
-                closing_tag = text.find('```', end)
-                if closing_tag != -1:
-                    end = closing_tag + 3
+            # Check if we are inside a fenced code block. Fence detection is
+            # line-aware so ```mermaid is never split into ``` + mermaid.
+            if self._inside_code_block(text, end):
+                fence_line_end = self._next_closing_fence_line_end(text, end)
+                if fence_line_end is not None:
+                    end = fence_line_end
                 else:
                     # No closing tag? Force split and we will repair it in the next step
                     pass
