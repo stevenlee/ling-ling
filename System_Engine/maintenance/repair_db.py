@@ -1,7 +1,12 @@
 import logging
 from pathlib import Path
-from core.config import PROJECT_ROOT
-from maintenance.wiki_linter import WikiLinter
+
+import sys
+
+# Add System_Engine to sys.path so this script works when run directly.
+sys.path.append(str(Path(__file__).parent.parent.absolute()))
+
+from agents.linter_agent import LinterAgent
 from services.rag_manager import RAGManager
 
 # Setup logging
@@ -10,7 +15,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 def main():
     logging.info("🛠️ DB Repair Agent: Starting maintenance...")
     rag = RAGManager()
-    linter = WikiLinter(PROJECT_ROOT, rag_manager=rag)
+    linter = LinterAgent(llm=None, rag_manager=rag)
     report = linter.perform_repair()
     
     # Save a summary to log.md or similar? Linter.perform_repair returns the report.

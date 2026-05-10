@@ -1,7 +1,12 @@
 import os
+import sys
 from pathlib import Path
-from services.rag_manager import RAGManager
 import logging
+
+# Add System_Engine to sys.path so this script works when run directly.
+sys.path.append(str(Path(__file__).parent.parent.absolute()))
+
+from services.rag_manager import RAGManager
 
 # Set logging to ERROR to keep output clean
 logging.getLogger("chromadb").setLevel(logging.ERROR)

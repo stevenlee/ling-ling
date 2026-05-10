@@ -6,9 +6,40 @@
 Ling Ling 是一個將標準 Obsidian 筆記庫轉化為「活體知識系統」的 Agentic RAG 架構。她不只是自動搬運工，更是具備深度綜述能力的知識守護者。
 
 ---
-# 2026-05-05 New Feature:
-- [v] 準備好接上Open Claw的窗口。
-- [v] 修正小Bug
+## 2026-05-10 Fix bugs when using ChromaDB. This is how it works:
+```mermaid
+flowchart TD
+    A["你把問題放進 toLingLing/"] --> B["PromptWatcher 偵測到新 .md 檔"]
+    B --> C["讀取問題內容"]
+    C --> D["判斷是否為特殊指令<br/>例如 repair、insight、kb_zip"]
+    D -->|一般問答| E["RAGManager.query_similar_notes()"]
+    E --> F["ChromaDB / wiki_pages collection"]
+    F --> G["回傳最相關的筆記 chunks"]
+    G --> H["組成 wiki_context"]
+    H --> I["LLMClient.answer_query()"]
+    C --> I
+    I --> J["LLM 根據問題 + ChromaDB 找到的上下文回答"]
+    J --> K["寫入 fromLingLing/ 的回覆檔"]
+    K --> L["原始問題移到 raw/prompts/"]
+
+```
+
+## 2026-05-09 Connect with Open Claw
+    僅介面打通，Open Claw對於調用工具仍有問題。(維持動口不動手的特質...)
+
+## 2026-05-08 Daemon Performance Optimization
+
+這次針對「daemon 明明沒有工作，Mac 卻變熱」做了實際程序檢查與 idle 行為優化。檢查結果顯示正式 daemon、local bridge 與 Ollama 在 idle 時皆為 `0.0% CPU`，當下主要 CPU 消耗來自 macOS `WindowServer`；但 Ling Ling 仍有幾個會造成背景重複醒來或重複工作的問題，已一併修正。
+
+- **只監聽必要資料夾**：`VaultWatcher` 不再遞迴監聽整個 `lings-desktop/`。現在只監聽 `pages/`、`Notes/` 與 `Scripture/`，避免 `fromLingLing/`、`Insights/`、`raw/`、Obsidian metadata 等無關變動排入背景 timer。
+- **避免啟動掃描重複執行**：startup scan 仍會保護 busy state，但結束時不再觸發 busy-to-idle callbacks，因此不會啟動後立刻重掃一次 `Consolidate/` 與 `toLingLing/`。
+- **圖片剪報成功後自動歸檔**：修正圖片 ingestion 成功後仍殘留在 `Consolidate/` 的問題。圖片現在會複製到 `Assets/` 供 Obsidian 預覽，原始待處理檔會移到 `raw/assets/`，避免 daemon 每次重啟都重新 vision 分析同一張圖片。
+- **Daily insight 避免同日重跑**：`InsightScheduler` 啟動時會讀取既有 `Insights/*full-insight-YYYYMMDD*.md`，如果今天已經產生 full insight，就不會因 daemon 重啟再次執行重型背景分析。
+- **降低 scheduler 輪詢頻率**：daily insight scheduler 從每 1 分鐘檢查一次降為每 5 分鐘檢查一次。每日任務不需要分鐘級輪詢，idle 時更安靜。
+- **修正 busy 期間新檔事件 bug**：`VaultWatcher.on_created()` 在 busy 分支會使用尚未定義的 `filepath`，已修正並在事件入口先做路徑白名單過濾。
+- **清理重複 daemon**：檢查時發現同時有 `/Users/$User/projects/ling-ling` 與 `/Users/$User$/Documents/ling-ling` 兩份 `System_Engine/main.py` 在跑；已停止誤啟動的第二份，避免重複監聽與排程。
+
+Operational note: `Consolidate/` 應該代表「待處理佇列」。若 idle 時懷疑 Ling Ling 還在工作，先確認 `Consolidate/` 與 `toLingLing/` 是否仍有檔案；成功處理後，Markdown 應進入 `raw/consolidate/`，圖片應進入 `raw/assets/`。
 
 ## ✨ Core Features
 

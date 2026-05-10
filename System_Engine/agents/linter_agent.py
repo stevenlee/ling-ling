@@ -49,9 +49,32 @@ class LinterAgent(BaseAgent):
                 for filepath in directory.rglob("*.md"):
                     existing_pages.add(filepath.stem)
 
-        rag_titles = self.rag.get_all_indexed_titles()
-        unindexed = existing_pages - rag_titles
-        stale = rag_titles - existing_pages
+        rag_titles = set()
+        indexed_sources = set()
+        title_sources = {}
+        try:
+            results = self.rag.collection.get(include=['metadatas'])
+            for metadata in results.get('metadatas', []):
+                if not metadata:
+                    continue
+                title = metadata.get('title')
+                if title:
+                    rag_titles.add(title)
+                if metadata.get('source'):
+                    source_stem = Path(metadata['source']).stem
+                    indexed_sources.add(source_stem)
+                    if title:
+                        title_sources.setdefault(title, set()).add(source_stem)
+        except Exception as e:
+            logging.error(f"Failed to scan RAG metadata: {e}")
+            rag_titles = self.rag.get_all_indexed_titles()
+
+        indexed_names = rag_titles | indexed_sources
+        unindexed = existing_pages - indexed_names
+        stale = {
+            title for title in rag_titles
+            if title not in existing_pages and not (title_sources.get(title, set()) & existing_pages)
+        }
         total_chunks = self.rag.get_total_chunks_count()
 
         return {

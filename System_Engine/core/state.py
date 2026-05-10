@@ -21,12 +21,12 @@ class BusyState:
         with self._lock:
             self._idle_callbacks.append(callback)
 
-    def set_busy(self, status: bool):
+    def set_busy(self, status: bool, fire_callbacks: bool = True):
         should_fire = False
         with self._lock:
             was_busy = self._busy
             # Fire callbacks on busy→idle, but not during callback execution
-            if was_busy and not status and not self._firing_callbacks:
+            if fire_callbacks and was_busy and not status and not self._firing_callbacks:
                 should_fire = True
                 self._firing_callbacks = True
                 # Keep the system busy while callbacks drain queued filesystem work.

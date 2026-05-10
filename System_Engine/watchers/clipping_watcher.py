@@ -12,7 +12,7 @@ from services.text_splitter import TextSplitter
 from services.media_processor import process_image
 from core.config import (
     INDEX_FILE, LOG_FILE, EXCALIDRAW_DIR, PAGES_DIR, 
-    RAW_CONSOLIDATE_DIR, ASSETS_DIR, settings
+    RAW_CONSOLIDATE_DIR, RAW_ASSETS_DIR, ASSETS_DIR, settings
 )
 from core.ui import ui
 from core.vault_utils import update_wiki_index
@@ -201,7 +201,19 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
         index_content = INDEX_FILE.read_text('utf-8') if INDEX_FILE.exists() else ""
         result = process_image(filepath, self.llm, index_content, ASSETS_DIR)
         if result:
-            self._ingest_to_wiki(None, filepath, llm_result=result)
+            ingested = self._ingest_to_wiki(None, filepath, llm_result=result)
+            if ingested:
+                self._archive_processed_file(filepath, RAW_ASSETS_DIR)
+
+    def _archive_processed_file(self, filepath: Path, archive_dir: Path):
+        if not filepath.exists():
+            return
+
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        dest = archive_dir / filepath.name
+        if dest.exists():
+            dest = archive_dir / f"{filepath.stem}_{datetime.now().strftime('%Y%m%d-%H%M%S')}{filepath.suffix}"
+        shutil.move(str(filepath), str(dest))
 
     def _ingest_to_wiki(self, raw_content: str, source_filepath: Path, llm_result: dict = None, part_info: dict = None):
         try:

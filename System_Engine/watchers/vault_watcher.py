@@ -20,13 +20,16 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
     def on_created(self, event):
         if event.is_directory or not event.src_path.endswith('.md'):
             return
-            
+
+        filepath = Path(event.src_path)
+        if not self._should_watch(filepath):
+            return
+
         if global_busy_state.is_busy():
             # If busy, reschedule for later instead of dropping
             self._schedule_process(filepath, filepath.stem, delay=30.0)
             return
 
-        filepath = Path(event.src_path)
         title = filepath.stem
         self._schedule_process(filepath, title, delay=2.0)
 
@@ -34,6 +37,9 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
         if event.is_directory or not event.src_path.endswith('.md'):
             return
         filepath = Path(event.src_path)
+        if not self._should_watch(filepath):
+            return
+
         title = filepath.stem
         
         with self._timers_lock:
@@ -52,6 +58,9 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
         if event.is_directory or not event.src_path.endswith('.md'):
             return
         filepath = Path(event.src_path)
+        if not self._should_watch(filepath):
+            return
+
         title = filepath.stem
         
         # Special case: Scripture (System Settings)
@@ -90,12 +99,7 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             return
             
         # 0. Whitelist Filter: Only index pages/ and Notes/
-        from core.config import PAGES_DIR, NOTES_DIR
-        abs_path = str(filepath.absolute())
-        is_in_pages = abs_path.startswith(str(PAGES_DIR.absolute()))
-        is_in_notes = abs_path.startswith(str(NOTES_DIR.absolute()))
-        
-        if not (is_in_pages or is_in_notes):
+        if not self._should_index(filepath):
             return
             
         try:
@@ -160,3 +164,19 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
     def _update_file_tags(self, filepath: Path, tags: list[str]):
         from core.vault_utils import update_file_tags
         update_file_tags(filepath, tags)
+
+    def _should_watch(self, filepath: Path) -> bool:
+        from core.config import SCRIPTURE_FILE
+        return filepath.absolute() == SCRIPTURE_FILE.absolute() or self._should_index(filepath)
+
+    def _should_index(self, filepath: Path) -> bool:
+        from core.config import PAGES_DIR, NOTES_DIR
+        abs_path = filepath.absolute()
+        return self._is_relative_to(abs_path, PAGES_DIR.absolute()) or self._is_relative_to(abs_path, NOTES_DIR.absolute())
+
+    def _is_relative_to(self, path: Path, parent: Path) -> bool:
+        try:
+            path.relative_to(parent)
+            return True
+        except ValueError:
+            return False

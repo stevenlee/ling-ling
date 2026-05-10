@@ -4,7 +4,7 @@ import logging
 import watchdog.observers
 
 from core.config import (
-    LLM_PROVIDER, PROJECT_ROOT, WIKI_VAULT_DIR, CLIPPINGS_DIR, CONSOLIDATE_DIR,
+    LLM_PROVIDER, PROJECT_ROOT, CLIPPINGS_DIR, CONSOLIDATE_DIR,
     TO_LLM_DIR, PAGES_DIR, NOTES_DIR, SCRIPTURE_DIR, PID_FILE, ensure_directories, settings
 )
 from core.utils import acquire_pid_lock
@@ -51,7 +51,9 @@ def main():
     # 2. System Commands -> Use 'toLingLing/' for @ling- commands
     observer.schedule(event_handler_prompts, str(TO_LLM_DIR), recursive=False)
     
-    observer.schedule(event_handler_vault, str(WIKI_VAULT_DIR), recursive=True)
+    # Watch only content that should be mirrored into RAG. Watching the whole
+    # vault creates timers for daemon outputs, archives, logs, and Obsidian
+    # metadata churn that are ignored later anyway.
     observer.schedule(event_handler_vault, str(PAGES_DIR), recursive=True)
     observer.schedule(event_handler_vault, str(NOTES_DIR), recursive=True)
     observer.schedule(event_handler_vault, str(SCRIPTURE_DIR), recursive=True)
@@ -64,7 +66,7 @@ def main():
         event_handler_clippings.scan_existing()
         event_handler_prompts.scan_existing()
     finally:
-        global_busy_state.set_busy(False)
+        global_busy_state.set_busy(False, fire_callbacks=False)
     
     # 5. Start Background Schedulers
     scheduler = InsightScheduler(PROJECT_ROOT, llm_client, rag_manager)
