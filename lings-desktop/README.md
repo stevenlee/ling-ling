@@ -6,6 +6,31 @@
 Ling Ling 是一個將標準 Obsidian 筆記庫轉化為「活體知識系統」的 Agentic RAG 架構。她不只是自動搬運工，更是具備深度綜述能力的知識守護者。
 
 ---
+## 2026-05-10 Synthesis Quality Upgrade
+
+長文解析管線已從「Part 第一行摘要」升級為 **structured digest synthesis**。現在 Ling Ling 會先把長文切成 Parts，針對每個 Part 產生結構化 digest，再用這些 digest 進行最終 Synthesis，避免總結只看到標題、內容過度空泛。
+
+```mermaid
+flowchart TD
+    A["長文放入 Consolidate/"] --> B["TextSplitter 切成 Parts"]
+    B --> C["每個 Part 產生 Wiki note"]
+    C --> D["每個 Part 產生 structured digest"]
+    C --> E["Stitched Article 忠實接合版"]
+    D --> F["Final Synthesis 讀取所有 digests"]
+    F --> G["輸出 Synthesis note"]
+    G --> H["附上 Part Digest Appendix"]
+    C --> H["Markdown Quality Checker"]
+    E --> H
+    G --> H
+    H --> I["修復裸 Mermaid / YAML 污染 / 未關閉 fence / label quote"]
+```
+
+- **Structured Digest**：每個 Part 會整理 `thesis`、`key_points`、`evidence`、`terms`、`open_questions`、`handoff`。
+- **Part Digest Appendix**：每個 Part note 文末會附上自己的 digest；Synthesis 內也會彙整所有 Part digests，方便檢查 Ling Ling 在合成前如何理解每個 Part。
+- **Stitched Article**：長文會額外輸出 `Title (Stitched).md`，將所有 Part notes 忠實接合成一篇可連續閱讀的完整文章，移除各 Part 的 navigation 與 digest appendix，保留來源註記。
+- **Deterministic Markdown Quality Checker**：寫檔前會修復常見格式問題，例如裸 `mermaid` 區塊、未關閉 Mermaid fence、Mermaid `NodeId[...]` / `NodeId{...}` label 未加引號、LaTeX `\rightarrow` 被誤解成 carriage return、LLM 誤吐的 body YAML frontmatter。
+- **Traceable Metadata**：新筆記會標記 `quality_checker: deterministic-markdown-v1`；Synthesis 會標記 `synthesis_pipeline: structured-digest-v1` 與 `digest_schema: part-digest-v1`。
+
 ## 2026-05-10 Fix bugs when using ChromaDB. This is how it works:
 ```mermaid
 flowchart TD
@@ -44,8 +69,11 @@ Operational note: `Consolidate/` 應該代表「待處理佇列」。若 idle �
 ## ✨ Core Features
 
 - **📚 Scripture-Driven Logic (聖典驅動)**: 所有的 AI 行為（角色性格、輸出語言、智力參數）都定義在 Wiki 內的 `Scripture/Scripture.md`。改筆記就能改大腦，無需重啟程式。
-- **📥 Consolidate & Synthesis (清洗、消化與合成)**: 遇到雜訊多、萬字長的長文也不怕。現在您可以先在 `Clippings/` 手動清洗雜訊，再拉入 `Consolidate/` 觸發 AI 精煉。Ling Ling 會自動精確切割、帶入前情提要進行接力讀取，最後生成帶有「執行摘要」與「跨頁導覽連結」的合成頁。
+- **📥 Consolidate & Synthesis (清洗、消化與合成)**: 遇到雜訊多、萬字長的長文也不怕。現在您可以先在 `Clippings/` 手動清洗雜訊，再拉入 `Consolidate/` 觸發 AI 精煉。Ling Ling 會自動精確切割、產生帶有 digest appendix 的 Part notes、輸出忠實接合版 Stitched Article、整理 structured digests，最後生成帶有「執行摘要」、「跨頁導覽連結」與「Part Digest Appendix」的合成頁。
+- **📚 Stitched Article (忠實接合版)**: `Title (Stitched).md` 會接合所有 Part notes 的主要正文，適合完整閱讀與校對；`Title (Synthesis).md` 則保留為洞察與濃縮總結。
 - **🔗 E-book Style Navigation (電子書導航)**: 自動在解析後的 Part 與 Synthesis 之間建立連結，支援「查看原始碼」、「上一篇/下一篇」與「返回總結」，讓長文閱讀如同翻閱電子書。
+- **🧩 Structured Digest Synthesis**: 每個長文 Part 都會先萃取 thesis、key points、evidence、terms 與 open questions，再交給最終合成階段，降低長文總結空泛化。
+- **🧹 Markdown Quality Checker**: 寫入 Obsidian 前自動修復裸 Mermaid、未關閉 Mermaid fence 與 body YAML 污染，並把修復紀錄寫入 metadata。
 - **🛡️ High Reliability (高可靠性監測)**: 支援跨資料夾「拖拉搬移」偵測，並具備「啟動自動掃描」功能，確保任何遺漏的指令或剪輯都能在開機時自動補齊。
 - **🎀 Knowledge Dashboard (自動知識地圖)**: 專業的 `index.md` 自動維護系統。支援 **自然排序**（Part 1 在 Part 10 前面）與 **Obsidian Callouts** 階層化顯示，讓你的知識庫再大也不亂。
 - **🤖 Agentic Command Workflow**: 在 `toLingLing/` 丟入指令檔（如 `@ling-patrol-tags`），玲玲會自動執行標籤稽核、合併筆記或生成洞察。
@@ -152,8 +180,8 @@ ling-ling/
 3. **對抗熵增**：資料會從有序走向失序。定期發動 `@ling-patrol` 是保持大腦清爽的唯一方法。
 
 ## 📋 已知問題
-    - [ ] 模型回傳的 Mermaid 不穩定，文字應該被 " " 包住。
-    - [ ] 長文解析受限於模型能力，越長越容易出錯。
+    - [ ] Mermaid 語法仍可能有語意層錯誤；目前 checker 會修 fence/包裹格式與 node label quote 問題，但不會理解整張圖是否邏輯正確。
+    - [ ] 長文解析已改為 structured digest pipeline，但語意品質仍受模型能力影響；後續會加入 semantic quality score 與 retry-with-critique。
     - [ ] 多國語混亂。模型不一定會使用指定語言回答。
  
 ---

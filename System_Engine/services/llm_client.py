@@ -7,6 +7,7 @@ import yaml
 from pathlib import Path
 from datetime import datetime
 from core.config import LLM_PROVIDER, PERSONAS_DIR, TEMPLATES_DIR, GUIDELINES_DIR, PROJECT_ROOT, settings
+from core.parser import strip_body_frontmatter
 
 class LLMClient:
     def __init__(self):
@@ -52,7 +53,7 @@ class LLMClient:
             if localized_path.exists(): return localized_path.read_text('utf-8')
         return file_path.read_text('utf-8') if file_path.exists() else ""
 
-    def _build_system_prompt(self, instruction_type: str, forced_template: str = None, default_template: str = None) -> str:
+    def _build_system_prompt(self, instruction_type: str, forced_template: str = None, default_template: str = None, require_yaml_header: bool = True) -> str:
         role_instructions = self._load_localized_content(PERSONAS_DIR / f"{settings.AGENT_ROLE}.md")
         
         if forced_template == "none":
@@ -65,8 +66,69 @@ class LLMClient:
         
         lang_hint = self._get_lang_hint()
         strict_hint = "\n## STRICT ADHERENCE REQUIRED\nYou MUST follow the provided Markdown template exactly. Do NOT add conversational fillers, greetings, or meta-comments. Focus exclusively on structured content." if settings.STRICT_MODE else ""
-        common_rules = f"\n## Output Language\nPlease output everything in {lang_hint}.{strict_hint}\n\n## Task\n{instruction_type}\n\n{viz_instructions}\n\nUse the standard YAML header (--- title: ... ---) at the beginning of your response."
+        yaml_rule = "Use the standard YAML header (--- title: ... ---) at the beginning of your response." if require_yaml_header else "Do not include YAML frontmatter unless the user explicitly asks for it."
+        common_rules = f"\n## Output Language\nPlease output everything in {lang_hint}.{strict_hint}\n\n## Task\n{instruction_type}\n\n{viz_instructions}\n\n{yaml_rule}"
         return f"{role_instructions}\n\n{template_instructions}\n\n{common_rules}"
+
+    def _complete_text(self, system_prompt: str, user_msg: str, temperature: float = None, max_tokens: int = None) -> str:
+        temperature = settings.CREATIVITY if temperature is None else temperature
+        max_tokens = settings.MAX_OUTPUT if max_tokens is None else max_tokens
+
+        if self.provider == "gemini":
+            from google import genai
+            response = self.client.models.generate_content(
+                model=self.model, contents=[str(user_msg)],
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=temperature,
+                    max_output_tokens=max_tokens
+                )
+            )
+            return response.text or ""
+
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_body={"num_ctx": settings.MEMORY_LIMIT} if self.provider == "ollama" else {}
+        )
+        return response.choices[0].message.content or ""
+
+    def _parse_json_object(self, text: str) -> dict:
+        if not text:
+            return {}
+
+        fenced = re.search(r'```(?:json)?\s*\n(.*?)\n```', text, re.DOTALL | re.IGNORECASE)
+        candidates = [fenced.group(1)] if fenced else []
+        candidates.append(text)
+
+        decoder = json.JSONDecoder()
+        for candidate in candidates:
+            candidate = candidate.strip()
+            try:
+                parsed = json.loads(candidate)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                pass
+
+            for match in re.finditer(r'\{', candidate):
+                try:
+                    parsed, _ = decoder.raw_decode(candidate[match.start():])
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    continue
+        return {}
+
+    def _strip_accidental_frontmatter(self, text: str) -> str:
+        if not text:
+            return ""
+
+        text = text.strip()
+        text = re.sub(r'^```(?:markdown|md)?\s*\n(.*?)\n```$', r'\1', text, flags=re.DOTALL | re.IGNORECASE).strip()
+        text, _ = strip_body_frontmatter(text)
+        return text.strip()
 
     def _load_project_identity(self) -> str:
         readme_path = PROJECT_ROOT / "README.md"
@@ -175,7 +237,7 @@ class LLMClient:
     def answer_query(self, query_content: str, wiki_context: str, custom_instruction: str = None) -> str:
         if custom_instruction:
             task = custom_instruction
-            system_prompt = self._build_system_prompt(task, forced_template="none")
+            system_prompt = self._build_system_prompt(task, forced_template="none", require_yaml_header=False)
             user_msg = query_content
         else:
             lang_hint = self._get_lang_hint()
@@ -245,39 +307,159 @@ Do not include YAML frontmatter.
                 return json.loads(response.choices[0].message.content)
         except: return {}
 
-    def generate_synthesis(self, title: str, part_summaries: list[str], final_concepts: str) -> str:
-        """Generates a high-level executive summary for the entire processed document."""
+    def generate_part_digest(self, title: str, part_number: int, total_parts: int, raw_chunk: str, part_note: str, pending_concepts: str = "") -> dict:
+        """Creates a structured map digest for one part of a long document."""
         lang_hint = self._get_lang_hint()
-        prompt = f"""You have just finished processing a long document titled "{title}" in parts.
-        
-Here are the brief summaries of each part:
-{chr(10).join(part_summaries)}
+        system_prompt = f"""You create compact, evidence-aware map digests for a later synthesis pass.
+Output language: {lang_hint}.
+Return JSON only. No Markdown, no YAML, no commentary.
+"""
+        prompt = f"""Document title: {title}
+Part: {part_number}/{total_parts}
 
-Key concepts and remaining thoughts:
-{final_concepts}
+Prior unresolved concepts:
+{pending_concepts or "(none)"}
+
+Raw source chunk:
+{raw_chunk}
+
+Generated part note:
+{part_note}
+
+Return one JSON object with this schema:
+{{
+  "part": {part_number},
+  "title": "short part title",
+  "thesis": "the central claim or function of this part",
+  "key_points": ["3-6 concrete points, preserving names, mechanisms, and distinctions"],
+  "evidence": ["2-5 source-grounded details, examples, quotes, terms, or data points"],
+  "terms": ["important proper nouns or technical terms"],
+  "open_questions": ["ambiguities, missing context, contradictions, or follow-up questions"],
+  "handoff": "what the next or final synthesis must remember"
+}}
+
+Rules:
+- Prefer specific details over generic summary language.
+- Do not invent facts that are not supported by the source chunk or generated note.
+- Keep each list item concise but information-rich.
+"""
+
+        try:
+            parsed = self._parse_json_object(self._complete_text(system_prompt, prompt, temperature=0.2, max_tokens=1800))
+            if parsed:
+                parsed.setdefault("part", part_number)
+                parsed.setdefault("title", f"Part {part_number}")
+                parsed.setdefault("thesis", "")
+                parsed.setdefault("key_points", [])
+                parsed.setdefault("evidence", [])
+                parsed.setdefault("terms", [])
+                parsed.setdefault("open_questions", [])
+                parsed.setdefault("handoff", "")
+                return parsed
+        except Exception as e:
+            logging.error(f"Part digest generation failed for {title} part {part_number}: {e}")
+
+        fallback = self._strip_accidental_frontmatter(part_note).strip().splitlines()
+        fallback_lines = [line.strip("#- * \t") for line in fallback if line.strip()][:6]
+        return {
+            "part": part_number,
+            "title": f"Part {part_number}",
+            "thesis": fallback_lines[0] if fallback_lines else f"{title} part {part_number}",
+            "key_points": fallback_lines[1:5],
+            "evidence": [],
+            "terms": [],
+            "open_questions": [],
+            "handoff": pending_concepts or ""
+        }
+
+    def _format_part_digest_for_prompt(self, digest) -> str:
+        if isinstance(digest, str):
+            return digest
+        if not isinstance(digest, dict):
+            return str(digest or "(empty digest)")
+
+        def as_text(value) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, str):
+                return value.strip()
+            if isinstance(value, (list, tuple, set)):
+                return "; ".join(as_text(item) for item in value if as_text(item))
+            if isinstance(value, dict):
+                return json.dumps(value, ensure_ascii=False)
+            return str(value).strip()
+
+        def bullets(values):
+            if not values:
+                return "- (none)"
+            if isinstance(values, str):
+                values = [values]
+            return "\n".join(f"- {as_text(value)}" for value in values if as_text(value)) or "- (none)"
+
+        part = digest.get("part", "?")
+        title = digest.get("title", f"Part {part}")
+        return f"""### Part {part}: {title}
+Thesis: {as_text(digest.get('thesis', ''))}
+
+Key points:
+{bullets(digest.get('key_points', []))}
+
+Evidence and source-grounded details:
+{bullets(digest.get('evidence', []))}
+
+Terms:
+{bullets(digest.get('terms', []))}
+
+Open questions:
+{bullets(digest.get('open_questions', []))}
+
+Handoff:
+{as_text(digest.get('handoff', '')) or '(none)'}
+"""
+
+    def generate_synthesis(self, title: str, part_digests: list, final_concepts: str) -> str:
+        """Generates a synthesis from structured part digests."""
+        lang_hint = self._get_lang_hint()
+        digest_text = "\n\n".join(self._format_part_digest_for_prompt(digest) for digest in part_digests)
+        prompt = f"""You have processed a long document titled "{title}" using a map-reduce pipeline.
+
+Structured digests from each part:
+{digest_text}
+
+Final unresolved concepts or carry-over notes:
+{final_concepts or "(none)"}
 
 Task:
-Write a professional, high-level Executive Summary for the entire document in {lang_hint}.
-Focus on the core thesis, major findings, and strategic value.
-Keep it between 300-500 words.
-Do not use a YAML header, just the Markdown content.
+Write the final synthesis in {lang_hint}. Do not include YAML frontmatter.
+
+Required Markdown structure:
+### 核心命題
+State the document's central thesis in 2-4 precise paragraphs.
+
+### 主要發現
+Synthesize the important findings across parts. Preserve concrete names, mechanisms, distinctions, and causal links.
+
+### 證據與依據
+List the strongest source-grounded details from the part digests. Do not invent unsupported evidence.
+
+### 概念關係
+Explain how the major concepts relate to one another. Use a concise Mermaid diagram only if it adds clarity.
+
+### 限制與未解問題
+Name ambiguities, contradictions, missing context, or things the source does not establish.
+
+### 可行洞察
+Offer practical or strategic takeaways grounded in the source.
 """
-        system_prompt = self._build_system_prompt("Create an Executive Summary for a multi-part knowledge entity.")
-        
+        system_prompt = self._build_system_prompt(
+            "Create a source-grounded synthesis from structured part digests.",
+            forced_template="none",
+            require_yaml_header=False
+        )
+
         try:
-            if self.provider == "gemini":
-                from google import genai
-                response = self.client.models.generate_content(
-                    model=self.model, contents=[prompt],
-                    config=genai.types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.3)
-                )
-                return response.text
-            else:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
-                    temperature=0.3
-                )
-                return response.choices[0].message.content
+            return self._strip_accidental_frontmatter(
+                self._complete_text(system_prompt, prompt, temperature=0.25, max_tokens=settings.MAX_OUTPUT)
+            )
         except Exception as e:
             return f"Synthesis failed: {e}"
