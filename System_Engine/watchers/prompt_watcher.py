@@ -86,9 +86,17 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             for f in sorted(TO_LLM_DIR.iterdir()):
                 if f.is_file() and f.suffix.lower() in ['.md', '.txt']:
                     ui.info(f"Startup scan found prompt: {f.name}")
-                    self.process_prompt(f)
-                    if not f.exists():
-                        processed += 1
+                    ui.cmd_received(f.name)
+                    try:
+                        ui.set_status(f"正在處理指令：{f.name}")
+                        self.process_prompt(f)
+                        if not f.exists():
+                            processed += 1
+                            ui.success(f"任務完成：{f.name}")
+                    except Exception as e:
+                        ui.error(f"指令執行失敗：{e}")
+                    finally:
+                        ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)
         return processed
             
     def _remove_from_processed(self, path_str):
@@ -109,6 +117,7 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             
             intent_key = None
             if f"{COMMAND_PREFIX}merge" in lower_name or "/merge" in lower_query: intent_key = "merge"
+            elif f"{COMMAND_PREFIX}count" in lower_name or "/count" in lower_query: intent_key = "count"
             elif f"{COMMAND_PREFIX}patrol-tags" in lower_name or "/patrol-tags" in lower_query: intent_key = "patrol_tags"
             elif f"{COMMAND_PREFIX}repair-tags" in lower_name or "/repair-tags" in lower_query: intent_key = "repair_tags"
             elif f"{COMMAND_PREFIX}patrol" in lower_name or "/patrol" in lower_query: intent_key = "patrol"
@@ -161,6 +170,13 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                             if f"/{s_id}" in lower_query or (s_id == "tags" and "/tag" in lower_query):
                                 context["strategy_id"] = s_id
                                 break
+                    # Specialized context for CounterAgent
+                    elif intent_key == "count":
+                        confidence = "medium"
+                        conf_match = re.search(r'(?:confidence|信心)\s*[:：]\s*(high|medium|low)', lower_query)
+                        if conf_match:
+                            confidence = conf_match.group(1)
+                        context["confidence"] = confidence
                     
                     agent.execute(context)
                 else:

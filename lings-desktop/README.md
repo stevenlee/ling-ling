@@ -6,6 +6,22 @@
 Ling Ling 是一個將標準 Obsidian 筆記庫轉化為「活體知識系統」的 Agentic RAG 架構。她不只是自動搬運工，更是具備深度綜述能力的知識守護者。
 
 ---
+## 2026-05-13 @ling-count Evidence Grounding
+
+新增 `@ling-count` / `/count` 語意計數指令，用來計算文章中「不能只靠 Ctrl+F 搜尋」的概念型實例，例如訴諸權威、未證實主張、情緒訴求、特定修辭模式等。
+
+```markdown
+@ling-count [[Article Name]]
+Count: appeals to authority
+Confidence: medium
+```
+
+- **語意計數流程**：`CounterAgent` 會先把文章切成 chunks，逐段找出可能的 evidence，再整理重複項目，輸出最終 count、confidence 分布與 evidence 清單。
+- **多文章 / 多概念矩陣**：同一個指令可以放多個 `[[Article]]`，也可以列多個 `Count:` 目標，輸出 cross-analysis summary matrix。
+- **Evidence 可回到原文**：報告中的每個 evidence 會保留 quote，並用 quote 回原文定位最近的 Markdown heading，產生 `[[Article#Heading|🔗原文]]` 連結，方便在 Obsidian 直接跳回來源段落檢查。
+- **白話狀態訊息**：整理階段的 terminal 顯示已從工程式的 `Tally: 去重 N 個候選` 改為 `正在整理找到的 N 個線索，合併重複項目`。
+- **Idle 狀態修正**：修正 `scan_existing()` 處理完 `toLingLing/` 既有指令後，terminal 狀態仍停在「正在生成報告」的問題；任務完成後會回到 idle waiting。
+
 ## 2026-05-10 Synthesis Quality Upgrade
 
 長文解析管線已從「Part 第一行摘要」升級為 **structured digest synthesis**。現在 Ling Ling 會先把長文切成 Parts，針對每個 Part 產生結構化 digest，再用這些 digest 進行最終 Synthesis，避免總結只看到標題、內容過度空泛。
@@ -168,6 +184,7 @@ ling-ling/
 - `@ling-repair-tags`: **批量修復標籤**。根據你勾選的清單，一鍵更新全庫標籤。
 - `@ling-insight`: **發動洞察**。強迫玲玲把讀過的內容拿出來「做夢」，產出跨領域的聯想。
 - `@ling-merge`: **合併筆記**。內容包含 `[[A]]` 與 `[[B]]` 即可將兩者融合。
+- `@ling-count`: **語意計數**。內容包含 `[[Article]]` 與 `Count: 目標概念`，即可計算文中出現多少個概念型實例，並附上可跳回原文的 evidence link。
 - `@ling-zip / @ling-unzip`: **大腦備份與還原**。具備衝突檢測功能的壓縮包管理。
 - `@ling-RESET`: **大腦清洗**。安全地清除所有內容（執行前會自動強制備份）。
 

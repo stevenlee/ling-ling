@@ -1,0 +1,48 @@
+# AnythingCounter
+
+> 🔢 Count ambiguous, semantic concepts in long articles — things that `Ctrl+F` can't find.
+
+## What It Does
+
+A user reads a long article and wants to know:
+- "How many times does the author appeal to authority?"
+- "How many distinct examples of cognitive bias appear?"
+- "Count the number of unsubstantiated claims."
+
+These are **semantic counting tasks** — the target is an *ambiguous concept* that requires reading comprehension. No regex or keyword search can do this.
+
+## Architecture
+
+**Two-Pass LLM Pipeline**: Extract → Tally
+
+| Pass | Purpose |
+|------|---------|
+| **Extract** | Scan each chunk, return JSON instances with quotes + reasoning |
+| **Tally** | Deduplicate cross-chunk overlaps, classify confidence, produce final count |
+
+## Command
+
+```
+@ling-count [[ArticleName]]
+Count: appeals to authority
+```
+
+Or: `/count [[Article]] How many metaphors are used?`
+
+Optional: `Confidence: high` (default: `medium`)
+
+## Files
+
+| File | Role |
+|------|------|
+| `agents/counter_agent.py` | Core agent (Extract + Tally + Report) |
+| `agents/registry.py` | Registered as `count` / `counter` |
+| `watchers/prompt_watcher.py` | `@ling-count` intent detection |
+| `Templates/Prompts/agent_counter.md` | System prompt for extraction pass |
+
+## Status
+
+- [x] Design complete
+- [x] Agent implemented
+- [x] Registered & wired to watcher
+- [ ] Production testing
