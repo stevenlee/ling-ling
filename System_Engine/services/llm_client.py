@@ -189,29 +189,36 @@ class LLMClient:
         if not text: return result
         
         # 1. Find the first YAML block (support both --- and ```yaml)
-        yaml_match = re.search(r'(?:---|```yaml)\s*\n(.*?)\n(?:---|```)\s*', text, re.DOTALL)
+        # Using (?:^|\n) to ensure it starts on a new line
+        yaml_match = re.search(r'(?:^|\n)(?:---|```yaml)\s*\n(.*?)\n(?:---|```)\s*(?:\n|$)', text, re.DOTALL)
         if yaml_match:
             yaml_str = yaml_match.group(1).strip()
-            result["content"] = text[yaml_match.end():].strip()
             
             try:
                 # Aggressive cleanup: handle markdown symbols at start of line, after brackets, commas, or colons
-                yaml_str = re.sub(r'(^|[:\[,\s])[\*\_]{1,2}(.*?)[\*\_]{1,2}(?=[\]\s,:]|$)', r'\1"\2"', yaml_str, flags=re.MULTILINE)
-                metadata = yaml.safe_load(yaml_str)
+                clean_yaml_str = re.sub(r'(^|[:\[,\s])[\*\_]{1,2}(.*?)[\*\_]{1,2}(?=[\]\s,:]|$)', r'\1"\2"', yaml_str, flags=re.MULTILINE)
+                metadata = yaml.safe_load(clean_yaml_str)
                 if isinstance(metadata, dict):
                     if "title" in metadata: result["title"] = str(metadata["title"])
                     if "tags" in metadata: result["tags"] = metadata["tags"]
                     if "type" in metadata: result["type"] = metadata["type"]
                     if "pending_concepts" in metadata: result["pending_concepts"] = metadata["pending_concepts"]
+                    
+                    # Success! Truncate the content to remove the parsed frontmatter.
+                    result["content"] = text[yaml_match.end():].strip()
+                    return result
             except Exception as e:
-                logging.warning(f"YAML parse failed: {e}")
-                logging.debug(f"Offending YAML string:\n{yaml_str}")
-        else:
-            # 2. Fallback: If no YAML, try to find the first H1 title
-            title_match = re.search(r'^#\s+(.*)', text, re.MULTILINE)
-            if title_match:
-                result["title"] = title_match.group(1).strip()
-                result["content"] = text[title_match.start():].strip()
+                # If it explicitly started with ```yaml, it was meant to be YAML but had a syntax error.
+                if "```yaml" in yaml_match.group(0):
+                    logging.warning(f"YAML parse failed: {e}\nOffending string:\n{yaml_str}")
+                # Otherwise, it was likely just a markdown horizontal rule (---). We safely ignore it.
+                pass
+                
+        # 2. Fallback: If no YAML (or it failed), try to find the first H1 title
+        title_match = re.search(r'^#\s+(.*)', text, re.MULTILINE)
+        if title_match:
+            result["title"] = title_match.group(1).strip()
+            # We don't truncate the H1 title from the content here, as it's useful to keep the header.
         
         return result
 

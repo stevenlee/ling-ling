@@ -96,7 +96,7 @@ MERMAID_CONTINUATION_RE = re.compile(
     re.IGNORECASE
 )
 MERMAID_NODE_LABEL_RE = re.compile(
-    r'(?P<node>\b[A-Za-z][\w-]*)'
+    r'(?P<node>[\w-]+)\s*'
     r'(?P<open>[\[{])'
     r'(?P<label>[^\]\}\n]+)'
     r'(?P<close>[\]}])'
@@ -185,6 +185,15 @@ def repair_mermaid_fences(text: str) -> tuple[str, list[str]]:
         fence_match = re.match(r'^```(\w*)\s*$', stripped)
 
         if fence_match:
+            # If we are closing a mermaid block, check if it's premature.
+            # LLMs sometimes incorrectly close the fence immediately after 'graph TD'.
+            if in_fence and fence_lang == "mermaid":
+                following = next_nonempty_line(i + 1)
+                if following and not MARKDOWN_BOUNDARY_RE.match(following) and is_mermaid_continuation(following):
+                    fixes.append("ignored_premature_mermaid_close")
+                    i += 1
+                    continue
+
             in_fence = not in_fence
             fence_lang = fence_match.group(1).lower() if in_fence else ""
             output.append(line)
