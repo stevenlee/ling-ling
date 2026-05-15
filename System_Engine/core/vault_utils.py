@@ -97,9 +97,26 @@ def update_wiki_index(filepath: Path = None, title: str = None):
                     folder_date = files[0]["date"] if files and files[0]["date"] else ""
                     date_suffix = f" | 📅 {folder_date}" if folder_date else ""
                     lines.append(f"> [!abstract]- 📂 {folder} ({len(files)} items){date_suffix}")
-                    for meta in files:
+                    
+                    # Separate main files from raw chunks
+                    parts = [f for f in files if re.search(r'\(Part \d+\)', f["title"])]
+                    mains = [f for f in files if not re.search(r'\(Part \d+\)', f["title"])]
+                    
+                    for meta in mains:
                         tag_str = f" `{'` `'.join(meta['tags'][:3])}`" if meta["tags"] else ""
-                        lines.append(f"> - [[{meta['title']}]] {tag_str}")
+                        
+                        # Add a visual icon to distinguish file types
+                        if "(Synthesis)" in meta["title"]:
+                            icon = "🌟"
+                        elif "(Stitched)" in meta["title"]:
+                            icon = "🧵"
+                        else:
+                            icon = "📄"
+                            
+                        lines.append(f"> - {icon} [[{meta['title']}]] {tag_str}")
+                        
+                    if parts:
+                        lines.append(f"> - 🧩 *(... plus {len(parts)} raw chunks hidden)*")
                 lines.append("")
             lines.append("")
 
