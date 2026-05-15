@@ -60,7 +60,7 @@ class LLMClient:
         if forced_template == "none":
             template_instructions = ""
         else:
-            template_name = (forced_template if forced_template else default_template) or "wiki-note"
+            template_name = (forced_template if forced_template else default_template) or settings.USE_TEMPLATE or "wiki-note"
             if not template_name.endswith('.md'): template_name += '.md'
             template_instructions = self._load_localized_content(TEMPLATES_DIR / template_name)
         viz_instructions = self._load_localized_content(GUIDELINES_DIR / "Visualization.md")

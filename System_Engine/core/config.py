@@ -43,6 +43,7 @@ class DynamicSettings:
     def __init__(self):
         self.AGENT_ROLE = "assistant"
         self.OUTPUT_LANGUAGE = "Traditional Chinese"
+        self.USE_TEMPLATE = None
         self.DIGEST_LIMIT = 5000
         self.DIGEST_OVERLAP = 500
         self.DREAMING_FROM = 1
@@ -67,6 +68,7 @@ class DynamicSettings:
                     # Persona & Language
                     if 'be_a' in yaml_data: self.AGENT_ROLE = str(yaml_data['be_a']).lower()
                     if 'say' in yaml_data: self.OUTPUT_LANGUAGE = str(yaml_data['say'])
+                    if 'use_template' in yaml_data: self.USE_TEMPLATE = str(yaml_data['use_template'])
                     if 'creativity' in yaml_data: self.CREATIVITY = float(yaml_data['creativity'])
                     if 'max_output' in yaml_data: self.MAX_OUTPUT = int(yaml_data['max_output'])
                     if 'memory_limit' in yaml_data: self.MEMORY_LIMIT = int(yaml_data['memory_limit'])
