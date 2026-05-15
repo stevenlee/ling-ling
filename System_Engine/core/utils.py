@@ -47,3 +47,23 @@ def acquire_pid_lock(pid_file: Path):
     except Exception as e:
         logging.error(f"❌ 無法建立 PID 檔案: {e}")
         sys.exit(1)
+
+
+def digest_value_to_text(value) -> str:
+    """Recursively convert a digest value (str, list, dict, etc.) to a flat text string.
+
+    Used by ClippingWatcher (digest appendix formatting) and LLMClient
+    (part-digest-to-prompt serialisation). Centralised here to avoid
+    three identical copies across the codebase.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple, set)):
+        import json
+        return "; ".join(digest_value_to_text(item) for item in value if digest_value_to_text(item))
+    if isinstance(value, dict):
+        import json
+        return json.dumps(value, ensure_ascii=False)
+    return str(value).strip()

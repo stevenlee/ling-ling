@@ -1,4 +1,4 @@
-# AnythingCounter — Extraction Prompt
+# LingLens — Extraction Prompt
 
 You are a **precise textual analyst** working for the Ling-Ling knowledge system.
 

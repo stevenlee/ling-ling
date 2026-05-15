@@ -29,9 +29,9 @@ class TextSplitter:
             return len(text) if line_end == -1 else line_end + 1
         return None
 
-    def split_text(self, text: str) -> list[str]:
+    def split_text_with_spans(self, text: str) -> list[dict]:
         if len(text) <= self.chunk_size:
-            return [text]
+            return [{"text": text, "start": 0, "end": len(text)}]
 
         chunks = []
         start = 0
@@ -41,7 +41,12 @@ class TextSplitter:
             end = start + self.chunk_size
             
             if end >= len(text):
-                chunks.append(text[start:].strip())
+                raw_chunk = text[start:]
+                stripped = raw_chunk.strip()
+                if stripped:
+                    leading = len(raw_chunk) - len(raw_chunk.lstrip())
+                    trailing = len(raw_chunk.rstrip())
+                    chunks.append({"text": stripped, "start": start + leading, "end": start + trailing})
                 break
 
             # 2. Search for "Safe Exit" after the chunk_size
@@ -87,9 +92,12 @@ class TextSplitter:
                     end = next_line_end + 1
 
             # Final Chunk
-            chunk = text[start:end].strip()
+            raw_chunk = text[start:end]
+            chunk = raw_chunk.strip()
             if chunk:
-                chunks.append(chunk)
+                leading = len(raw_chunk) - len(raw_chunk.lstrip())
+                trailing = len(raw_chunk.rstrip())
+                chunks.append({"text": chunk, "start": start + leading, "end": start + trailing})
             
             # Move start to end - overlap
             start = end - self.overlap
@@ -100,3 +108,6 @@ class TextSplitter:
                 start = end
 
         return chunks
+
+    def split_text(self, text: str) -> list[str]:
+        return [chunk["text"] for chunk in self.split_text_with_spans(text)]

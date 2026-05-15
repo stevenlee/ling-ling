@@ -11,9 +11,10 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
     """
     Handles deletions and manual modifications in the wiki vault (pages and Notes).
     """
-    def __init__(self, rag_manager):
+    def __init__(self, rag_manager, llm_client=None):
         super().__init__()
         self.rag = rag_manager
+        self.llm = llm_client
         self._timers = {}
         self._timers_lock = threading.Lock()
 
@@ -126,10 +127,8 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                         tags_to_translate.append(tag)
             
             # 學習新標籤 (如果本機對照表沒有)
-            if tags_to_translate:
-                from services.llm_client import LLMClient
-                llm = LLMClient()
-                learned_map = llm.translate_tags(tags_to_translate)
+            if tags_to_translate and self.llm:
+                learned_map = self.llm.translate_tags(tags_to_translate)
                 for src, target in learned_map.items():
                     tm.add_mapping(src, target)
                     new_tags.add(tm.normalize(target))

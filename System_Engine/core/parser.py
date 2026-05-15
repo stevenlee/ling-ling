@@ -1,6 +1,19 @@
+import json
 import re
 import yaml
 import logging
+
+# Cached TagManager singleton — avoids re-reading the tag map file on every call
+_tag_manager_instance = None
+
+def _get_tag_manager():
+    """Return a cached TagManager instance (lazy-loaded)."""
+    global _tag_manager_instance
+    if _tag_manager_instance is None:
+        from core.tag_manager import TagManager
+        from core.config import TAG_MAP_FILE
+        _tag_manager_instance = TagManager(TAG_MAP_FILE)
+    return _tag_manager_instance
 
 def parse_markdown_metadata(content: str) -> dict:
     """
@@ -40,10 +53,7 @@ def parse_markdown_metadata(content: str) -> dict:
         metadata["tags"].add(tag.strip())
         
     # Convert tags set to sorted list and normalize
-    from core.tag_manager import TagManager
-    from core.config import TAG_MAP_FILE
-    tm = TagManager(TAG_MAP_FILE)
-    
+    tm = _get_tag_manager()
     metadata["tags"] = sorted(list(set([tm.normalize(t) for t in metadata["tags"] if t])))
     
     return metadata
@@ -290,3 +300,55 @@ def clean_llm_response(text: str) -> str:
             return text
             
     return text
+
+
+def extract_json_array(text: str) -> list:
+    """Extract a JSON array from LLM output text, handling fenced code blocks."""
+    if not text:
+        return []
+    fenced = re.search(r'```(?:json)?\s*\n(.*?)\n```', text, re.DOTALL | re.IGNORECASE)
+    candidates = [fenced.group(1)] if fenced else []
+    candidates.append(text)
+    for candidate in candidates:
+        candidate = candidate.strip()
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, list):
+                return [item for item in parsed if isinstance(item, dict)]
+        except Exception:
+            pass
+        match = re.search(r'\[.*\]', candidate, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+                if isinstance(parsed, list):
+                    return [item for item in parsed if isinstance(item, dict)]
+            except Exception:
+                pass
+    return []
+
+
+def extract_json_object(text: str) -> dict:
+    """Extract a JSON object from LLM output text, handling fenced code blocks."""
+    if not text:
+        return {}
+    fenced = re.search(r'```(?:json)?\s*\n(.*?)\n```', text, re.DOTALL | re.IGNORECASE)
+    candidates = [fenced.group(1)] if fenced else []
+    candidates.append(text)
+
+    decoder = json.JSONDecoder()
+    for candidate in candidates:
+        candidate = candidate.strip()
+        try:
+            parsed = json.loads(candidate)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            pass
+        for match in re.finditer(r'\{', candidate):
+            try:
+                parsed, _ = decoder.raw_decode(candidate[match.start():])
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                continue
+    return {}

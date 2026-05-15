@@ -15,6 +15,23 @@ from agents.registry import AgentRegistry
 
 LOCK_FILE = PROJECT_ROOT / ".kb_lock"
 
+# Declarative intent routing table.
+# Order matters: longer prefixes (e.g. "patrol-tags") must appear before shorter
+# ones (e.g. "patrol") to prevent false matches.
+# Each entry: (filename_triggers, slash_triggers, intent_key)
+INTENT_ROUTES = [
+    (["merge"],                              ["merge"],       "merge"),
+    (["lens", "count"],                      ["lens", "count"], "lens"),
+    (["patrol-tags"],                        ["patrol-tags"], "patrol_tags"),
+    (["repair-tags"],                        ["repair-tags"], "repair_tags"),
+    (["patrol"],                             ["patrol"],      "patrol"),
+    (["repair-db"],                          ["repair-db"],   "linter"),
+    (["insight"],                            ["insight"],     "insight"),
+    (["zip"],                                ["zip"],         "kb_zip"),
+    (["unzip"],                              ["unzip"],       "kb_unzip"),
+    (["reset"],                              ["reset"],       "kb_reset"),
+]
+
 class PromptWatcher(watchdog.events.FileSystemEventHandler):
     def __init__(self, llm_client, rag_manager):
         super().__init__()
@@ -102,6 +119,17 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
     def _remove_from_processed(self, path_str):
         with self._processed_lock:
             self._processed_files.discard(path_str)
+
+    def _detect_intent(self, lower_name: str, lower_query: str) -> str | None:
+        """Walk the INTENT_ROUTES table and return the first matching intent key."""
+        for filename_triggers, slash_triggers, intent_key in INTENT_ROUTES:
+            for trigger in filename_triggers:
+                if f"{COMMAND_PREFIX}{trigger}" in lower_name:
+                    return intent_key
+            for trigger in slash_triggers:
+                if f"/{trigger}" in lower_query:
+                    return intent_key
+        return None
             
     def process_prompt(self, filepath: Path):
         try:
@@ -115,17 +143,8 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             lower_query = query_content.lower()
             lower_name = filepath.name.lower()
             
-            intent_key = None
-            if f"{COMMAND_PREFIX}merge" in lower_name or "/merge" in lower_query: intent_key = "merge"
-            elif f"{COMMAND_PREFIX}count" in lower_name or "/count" in lower_query: intent_key = "count"
-            elif f"{COMMAND_PREFIX}patrol-tags" in lower_name or "/patrol-tags" in lower_query: intent_key = "patrol_tags"
-            elif f"{COMMAND_PREFIX}repair-tags" in lower_name or "/repair-tags" in lower_query: intent_key = "repair_tags"
-            elif f"{COMMAND_PREFIX}patrol" in lower_name or "/patrol" in lower_query: intent_key = "patrol"
-            elif f"{COMMAND_PREFIX}repair-db" in lower_name or "/repair-db" in lower_query: intent_key = "linter"
-            elif f"{COMMAND_PREFIX}insight" in lower_name or "/insight" in lower_query: intent_key = "insight"
-            elif f"{COMMAND_PREFIX}zip" in lower_name or "/zip" in lower_query: intent_key = "kb_zip"
-            elif f"{COMMAND_PREFIX}unzip" in lower_name or "/unzip" in lower_query: intent_key = "kb_unzip"
-            elif f"{COMMAND_PREFIX}reset" in lower_name or "/reset" in lower_query: intent_key = "kb_reset"
+            intent_key = self._detect_intent(lower_name, lower_query)
+
             
             # Deduplication
             if intent_key:
@@ -170,8 +189,8 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                             if f"/{s_id}" in lower_query or (s_id == "tags" and "/tag" in lower_query):
                                 context["strategy_id"] = s_id
                                 break
-                    # Specialized context for CounterAgent
-                    elif intent_key == "count":
+                    # Specialized context for LingLens/CounterAgent
+                    elif intent_key == "lens":
                         confidence = "medium"
                         conf_match = re.search(r'(?:confidence|信心)\s*[:：]\s*(high|medium|low)', lower_query)
                         if conf_match:

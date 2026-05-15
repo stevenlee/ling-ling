@@ -16,6 +16,7 @@ class AgentRegistry:
             "insight": InsightAgent,
             "patrol": LinterAgent,
             "linter": LinterAgent,
+            "lens": CounterAgent,
             "count": CounterAgent,
             "counter": CounterAgent
         }

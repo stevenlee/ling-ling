@@ -33,7 +33,8 @@ class TagManager:
                     data = yaml.safe_load(content)
                     if data and isinstance(data, dict):
                         self._map = data
-                except: pass
+                except Exception as e:
+                    logging.debug(f"TagManager: fallback YAML parse failed: {e}")
         except Exception as e:
             logging.error(f"TagManager: Failed to load map from {self.mapping_file.name}: {e}")
 

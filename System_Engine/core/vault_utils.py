@@ -41,7 +41,8 @@ def update_wiki_index(filepath: Path = None, title: str = None):
                         if yaml_date:
                             meta["date"] = yaml_date
                 return meta
-            except:
+            except Exception as e:
+                logging.debug(f"Wiki index: failed to read metadata from {f_path.name}: {e}")
                 return {"title": f_path.stem, "tags": [], "date": ""}
 
         # 1. Scan Directories

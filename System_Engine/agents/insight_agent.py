@@ -149,7 +149,9 @@ class InsightAgent(BaseAgent):
             recent_pool = docs_with_meta[:pool_size]
             selection = random.sample(recent_pool, min(len(recent_pool), limit))
             return "\n---\n".join([x[0] for x in selection])
-        except: return "No recent data found."
+        except Exception as e:
+            logging.debug(f"InsightAgent: recent context retrieval failed: {e}")
+            return "No recent data found."
 
     def _get_tag_cluster_context(self, limit: int, target_tag: str = None) -> str:
         try:
@@ -168,7 +170,9 @@ class InsightAgent(BaseAgent):
             if not cluster_docs: return self._get_random_sample_context(limit)
             selection = random.sample(cluster_docs, min(len(cluster_docs), limit))
             return f"Focusing on Cluster: #{target_tag}\n\n" + "\n---\n".join(selection)
-        except: return self._get_random_sample_context(limit)
+        except Exception as e:
+            logging.debug(f"InsightAgent: tag cluster retrieval failed: {e}")
+            return self._get_random_sample_context(limit)
 
     def _get_island_context(self, limit: int, target_island: str = None) -> str:
         if not target_island:
@@ -189,4 +193,6 @@ class InsightAgent(BaseAgent):
             if not docs: return "Empty KB."
             selection = random.sample(docs, min(len(docs), limit))
             return "\n---\n".join(selection)
-        except: return "Error."
+        except Exception as e:
+            logging.debug(f"InsightAgent: random sample retrieval failed: {e}")
+            return "Error retrieving context."

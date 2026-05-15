@@ -7,7 +7,8 @@ import yaml
 from pathlib import Path
 from datetime import datetime
 from core.config import LLM_PROVIDER, PERSONAS_DIR, TEMPLATES_DIR, GUIDELINES_DIR, PROJECT_ROOT, settings
-from core.parser import strip_body_frontmatter
+from core.parser import strip_body_frontmatter, extract_json_object
+from core.utils import digest_value_to_text
 
 class LLMClient:
     def __init__(self):
@@ -95,31 +96,6 @@ class LLMClient:
         )
         return response.choices[0].message.content or ""
 
-    def _parse_json_object(self, text: str) -> dict:
-        if not text:
-            return {}
-
-        fenced = re.search(r'```(?:json)?\s*\n(.*?)\n```', text, re.DOTALL | re.IGNORECASE)
-        candidates = [fenced.group(1)] if fenced else []
-        candidates.append(text)
-
-        decoder = json.JSONDecoder()
-        for candidate in candidates:
-            candidate = candidate.strip()
-            try:
-                parsed = json.loads(candidate)
-                return parsed if isinstance(parsed, dict) else {}
-            except Exception:
-                pass
-
-            for match in re.finditer(r'\{', candidate):
-                try:
-                    parsed, _ = decoder.raw_decode(candidate[match.start():])
-                    if isinstance(parsed, dict):
-                        return parsed
-                except Exception:
-                    continue
-        return {}
 
     def _strip_accidental_frontmatter(self, text: str) -> str:
         if not text:
@@ -176,27 +152,32 @@ class LLMClient:
             user_msg += f"{labels['content']}:\n{markdown_content}"
 
         try:
-            if self.provider in ["vllm", "ollama"]:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
-                    temperature=settings.CREATIVITY,
-                    max_tokens=settings.MAX_OUTPUT,
-                    extra_body={"num_ctx": settings.MEMORY_LIMIT} if self.provider == "ollama" else {}
-                )
-                return self._hybrid_parse(response.choices[0].message.content)
-            elif self.provider == "gemini":
-                from google import genai
-                contents_payload = user_msg if isinstance(user_msg, list) else [str(user_msg)]
-                response = self.client.models.generate_content(
-                    model=self.model, contents=contents_payload,
-                    config=genai.types.GenerateContentConfig(
-                        system_instruction=system_prompt, 
-                        temperature=settings.CREATIVITY,
-                        max_output_tokens=settings.MAX_OUTPUT
+            if image_path:
+                # Multimodal path — requires provider-specific payload formatting
+                if self.provider == "gemini":
+                    from google import genai
+                    contents_payload = user_msg if isinstance(user_msg, list) else [str(user_msg)]
+                    response = self.client.models.generate_content(
+                        model=self.model, contents=contents_payload,
+                        config=genai.types.GenerateContentConfig(
+                            system_instruction=system_prompt,
+                            temperature=settings.CREATIVITY,
+                            max_output_tokens=settings.MAX_OUTPUT
+                        )
                     )
-                )
-                return self._hybrid_parse(response.text)
+                    return self._hybrid_parse(response.text)
+                else:
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
+                        temperature=settings.CREATIVITY,
+                        max_tokens=settings.MAX_OUTPUT,
+                        extra_body={"num_ctx": settings.MEMORY_LIMIT} if self.provider == "ollama" else {}
+                    )
+                    return self._hybrid_parse(response.choices[0].message.content)
+            else:
+                # Text-only path — delegate to unified _complete_text
+                return self._hybrid_parse(self._complete_text(system_prompt, user_msg))
         except Exception as e:
             logging.error(f"LLM Error: {e}")
             return None
@@ -260,26 +241,7 @@ Do not include YAML frontmatter.
 {wiki_context if wiki_context.strip() else "(No relevant context retrieved.)"}
 """
         try:
-            if self.provider == "gemini":
-                from google import genai
-                response = self.client.models.generate_content(
-                    model=self.model, contents=[str(user_msg)],
-                    config=genai.types.GenerateContentConfig(
-                        system_instruction=system_prompt, 
-                        temperature=settings.CREATIVITY,
-                        max_output_tokens=settings.MAX_OUTPUT
-                    )
-                )
-                return response.text
-            else:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
-                    temperature=settings.CREATIVITY,
-                    max_tokens=settings.MAX_OUTPUT,
-                    extra_body={"num_ctx": settings.MEMORY_LIMIT} if self.provider == "ollama" else {}
-                )
-                return response.choices[0].message.content
+            return self._complete_text(system_prompt, user_msg)
         except Exception as e:
             return f"Error: {e}"
 
@@ -305,7 +267,9 @@ Do not include YAML frontmatter.
                     temperature=0.1
                 )
                 return json.loads(response.choices[0].message.content)
-        except: return {}
+        except Exception as e:
+            logging.warning(f"Tag translation failed: {e}")
+            return {}
 
     def generate_part_digest(self, title: str, part_number: int, total_parts: int, raw_chunk: str, part_note: str, pending_concepts: str = "") -> dict:
         """Creates a structured map digest for one part of a long document."""
@@ -345,7 +309,7 @@ Rules:
 """
 
         try:
-            parsed = self._parse_json_object(self._complete_text(system_prompt, prompt, temperature=0.2, max_tokens=1800))
+            parsed = extract_json_object(self._complete_text(system_prompt, prompt, temperature=0.2, max_tokens=1800))
             if parsed:
                 parsed.setdefault("part", part_number)
                 parsed.setdefault("title", f"Part {part_number}")
@@ -379,15 +343,7 @@ Rules:
             return str(digest or "(empty digest)")
 
         def as_text(value) -> str:
-            if value is None:
-                return ""
-            if isinstance(value, str):
-                return value.strip()
-            if isinstance(value, (list, tuple, set)):
-                return "; ".join(as_text(item) for item in value if as_text(item))
-            if isinstance(value, dict):
-                return json.dumps(value, ensure_ascii=False)
-            return str(value).strip()
+            return digest_value_to_text(value)
 
         def bullets(values):
             if not values:

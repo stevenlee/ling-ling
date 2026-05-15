@@ -36,7 +36,7 @@ def main():
     # 3. Initialize Watchers
     event_handler_clippings = ClippingWatcher(llm_client, rag_manager)
     event_handler_prompts = PromptWatcher(llm_client, rag_manager)
-    event_handler_vault = VaultWatcher(rag_manager)
+    event_handler_vault = VaultWatcher(rag_manager, llm_client)
     
     # 3.1. Register idle callbacks: re-scan directories on busy→idle to catch dropped events
     global_busy_state.register_idle_callback(event_handler_clippings.scan_existing)

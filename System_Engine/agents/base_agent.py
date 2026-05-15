@@ -121,7 +121,7 @@ BROKEN CODE:
         # Create a safe filename
         safe_title = re.sub(r'[\\/*?:"<>|]', "-", title)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        filename = f"✅{report_type}-{timestamp}.md"
+        filename = f"✅{report_type}-{safe_title}-{timestamp}.md"
         
         output_path = FROM_LLM_DIR / filename
         output_path.write_text(full_markdown, encoding='utf-8')

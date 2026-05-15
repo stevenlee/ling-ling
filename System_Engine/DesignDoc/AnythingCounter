@@ -1,6 +1,6 @@
-# AnythingCounter
+# LingLens
 
-> 🔢 Count ambiguous, semantic concepts in long articles — things that `Ctrl+F` can't find.
+> 🔎 Read long articles through a user-defined conceptual lens — then count and cite the matching evidence.
 
 ## What It Does
 
@@ -9,7 +9,7 @@ A user reads a long article and wants to know:
 - "How many distinct examples of cognitive bias appear?"
 - "Count the number of unsubstantiated claims."
 
-These are **semantic counting tasks** — the target is an *ambiguous concept* that requires reading comprehension. No regex or keyword search can do this.
+These are **conceptual lens tasks** — the target is an *ambiguous concept* that requires reading comprehension. No regex or keyword search can do this.
 
 ## Architecture
 
@@ -23,11 +23,13 @@ These are **semantic counting tasks** — the target is an *ambiguous concept* t
 ## Command
 
 ```
-@ling-count [[ArticleName]]
+@ling-lens [[ArticleName]]
 Count: appeals to authority
 ```
 
-Or: `/count [[Article]] How many metaphors are used?`
+Or: `/lens [[Article]] How many metaphors are used?`
+
+Legacy aliases: `@ling-count` and `/count`.
 
 Optional: `Confidence: high` (default: `medium`)
 
@@ -35,9 +37,9 @@ Optional: `Confidence: high` (default: `medium`)
 
 | File | Role |
 |------|------|
-| `agents/counter_agent.py` | Core agent (Extract + Tally + Report) |
-| `agents/registry.py` | Registered as `count` / `counter` |
-| `watchers/prompt_watcher.py` | `@ling-count` intent detection |
+| `agents/counter_agent.py` | Core LingLens agent (Extract + Tally + Report) |
+| `agents/registry.py` | Registered as `lens`; legacy `count` / `counter` aliases remain |
+| `watchers/prompt_watcher.py` | `@ling-lens` intent detection |
 | `Templates/Prompts/agent_counter.md` | System prompt for extraction pass |
 
 ## Status
