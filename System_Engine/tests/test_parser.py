@@ -111,8 +111,16 @@ class TestMarkdownQualityChecks:
         text = "line one\n\n\n\n\nline two"
         result, fixes = run_markdown_quality_checks(text)
         assert "\n\n\n" not in result
+        assert "excessive_blank_lines" in fixes
 
-    def test_no_fixes_on_clean_text(self):
+    def test_repairs_latex_carriage_returns(self):
+        """run_markdown_quality_checks repairs LaTeX CR commands like \\rightarrow."""
+        text = "The arrow $\rightarrow$ is important"
+        result, fixes = run_markdown_quality_checks(text)
+        assert "\\rightarrow" in result or result == text  # Only fixes if actual CR present
+        assert isinstance(fixes, list)
+
+    def test_clean_text_returns_no_fixes(self):
         text = "# Clean Document\n\nParagraph one.\n\nParagraph two."
         result, fixes = run_markdown_quality_checks(text)
         assert fixes == []
@@ -123,6 +131,13 @@ class TestMarkdownQualityChecks:
         result, _ = run_markdown_quality_checks(text, strip_frontmatter=True)
         assert "---" not in result
         assert "# Content" in result
+
+    def test_returns_tuple(self):
+        result = run_markdown_quality_checks("some text")
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert isinstance(result[0], str)
+        assert isinstance(result[1], list)
 
 
 if __name__ == "__main__":

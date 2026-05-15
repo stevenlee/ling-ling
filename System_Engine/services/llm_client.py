@@ -215,7 +215,7 @@ class LLMClient:
         
         return result
 
-    def answer_query(self, query_content: str, wiki_context: str, custom_instruction: str = None) -> str:
+    def answer_query(self, query_content: str, wiki_context: str, custom_instruction: str = None, temperature: float = None) -> str:
         if custom_instruction:
             task = custom_instruction
             system_prompt = self._build_system_prompt(task, forced_template="none", require_yaml_header=False)
@@ -241,7 +241,7 @@ Do not include YAML frontmatter.
 {wiki_context if wiki_context.strip() else "(No relevant context retrieved.)"}
 """
         try:
-            return self._complete_text(system_prompt, user_msg)
+            return self._complete_text(system_prompt, user_msg, temperature=temperature)
         except Exception as e:
             return f"Error: {e}"
 

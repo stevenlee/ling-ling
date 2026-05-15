@@ -268,6 +268,19 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
     cleaned, applied = repair_mermaid_label_quotes(cleaned)
     fixes.extend(applied)
 
+    # Trailing whitespace removal (line-level)
+    stripped_lines = [line.rstrip() for line in cleaned.split('\n')]
+    stripped = '\n'.join(stripped_lines)
+    if stripped != cleaned:
+        fixes.append("trailing_whitespace")
+        cleaned = stripped
+
+    # Collapse excessive blank lines (3+ → 2)
+    collapsed = re.sub(r'\n{3,}', '\n\n', cleaned)
+    if collapsed != cleaned:
+        fixes.append("excessive_blank_lines")
+        cleaned = collapsed
+
     return cleaned.strip(), fixes
 
 def clean_llm_response(text: str) -> str:
