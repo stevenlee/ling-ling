@@ -166,21 +166,26 @@ class InsightAgent(BaseAgent):
 
     def _run_montecarlo(self, config: dict, user_directive: str) -> str:
         """
-        Multi-round Monte Carlo pipeline:
-          1. GENERATE: Sample N random note pairs from the KB
-          2. SPARK:    For each pair, LLM generates a seed insight + novelty score (high temp)
-          3. FILTER:   Keep top-K seeds by novelty score
-          4. EXPAND:   Deep-dive winners with semantic search for evidence (medium temp)
-          5. SYNTHESIZE: Final LLM pass weaving all expanded seeds (low temp)
+        Multi-round Monte Carlo pipeline.
 
-        Supports targeted mode:
-          - 2+ [[titles]]: Focus exploration around those specific articles
-          - 1 [[title]]:   Pair that article with diverse KB documents
-          - 0 [[titles]]:  Fully random exploration (default)
+        Each round independently:
+          1. GENERATE: Sample fresh pairs (avoiding previously tried combos)
+          2. SPARK:    Score each pair for novelty (high temp)
+          3. FILTER:   Keep top-K seeds
+          4. EXPAND:   Deep-dive winners with semantic search (medium temp)
+
+        After all rounds:
+          5. EVALUATE: Cross-round comparison scorecard
+          6. SYNTHESIZE: Final report with global best insights (low temp)
+
+        Supports targeted mode via [[title]] references in user_directive.
         """
         num_sparks = config.get('num_sparks', 6)
         top_k = config.get('top_k', 3)
+        num_rounds = config.get('num_rounds', 3)
         limit = config.get('limit', 10)
+
+        from core.ui import ui
 
         # Parse [[target]] references from user directive
         target_titles = [
@@ -188,50 +193,88 @@ class InsightAgent(BaseAgent):
             for m in re.findall(r'\[\[(.*?)\]\]', user_directive)
         ]
 
-        # 1. GENERATE: Build pairs based on targeting mode
-        all_docs = self._get_all_documents(limit * 3)
+        # Load the full document pool once
+        all_docs = self._get_all_documents(limit * 5)
         if len(all_docs) < 2:
             logging.warning("Monte Carlo: Not enough documents for pairing, falling back to single.")
             return self._run_single(config, user_directive)
 
-        if target_titles:
-            pairs = self._build_targeted_pairs(all_docs, target_titles, num_sparks)
-            logging.info(f"Monte Carlo (targeted): {len(pairs)} pairs around {target_titles}")
-        else:
-            pairs = self._sample_random_pairs(all_docs, num_sparks)
-            logging.info(f"Monte Carlo (random): {len(pairs)} pairs from {len(all_docs)} docs")
+        # Track tried pairs across rounds to avoid repeats
+        tried_pairs: set[tuple[str, str]] = set()
+        round_results: list[dict] = []
 
-        # 2. SPARK: Generate and score seed insights
-        from core.ui import ui
-        seeds = []
-        for i, (doc_a, doc_b) in enumerate(pairs):
-            ui.set_status(f"Monte Carlo: Sparking seed {i+1}/{len(pairs)}...")
-            seed = self._spark_seed(doc_a, doc_b, config)
-            if seed:
-                seeds.append(seed)
+        for round_num in range(1, num_rounds + 1):
+            ui.set_status(f"Monte Carlo Round {round_num}/{num_rounds}: Generating pairs...")
+            logging.info(f"Monte Carlo: Starting round {round_num}/{num_rounds}")
 
-        if not seeds:
-            logging.warning("Monte Carlo: No seeds generated, falling back to single.")
+            # 1. GENERATE: Fresh pairs, avoiding already-tried combinations
+            if target_titles:
+                pairs = self._build_targeted_pairs(all_docs, target_titles, num_sparks, exclude=tried_pairs)
+            else:
+                pairs = self._sample_random_pairs(all_docs, num_sparks, exclude=tried_pairs)
+
+            if not pairs:
+                logging.info(f"Monte Carlo round {round_num}: No new pairs available, stopping.")
+                break
+
+            # Record tried pairs
+            for a, b in pairs:
+                pair_key = tuple(sorted([a['title'], b['title']]))
+                tried_pairs.add(pair_key)
+
+            # 2. SPARK
+            seeds = []
+            for i, (doc_a, doc_b) in enumerate(pairs):
+                ui.set_status(f"Round {round_num}: Sparking {i+1}/{len(pairs)}...")
+                seed = self._spark_seed(doc_a, doc_b, config)
+                if seed:
+                    seed['round'] = round_num
+                    seeds.append(seed)
+
+            if not seeds:
+                logging.info(f"Monte Carlo round {round_num}: No seeds generated.")
+                round_results.append({
+                    'round': round_num,
+                    'pairs_tried': len(pairs),
+                    'seeds': 0,
+                    'winners': [],
+                    'expanded': []
+                })
+                continue
+
+            # 3. FILTER
+            seeds.sort(key=lambda s: s.get('novelty_score', 0), reverse=True)
+            winners = seeds[:top_k]
+
+            # 4. EXPAND
+            expanded = []
+            for i, seed in enumerate(winners):
+                ui.set_status(f"Round {round_num}: Expanding {i+1}/{len(winners)}...")
+                expansion = self._expand_seed(seed, config)
+                expanded.append(expansion)
+
+            round_results.append({
+                'round': round_num,
+                'pairs_tried': len(pairs),
+                'seeds': len(seeds),
+                'winners': winners,
+                'expanded': expanded,
+                'all_scores': [s.get('novelty_score', 0) for s in seeds],
+            })
+
+            logging.info(
+                f"Monte Carlo round {round_num}: {len(pairs)} pairs → "
+                f"{len(seeds)} seeds → top {len(winners)} "
+                f"(scores: {[s.get('novelty_score', 0) for s in winners]})"
+            )
+
+        if not any(r.get('expanded') for r in round_results):
+            logging.warning("Monte Carlo: No insights from any round, falling back to single.")
             return self._run_single(config, user_directive)
 
-        # 3. FILTER: Keep top-K by novelty score
-        seeds.sort(key=lambda s: s.get('novelty_score', 0), reverse=True)
-        winners = seeds[:top_k]
-        logging.info(
-            f"Monte Carlo: Filtered {len(seeds)} seeds → top {len(winners)} "
-            f"(scores: {[s.get('novelty_score', 0) for s in winners]})"
-        )
-
-        # 4. EXPAND: Deep-dive winners with semantic search
-        expanded = []
-        for i, seed in enumerate(winners):
-            ui.set_status(f"Monte Carlo: Expanding seed {i+1}/{len(winners)}...")
-            expansion = self._expand_seed(seed, config)
-            expanded.append(expansion)
-
-        # 5. SYNTHESIZE: Final cohesive report
-        ui.set_status("Monte Carlo: Synthesizing final report...")
-        return self._synthesize_report(expanded, config, user_directive)
+        # 5+6. EVALUATE + SYNTHESIZE
+        ui.set_status("Monte Carlo: Cross-round evaluation & synthesis...")
+        return self._synthesize_multi_round(round_results, config, user_directive)
 
     def _get_all_documents(self, max_docs: int = 50) -> list[dict]:
         """
@@ -288,15 +331,22 @@ class InsightAgent(BaseAgent):
             logging.error(f"Monte Carlo: Failed to get documents: {e}")
             return []
 
-    def _sample_random_pairs(self, docs: list[dict], num_pairs: int) -> list[tuple]:
-        """Sample random pairs of documents, preferring cross-domain (different tags)."""
+    def _sample_random_pairs(self, docs: list[dict], num_pairs: int, exclude: set = None) -> list[tuple]:
+        """Sample random pairs of documents, preferring cross-domain (different tags).
+        Optionally skips pairs whose (sorted) title tuple is in the exclude set."""
         pairs = []
         attempts = 0
         max_attempts = num_pairs * 4
+        exclude = exclude or set()
 
         while len(pairs) < num_pairs and attempts < max_attempts:
             attempts += 1
             a, b = random.sample(docs, 2)
+
+            # Skip already-tried pairs
+            pair_key = tuple(sorted([a['title'], b['title']]))
+            if pair_key in exclude:
+                continue
 
             # Prefer pairs with low tag overlap (cross-domain = more interesting)
             tags_a = set(a.get('tags', []))
@@ -309,14 +359,19 @@ class InsightAgent(BaseAgent):
 
         return pairs
 
-    def _build_targeted_pairs(self, all_docs: list[dict], target_titles: list[str], num_pairs: int) -> list[tuple]:
+    def _build_targeted_pairs(self, all_docs: list[dict], target_titles: list[str], num_pairs: int, exclude: set = None) -> list[tuple]:
         """
         Build pairs focused around specific target articles.
 
         Modes:
-          - 2+ targets: All combinations between targets + pair each with semantic neighbors
-          - 1 target:   Pair the target with diverse docs from the KB
+          - 2+ targets: Shuffled combinations between targets (skip already-tried)
+          - 1 target:   Pair with diverse KB docs
+
+        With 6 targets × 3 rounds (num_sparks=6):
+          C(6,2) = 15 internal combos → Round 1 gets 6, Round 2 gets 6, Round 3 gets 3 + 3 neighbors
         """
+        exclude = exclude or set()
+
         # Find target docs by title (fuzzy match — stem matching for flexibility)
         target_docs = []
         other_docs = []
@@ -334,7 +389,6 @@ class InsightAgent(BaseAgent):
             for title in target_titles:
                 similar = self.rag.query_similar_notes(title, top_k=2)
                 for s in similar:
-                    # Build a synthetic doc entry from the search result
                     target_docs.append({
                         'title': title,
                         'content': s[:2000],
@@ -342,33 +396,47 @@ class InsightAgent(BaseAgent):
                     })
             if not target_docs:
                 logging.warning(f"Monte Carlo: Targets {target_titles} not found, falling back to random.")
-                return self._sample_random_pairs(all_docs, num_pairs)
+                return self._sample_random_pairs(all_docs, num_pairs, exclude=exclude)
 
         pairs = []
 
         if len(target_docs) >= 2:
-            # Mode: Multiple targets — pair them with each other first
+            # Mode: Multiple targets — shuffled internal combinations, skip tried pairs
             from itertools import combinations
-            for a, b in combinations(target_docs, 2):
+            all_combos = list(combinations(target_docs, 2))
+            random.shuffle(all_combos)
+
+            for a, b in all_combos:
+                pair_key = tuple(sorted([a['title'], b['title']]))
+                if pair_key in exclude:
+                    continue
                 pairs.append((a, b))
                 if len(pairs) >= num_pairs:
                     break
 
             # Fill remaining slots: pair targets with diverse neighbors
             if other_docs and len(pairs) < num_pairs:
-                for target in target_docs:
+                shuffled_targets = list(target_docs)
+                random.shuffle(shuffled_targets)
+                for target in shuffled_targets:
                     if len(pairs) >= num_pairs:
                         break
                     neighbor = random.choice(other_docs)
-                    pairs.append((target, neighbor))
+                    pair_key = tuple(sorted([target['title'], neighbor['title']]))
+                    if pair_key not in exclude:
+                        pairs.append((target, neighbor))
         else:
             # Mode: Single target — pair it with diverse KB docs
             target = target_docs[0]
             if other_docs:
-                candidates = random.sample(other_docs, min(len(other_docs), num_pairs))
+                candidates = random.sample(other_docs, min(len(other_docs), num_pairs * 2))
                 for other in candidates:
-                    pairs.append((target, other))
-            else:
+                    if len(pairs) >= num_pairs:
+                        break
+                    pair_key = tuple(sorted([target['title'], other['title']]))
+                    if pair_key not in exclude:
+                        pairs.append((target, other))
+            if not pairs:
                 pairs.append((target_docs[0], random.choice(all_docs)))
 
         return pairs[:num_pairs]
@@ -462,49 +530,106 @@ class InsightAgent(BaseAgent):
             'evidence_sources': [doc.split('\n')[0] for doc in evidence_docs[:3]] if evidence_docs else []
         }
 
-    def _synthesize_report(self, expanded_seeds: list[dict], config: dict, user_directive: str) -> str:
-        """Synthesize expanded seeds into a cohesive report."""
-        sections = []
-        for i, seed in enumerate(expanded_seeds, 1):
-            sections.append(
-                f"### 🌟 Insight {i} (Score: {seed.get('novelty_score', '?')}/10)\n"
-                f"**Connection**: [[{seed.get('source_a', '')}]] × [[{seed.get('source_b', '')}]]\n\n"
-                f"{seed.get('expanded', seed.get('idea', ''))}"
+    def _synthesize_multi_round(self, round_results: list[dict], config: dict, user_directive: str) -> str:
+        """Build a comprehensive multi-round report with per-round evaluation and cross-round synthesis."""
+        num_rounds = len(round_results)
+
+        # ── Build per-round scorecard ──
+        scorecard_rows = []
+        for r in round_results:
+            rn = r['round']
+            if not r.get('winners'):
+                scorecard_rows.append(f"| {rn} | {r['pairs_tried']} | 0 | — | — | — |")
+                continue
+            top = r['winners'][0]
+            scores = r.get('all_scores', [top.get('novelty_score', 0)])
+            avg = sum(scores) / max(len(scores), 1)
+            scorecard_rows.append(
+                f"| {rn} | {r['pairs_tried']} | {r['seeds']} | {avg:.1f} | "
+                f"{top.get('novelty_score', '?')}/10 | "
+                f"[[{top.get('source_a', '?')}]] × [[{top.get('source_b', '?')}]] |"
             )
 
-        all_sections = "\n\n---\n\n".join(sections)
-
-        # Meta-data about the exploration
-        total_sparks = len(expanded_seeds)
-        avg_score = sum(s.get('novelty_score', 0) for s in expanded_seeds) / max(total_sparks, 1)
-
-        synthesis_prompt = (
-            f"You are writing the final synthesis of a Monte Carlo insight exploration.\n\n"
-            f"## Exploration Statistics\n"
-            f"- Seeds generated: multiple random pairs\n"
-            f"- Winners selected: {total_sparks} (avg novelty: {avg_score:.1f}/10)\n\n"
-            f"## Expanded Insights\n{all_sections}\n\n"
-            f"## Task\n"
-            f"Write a brief executive summary (3-5 paragraphs) that:\n"
-            f"1. Identifies the meta-pattern across all winning insights\n"
-            f"2. States the single most actionable takeaway\n"
-            f"3. Suggests what areas of the knowledge base to explore next\n"
-            f"Output language: {self.llm._get_lang_hint()}\n"
-            f"User's additional context: {user_directive or '(none)'}"
+        scorecard = (
+            "| Round | Pairs | Seeds | Avg Score | Best | Top Connection |\n"
+            "|:-----:|:-----:|:-----:|:---------:|:----:|:---------------|\n"
+            + "\n".join(scorecard_rows)
         )
 
-        executive_summary = self.llm.answer_query(
-            query_content="Synthesize the Monte Carlo exploration results.",
+        # ── Build per-round detail sections ──
+        round_sections = []
+        all_expanded = []
+        for r in round_results:
+            rn = r['round']
+            expanded = r.get('expanded', [])
+            if not expanded:
+                round_sections.append(f"### Round {rn}\n\n_(No insights generated this round.)_")
+                continue
+
+            insights = []
+            for i, seed in enumerate(expanded, 1):
+                insights.append(
+                    f"#### 🌟 R{rn}-{i} (Score: {seed.get('novelty_score', '?')}/10)\n"
+                    f"**Connection**: [[{seed.get('source_a', '')}]] × [[{seed.get('source_b', '')}]]\n\n"
+                    f"{seed.get('expanded', seed.get('idea', ''))}"
+                )
+                all_expanded.append(seed)
+
+            round_sections.append(
+                f"### Round {rn}\n\n"
+                + "\n\n---\n\n".join(insights)
+            )
+
+        # ── Cross-round evaluation via LLM ──
+        # Collect all winners for comparison
+        all_winners_text = []
+        for seed in all_expanded:
+            all_winners_text.append(
+                f"- [R{seed.get('round', '?')}, score={seed.get('novelty_score', '?')}] "
+                f"({seed.get('source_a', '?')} × {seed.get('source_b', '?')}): "
+                f"{seed.get('idea', '?')}"
+            )
+
+        global_best = sorted(all_expanded, key=lambda s: s.get('novelty_score', 0), reverse=True)
+        champion = global_best[0] if global_best else {}
+
+        eval_prompt = (
+            f"You are evaluating {num_rounds} rounds of Monte Carlo insight exploration.\n\n"
+            f"## Scorecard\n{scorecard}\n\n"
+            f"## All Winners Across Rounds\n" + "\n".join(all_winners_text) + "\n\n"
+            f"## Task\n"
+            f"Write a cross-round evaluation (3-5 paragraphs) that:\n"
+            f"1. Compares the quality and novelty across rounds\n"
+            f"2. Identifies the single **global champion** insight and explains why it's the best\n"
+            f"3. Notes which rounds were most/least productive and why\n"
+            f"4. Identifies meta-patterns that emerged across rounds\n"
+            f"5. Gives 2-3 concrete action items for the knowledge base owner\n\n"
+            f"Output language: {self.llm._get_lang_hint()}\n"
+            f"User context: {user_directive or '(none)'}"
+        )
+
+        evaluation = self.llm.answer_query(
+            query_content="Evaluate the multi-round Monte Carlo exploration.",
             wiki_context="",
-            custom_instruction=synthesis_prompt,
+            custom_instruction=eval_prompt,
             temperature=self.TEMP_SYNTHESIZE
         )
 
+        # ── Assemble final report ──
+        total_pairs = sum(r['pairs_tried'] for r in round_results)
+        total_seeds = sum(r.get('seeds', 0) for r in round_results)
+        total_winners = len(all_expanded)
+
         return (
-            f"# 🎲 Monte Carlo Insight Exploration\n\n"
-            f"## 📝 Executive Summary\n\n{executive_summary}\n\n"
+            f"# 🎲 Monte Carlo Insight Exploration ({num_rounds} Rounds)\n\n"
+            f"## 📊 Round Scorecard\n\n{scorecard}\n\n"
+            f"> **Exploration scope**: {total_pairs} pairs tried → {total_seeds} seeds → "
+            f"{total_winners} winners expanded across {num_rounds} rounds\n\n"
             f"---\n\n"
-            f"## 🔬 Detailed Insights\n\n{all_sections}"
+            f"## 🏆 Cross-Round Evaluation\n\n{evaluation}\n\n"
+            f"---\n\n"
+            f"## 🔬 Per-Round Details\n\n"
+            + "\n\n---\n\n".join(round_sections)
         )
 
     # ── Cross-Strategy Synthesis (for /full reports) ─────────────────

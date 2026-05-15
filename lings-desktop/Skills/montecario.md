@@ -1,7 +1,8 @@
 ---
 name: montecario
-description: Multi-round Monte Carlo sampling — explore random idea combinations and anneal to the best insights.
+description: Multi-round Monte Carlo sampling — explore random idea combinations across multiple rounds and anneal to the best insights.
 pipeline: montecarlo
+num_rounds: 3
 num_sparks: 6
 top_k: 3
 limit: 10
