@@ -222,10 +222,10 @@ class LLMClient:
         
         return result
 
-    def answer_query(self, query_content: str, wiki_context: str, custom_instruction: str = None, temperature: float = None) -> str:
+    def answer_query(self, query_content: str, wiki_context: str, custom_instruction: str = None, temperature: float = None, forced_template: str = None, default_template: str = None) -> str:
         if custom_instruction:
             task = custom_instruction
-            system_prompt = self._build_system_prompt(task, forced_template="none", require_yaml_header=False)
+            system_prompt = self._build_system_prompt(task, forced_template=forced_template, default_template=default_template, require_yaml_header=False)
             user_msg = query_content
         else:
             lang_hint = self._get_lang_hint()
@@ -393,30 +393,12 @@ Final unresolved concepts or carry-over notes:
 {final_concepts or "(none)"}
 
 Task:
-Write the final synthesis in {lang_hint}. Do not include YAML frontmatter.
-
-Required Markdown structure:
-### 核心命題
-State the document's central thesis in 2-4 precise paragraphs.
-
-### 主要發現
-Synthesize the important findings across parts. Preserve concrete names, mechanisms, distinctions, and causal links.
-
-### 證據與依據
-List the strongest source-grounded details from the part digests. Do not invent unsupported evidence.
-
-### 概念關係
-Explain how the major concepts relate to one another. Use a concise Mermaid diagram only if it adds clarity.
-
-### 限制與未解問題
-Name ambiguities, contradictions, missing context, or things the source does not establish.
-
-### 可行洞察
-Offer practical or strategic takeaways grounded in the source.
+Write the final synthesis in {lang_hint}.
 """
+        # Resolve to global default or 'wiki-note' if not set
         system_prompt = self._build_system_prompt(
             "Create a source-grounded synthesis from structured part digests.",
-            forced_template="none",
+            forced_template=settings.USE_TEMPLATE or "wiki-note",
             require_yaml_header=False
         )
 

@@ -1,13 +1,14 @@
 ---
-be_a: assistant
+be_a: translator
+use_template: translation-rpt
 say: Traditional Chinese
-digest_limit: 5000
-digest_overlap: 500
+digest_limit: 8192
+digest_overlap: 1024
 dreaming_from: 3
 dreaming_to: 5
 self_healing: true
 creativity: 0.4
-max_output: 4096
+max_output: 8192
 memory_limit: 32768
 search_depth: 3
 strict_mode: true
@@ -19,6 +20,7 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 
 ### 🎭 Persona & Language
 - **be_a**: Determines the AI's identity (e.g., `assistant`, `researcher`, `coder`).
+- **use_template**: (Optional) Forces a specific template to override the default (e.g., `translation-rpt`, `wiki-note`).
 - **say**: The output language (e.g., `Traditional Chinese`, `English`, `Japanese`).
 - **creativity**: Temperature (0.1 - 1.0). Higher means more creative/random.
 - **max_output**: Maximum tokens per response (approx. 3000-5000 characters).

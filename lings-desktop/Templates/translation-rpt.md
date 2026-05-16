@@ -8,7 +8,7 @@ type: "translation"
 
 # Translation & Comparison Report
 
-## Original Summary
+## Summary
 
 ## Translation Body
 

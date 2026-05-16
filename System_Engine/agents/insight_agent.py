@@ -58,13 +58,14 @@ class InsightAgent(BaseAgent):
         strategy_id = task_context.get('strategy_id', "recency")
         user_directive = task_context.get('user_directive', "")
         is_full_report = task_context.get('is_full_report', False)
+        forced_template = task_context.get('forced_template')
 
         if is_full_report:
-            return self.generate_full_insight(user_directive)
+            return self.generate_full_insight(user_directive, forced_template=forced_template)
         else:
-            return self.generate_insight(strategy_id, user_directive)
+            return self.generate_insight(strategy_id, user_directive, forced_template=forced_template)
 
-    def generate_insight(self, strategy_id: str, user_directive: str = "") -> str:
+    def generate_insight(self, strategy_id: str, user_directive: str = "", forced_template: str = None) -> str:
         if strategy_id not in self.strategies:
             available = list(self.strategies.keys())
             if not available:
@@ -73,11 +74,14 @@ class InsightAgent(BaseAgent):
 
         config = self.strategies[strategy_id]
         pipeline = config.get('pipeline', 'single')
+        
+        # Resolve template hierarchy: User command > Skill config > None (will fallback to global Scripture in llm_client)
+        resolved_template = forced_template or config.get("template")
 
         if pipeline == 'montecarlo':
-            report_content = self._run_montecarlo(config, user_directive)
+            report_content = self._run_montecarlo(config, user_directive, resolved_template)
         else:
-            report_content = self._run_single(config, user_directive)
+            report_content = self._run_single(config, user_directive, resolved_template)
 
         # Self-correct content (e.g. Mermaid)
         report_content = self._self_correct(report_content)
@@ -99,18 +103,19 @@ class InsightAgent(BaseAgent):
 
         return report_content
 
-    def generate_full_insight(self, user_directive: str = "") -> str:
+    def generate_full_insight(self, user_directive: str = "", forced_template: str = None) -> str:
         """Run all strategies, then perform a cross-strategy synthesis."""
         section_results = []
         insight_seeds = []
 
         for strategy_id, config in self.strategies.items():
             pipeline = config.get('pipeline', 'single')
+            resolved_template = forced_template or config.get("template")
 
             if pipeline == 'montecarlo':
-                section_content = self._run_montecarlo(config, user_directive)
+                section_content = self._run_montecarlo(config, user_directive, resolved_template)
             else:
-                section_content = self._run_single(config, user_directive)
+                section_content = self._run_single(config, user_directive, resolved_template)
 
             section_results.append(f"## 📌 分析維度：{config['name']}\n\n{section_content}")
 
@@ -139,7 +144,7 @@ class InsightAgent(BaseAgent):
 
     # ── Pipeline: Single-Shot ────────────────────────────────────────
 
-    def _run_single(self, config: dict, user_directive: str) -> str:
+    def _run_single(self, config: dict, user_directive: str, resolved_template: str = None) -> str:
         """Original single-shot pipeline: context → one LLM call → report."""
         selection = config.get('selection', {})
         method = config.get('method') or selection.get('method', 'random')
@@ -159,12 +164,14 @@ class InsightAgent(BaseAgent):
         return self.llm.answer_query(
             query_content=f"根據設定的策略進行深度分析。\n使用者額外補充：{user_directive if user_directive else '無'}",
             wiki_context="",
-            custom_instruction=custom_task
+            custom_instruction=custom_task,
+            forced_template=resolved_template,
+            default_template="insight-rpt"
         )
 
     # ── Pipeline: Monte Carlo ────────────────────────────────────────
 
-    def _run_montecarlo(self, config: dict, user_directive: str) -> str:
+    def _run_montecarlo(self, config: dict, user_directive: str, resolved_template: str = None) -> str:
         """
         Multi-round Monte Carlo pipeline.
 
@@ -270,11 +277,11 @@ class InsightAgent(BaseAgent):
 
         if not any(r.get('expanded') for r in round_results):
             logging.warning("Monte Carlo: No insights from any round, falling back to single.")
-            return self._run_single(config, user_directive)
+            return self._run_single(config, user_directive, resolved_template)
 
         # 5+6. EVALUATE + SYNTHESIZE
         ui.set_status("Monte Carlo: Cross-round evaluation & synthesis...")
-        return self._synthesize_multi_round(round_results, config, user_directive)
+        return self._synthesize_multi_round(round_results, config, user_directive, resolved_template)
 
     def _get_all_documents(self, max_docs: int = 50) -> list[dict]:
         """
@@ -530,7 +537,7 @@ class InsightAgent(BaseAgent):
             'evidence_sources': [doc.split('\n')[0] for doc in evidence_docs[:3]] if evidence_docs else []
         }
 
-    def _synthesize_multi_round(self, round_results: list[dict], config: dict, user_directive: str) -> str:
+    def _synthesize_multi_round(self, round_results: list[dict], config: dict, user_directive: str, resolved_template: str = None) -> str:
         """Build a comprehensive multi-round report with per-round evaluation and cross-round synthesis."""
         num_rounds = len(round_results)
 
@@ -612,7 +619,9 @@ class InsightAgent(BaseAgent):
             query_content="Evaluate the multi-round Monte Carlo exploration.",
             wiki_context="",
             custom_instruction=eval_prompt,
-            temperature=self.TEMP_SYNTHESIZE
+            temperature=self.TEMP_SYNTHESIZE,
+            forced_template=resolved_template,
+            default_template="insight-rpt"
         )
 
         # ── Assemble final report ──

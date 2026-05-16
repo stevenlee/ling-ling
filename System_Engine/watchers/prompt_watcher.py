@@ -183,6 +183,11 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                         "strategy_id": "recency",
                         "is_full_report": "/full" in lower_query
                     }
+                    
+                    template_match = re.search(r'/template[:\s]+([\w-]+)', lower_query)
+                    if template_match:
+                        context["forced_template"] = template_match.group(1)
+                        
                     # Specialized context for InsightAgent
                     if intent_key == "insight":
                         for s_id in getattr(agent, 'strategies', {}).keys():

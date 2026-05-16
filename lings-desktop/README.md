@@ -15,13 +15,13 @@ Ling-Ling 是一個 file-based agent。你用 Obsidian 管理資料，Ling-Ling 
 
 ## 核心功能
 
-- **Scripture-driven settings**：`Scripture/Scripture.md` 是可熱載入的行為設定，控制 persona、輸出語言、temperature、context window、RAG top-k 等參數。
+- **Scripture-driven settings**：`Scripture/Scripture.md` 是可熱載入的行為設定，控制 persona、輸出語言、temperature、context window、RAG top-k 以及預設輸出模板 (`use_template`) 等參數。
 - **Long-document ingestion pipeline**：長文進入 `Consolidate/` 後，`IngestionPipeline` 會切分文字、生成 Part notes、產生 structured digests、輸出 Stitched Article 與 Synthesis。
 - **Source-grounded Parts**：每個 Part 會記錄原文 char/line range，Stitched Article 也會顯示 `Original range`，方便從分析結果回到原始段落。
 - **Stitched Article**：`Title (Stitched).md` 保留各 Part 的主要正文，適合完整閱讀與校對。
 - **Synthesis Note**：`Title (Synthesis).md` 使用 Part digests 進行總合成，並附上 Part Digest Appendix。
 - **LingLens 概念透鏡**：`@ling-lens` 可用概念視角掃描文章，找出不能只靠 Ctrl+F 找到的語意實例；`@ling-count` 保留為 legacy alias。
-- **Agentic command workflow**：在 `toLingLing/` 放入 `@ling-*` 指令檔，即可觸發巡邏、修復、洞察、合併、備份、還原等任務。
+- **Agentic command workflow**：在 `toLingLing/` 放入 `@ling-*` 指令檔，即可觸發巡邏、修復、洞察、合併、備份、還原等任務。支援 `/template` 指令動態切換輸出格式。
 - **Markdown quality checker**：寫入 Obsidian 前會修復常見 Markdown/ Mermaid 問題，並在 metadata 留下 `quality_checker` 紀錄。
 - **Knowledge dashboard**：`index.md` 會自動更新，支援自然排序與 Obsidian callouts。
 
@@ -165,6 +165,8 @@ lings-desktop/
 - digest value formatting 移到 `core.utils.digest_value_to_text()`。
 - `PromptWatcher` 改用 declarative intent routing table，`@ling-lens` 與 `/lens` 成為正式入口。
 - `VaultWatcher` 復用 main process 的 `LLMClient` 翻譯新標籤，避免每次手動改檔都建立新的 client。
+- **Unified Template Routing**: 實作四層級模板路由（指令 > Skill > Scripture > 系統預設），支援在指令中加註 `/template tech-rpt` 隨時切換格式。
+- **Mermaid & YAML Hardening**: 修復 Mermaid 標籤自動加引號（支援中文字元與數字 ID）、修復 Mermaid fence 提前關閉的預判邏輯，以及防止 Markdown 水平線被誤判為 YAML frontmatter 的防呆機制。
 
 ### 2026-05-13 LingLens Evidence Grounding
 
