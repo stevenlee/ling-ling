@@ -55,3 +55,6 @@ lings-desktop/pages/
 lings-desktop/Notes/
 # Obsidian settings (Global)
 **/.obsidian/
+
+# Local backups
+Backups/

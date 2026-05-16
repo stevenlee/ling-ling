@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from core.config import WIKI_VAULT_DIR, settings
 from core.state import global_busy_state
+from core.ui import ui
 from agents.insight_agent import InsightAgent
 
 class InsightScheduler(threading.Thread):
@@ -54,6 +55,7 @@ class InsightScheduler(threading.Thread):
                         except Exception as e:
                             logging.error(f"InsightScheduler: Error during execution: {e}")
                         finally:
+                            ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)
                             global_busy_state.set_busy(False)
                     else:
                         logging.debug("InsightScheduler: System busy, skipping check...")
