@@ -366,44 +366,131 @@ class InsightAgent(BaseAgent):
 
         return pairs
 
+    def _normalize_title(self, title: str) -> str:
+        """Normalize Obsidian link text for target matching."""
+        return (title or "").split("|", 1)[0].strip().lower()
+
+    def _target_match_score(self, requested_title: str, candidate_title: str) -> int:
+        """Score how well an indexed title matches a requested [[target]]."""
+        requested = self._normalize_title(requested_title)
+        candidate = self._normalize_title(candidate_title)
+        if not requested or not candidate:
+            return 0
+        if candidate == requested:
+            return 100
+        if candidate == f"{requested} (stitched)":
+            return 95
+        if candidate == f"{requested} (synthesis)":
+            return 90
+        if requested in candidate or candidate in requested:
+            return 60
+        return 0
+
+    def _doc_from_rag_title(self, title: str, tags: list[str] = None) -> dict | None:
+        """Fetch one representative chunk for an exact indexed title."""
+        try:
+            chunk_results = self.rag.collection.get(
+                where={"title": title},
+                include=['documents', 'metadatas'],
+            )
+            chunk_docs = chunk_results.get('documents', [])
+            metadatas = chunk_results.get('metadatas', [])
+            if not chunk_docs:
+                return None
+            meta = metadatas[0] if metadatas else {}
+            return {
+                'title': title,
+                'content': random.choice(chunk_docs)[:2000],
+                'tags': tags if tags is not None else self._parse_stored_tags(meta.get('tags', '')),
+            }
+        except Exception as e:
+            logging.debug(f"Monte Carlo: Failed to fetch target title '{title}': {e}")
+            return None
+
+    def _resolve_target_doc(self, requested_title: str, all_docs: list[dict]) -> dict | None:
+        """
+        Resolve one requested [[target]] to a representative document.
+
+        Prefer exact/Stitched/Synthesis title matches across the full RAG index,
+        not only the Monte Carlo random sample. This keeps targeted mode from
+        silently dropping a requested book when it was not in the sampled pool.
+        """
+        best_doc = None
+        best_score = 0
+
+        for doc in all_docs:
+            score = self._target_match_score(requested_title, doc.get('title', ''))
+            if score > best_score:
+                best_doc = doc
+                best_score = score
+
+        try:
+            meta_results = self.rag.collection.get(include=['metadatas'])
+            all_meta = meta_results.get('metadatas', [])
+            title_meta = {}
+            for meta in all_meta:
+                title = meta.get('title') if meta else None
+                if title and title not in title_meta:
+                    title_meta[title] = meta
+
+            for title, meta in title_meta.items():
+                score = self._target_match_score(requested_title, title)
+                if score > best_score:
+                    best_score = score
+                    best_doc = self._doc_from_rag_title(
+                        title,
+                        tags=self._parse_stored_tags(meta.get('tags', '')),
+                    )
+        except Exception as e:
+            logging.debug(f"Monte Carlo: Failed to resolve target '{requested_title}' from index: {e}")
+
+        if best_doc:
+            logging.info(f"Monte Carlo: Target '{requested_title}' resolved to '{best_doc['title']}'")
+            return best_doc
+
+        similar = self.rag.query_similar_notes(requested_title, top_k=1)
+        if similar:
+            logging.info(f"Monte Carlo: Target '{requested_title}' resolved via semantic search")
+            return {
+                'title': requested_title,
+                'content': similar[0][:2000],
+                'tags': []
+            }
+
+        logging.warning(f"Monte Carlo: Target '{requested_title}' not found.")
+        return None
+
     def _build_targeted_pairs(self, all_docs: list[dict], target_titles: list[str], num_pairs: int, exclude: set = None) -> list[tuple]:
         """
         Build pairs focused around specific target articles.
 
         Modes:
-          - 2+ targets: Shuffled combinations between targets (skip already-tried)
-          - 1 target:   Pair with diverse KB docs
+          - 2+ resolved targets: Shuffled combinations between targets (skip already-tried)
+          - 1 resolved target:   Pair with diverse KB docs
 
         With 6 targets × 3 rounds (num_sparks=6):
           C(6,2) = 15 internal combos → Round 1 gets 6, Round 2 gets 6, Round 3 gets 3 + 3 neighbors
         """
         exclude = exclude or set()
 
-        # Find target docs by title (fuzzy match — stem matching for flexibility)
         target_docs = []
-        other_docs = []
-        target_titles_lower = [t.lower() for t in target_titles]
-
-        for doc in all_docs:
-            title_lower = doc['title'].lower()
-            if any(t in title_lower or title_lower in t for t in target_titles_lower):
+        seen_target_titles = set()
+        for title in target_titles:
+            doc = self._resolve_target_doc(title, all_docs)
+            if doc and doc['title'] not in seen_target_titles:
                 target_docs.append(doc)
-            else:
-                other_docs.append(doc)
+                seen_target_titles.add(doc['title'])
 
-        # If targets not found in KB, use semantic search to find the closest matches
         if not target_docs:
-            for title in target_titles:
-                similar = self.rag.query_similar_notes(title, top_k=2)
-                for s in similar:
-                    target_docs.append({
-                        'title': title,
-                        'content': s[:2000],
-                        'tags': []
-                    })
-            if not target_docs:
-                logging.warning(f"Monte Carlo: Targets {target_titles} not found, falling back to random.")
-                return self._sample_random_pairs(all_docs, num_pairs, exclude=exclude)
+            logging.warning(f"Monte Carlo: Targets {target_titles} not found, falling back to random.")
+            return self._sample_random_pairs(all_docs, num_pairs, exclude=exclude)
+
+        target_title_set = {doc['title'] for doc in target_docs}
+        other_docs = [
+            doc for doc in all_docs
+            if doc['title'] not in target_title_set
+            and not any(self._target_match_score(title, doc['title']) for title in target_titles)
+        ]
 
         pairs = []
 
