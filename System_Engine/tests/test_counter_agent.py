@@ -1,0 +1,204 @@
+"""Tests for the LLM-free logic inside agents.counter_agent.
+
+We don't mock the LLM here — only exercise the pure helpers:
+  - _LocationIndex (heading & part-anchor lookup)
+  - _build_tally_locally (deterministic dedup tally)
+  - _find_quote_offset (exact + fuzzy quote location)
+  - _parse_concepts (directive parsing)
+"""
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+os.environ.setdefault("LLM_PROVIDER", "vllm")
+
+import re
+
+import pytest
+
+from agents.counter_agent import CounterAgent, _LocationIndex
+
+
+# ── _LocationIndex ─────────────────────────────────────────────────
+
+class TestLocationIndex:
+    TEXT = (
+        "# Top heading\n"
+        "some body text here\n"
+        "## Part 1: foo\n"
+        "para\n"
+        "### subsection title\n"
+        "more body text\n"
+        "## Part 2: bar\n"
+        "final body\n"
+    )
+
+    def test_no_heading_before_offset_zero(self):
+        idx = _LocationIndex(self.TEXT)
+        assert idx.closest_heading(0) == ""
+        assert idx.closest_part(0) == ""
+
+    def test_heading_lookup_matches_old_regex(self):
+        """Verify the precomputed index returns the same closest heading as a
+        from-scratch regex scan over `text[:offset]`."""
+        idx = _LocationIndex(self.TEXT)
+        old_re = re.compile(r'^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$', re.MULTILINE)
+
+        def old(offset: int) -> str:
+            closest = ""
+            for m in old_re.finditer(self.TEXT[:offset]):
+                closest = m.group(1).strip()
+            return closest
+
+        # Sample a range of offsets including the boundaries.
+        for offset in [0, 1, 13, 14, 33, 50, 80, 110, len(self.TEXT)]:
+            assert idx.closest_heading(offset) == old(offset), f"mismatch at offset {offset}"
+
+    def test_part_anchor_extracts_part_only(self):
+        idx = _LocationIndex(self.TEXT)
+        offset = self.TEXT.index("more body text")
+        assert idx.closest_part(offset) == "Part 1"
+        offset = self.TEXT.index("final body")
+        assert idx.closest_part(offset) == "Part 2"
+
+    def test_empty_article(self):
+        idx = _LocationIndex("")
+        assert idx.closest_heading(0) == ""
+        assert idx.closest_part(0) == ""
+
+    def test_article_with_no_headings(self):
+        idx = _LocationIndex("Just prose, no headings.")
+        assert idx.closest_heading(10) == ""
+
+
+# ── _build_tally_locally ──────────────────────────────────────────
+
+class TestBuildTallyLocally:
+    def setup_method(self):
+        self.agent = CounterAgent.__new__(CounterAgent)
+
+    def test_empty_instances(self):
+        tally = CounterAgent._build_tally_locally("concept", [])
+        assert tally["total_count"] == 0
+        assert tally["instances"] == []
+        assert tally["high_confidence_count"] == 0
+
+    def test_dedupes_by_normalized_quote(self):
+        instances = [
+            {"quote": "Hello world", "confidence": "high"},
+            {"quote": "hello world", "confidence": "medium"},  # same after lowercase
+            {"quote": "Other quote", "confidence": "low"},
+        ]
+        tally = CounterAgent._build_tally_locally("c", instances)
+        assert tally["total_count"] == 2
+
+    def test_assigns_sequential_ids(self):
+        instances = [
+            {"quote": "a", "confidence": "high"},
+            {"quote": "b", "confidence": "medium"},
+        ]
+        tally = CounterAgent._build_tally_locally("c", instances)
+        assert [i["id"] for i in tally["instances"]] == [1, 2]
+
+    def test_counts_by_confidence(self):
+        instances = [
+            {"quote": "a", "confidence": "high"},
+            {"quote": "b", "confidence": "high"},
+            {"quote": "c", "confidence": "medium"},
+            {"quote": "d", "confidence": "low"},
+        ]
+        tally = CounterAgent._build_tally_locally("c", instances)
+        assert tally["high_confidence_count"] == 2
+        assert tally["medium_confidence_count"] == 1
+        assert tally["low_confidence_count"] == 1
+
+
+# ── _find_quote_offset ────────────────────────────────────────────
+
+class TestFindQuoteOffset:
+    def test_exact_match(self):
+        article = "Some text and a specific phrase later."
+        assert CounterAgent._find_quote_offset(article, "specific phrase") == article.index("specific phrase")
+
+    def test_returns_minus_one_for_empty(self):
+        assert CounterAgent._find_quote_offset("anything", "") == -1
+        assert CounterAgent._find_quote_offset("anything", None) == -1
+
+    def test_strips_smart_quotes(self):
+        article = "She said hello today."
+        # Smart quotes wrapping the quote
+        assert CounterAgent._find_quote_offset(article, "“She said hello”") >= 0 or \
+               CounterAgent._find_quote_offset(article, "She said hello") >= 0
+
+    def test_fuzzy_whitespace_match(self):
+        article = "Long\nline   spanning multiple    spaces here."
+        # Quote uses single spaces; article uses varying whitespace.
+        found = CounterAgent._find_quote_offset(article, "Long line spanning multiple spaces here")
+        assert found >= 0
+
+    def test_short_quote_no_fuzzy(self):
+        article = "abc def ghi"
+        # Quote shorter than 12 chars and not an exact match → returns -1.
+        assert CounterAgent._find_quote_offset(article, "xyz") == -1
+
+
+# ── _parse_concepts ───────────────────────────────────────────────
+
+class TestParseConcepts:
+    def setup_method(self):
+        self.agent = CounterAgent.__new__(CounterAgent)
+
+    def test_inline_english(self):
+        assert self.agent._parse_concepts("Count: appeals to authority") == ["appeals to authority"]
+
+    def test_inline_chinese(self):
+        assert self.agent._parse_concepts("計算：訴諸權威") == ["訴諸權威"]
+
+    def test_bullet_block(self):
+        directive = "Count:\n- appeals to authority\n- ad hominem\n- straw man\n"
+        result = self.agent._parse_concepts(directive)
+        assert "appeals to authority" in result
+        assert "ad hominem" in result
+        assert "straw man" in result
+
+    def test_strips_trailing_question_marks(self):
+        assert self.agent._parse_concepts("Count: rhetorical questions?") == ["rhetorical questions"]
+        assert self.agent._parse_concepts("計算：誇大其詞？") == ["誇大其詞"]
+
+    def test_fallback_freeform_concept(self):
+        # No `Count:` marker, but plenty of text → treated as one concept.
+        directive = "@ling-lens [[Article]] dramatic exaggerations"
+        result = self.agent._parse_concepts(directive)
+        assert result == ["dramatic exaggerations"]
+
+    def test_strips_confidence_in_fallback(self):
+        directive = "@ling-lens [[Article]] dramatic exaggerations Confidence: high"
+        result = self.agent._parse_concepts(directive)
+        assert result == ["dramatic exaggerations"]
+
+    def test_too_short_returns_empty(self):
+        assert self.agent._parse_concepts("@ling-lens [[X]]") == []
+
+
+# ── _table_cell ───────────────────────────────────────────────────
+
+class TestTableCell:
+    def test_collapses_whitespace(self):
+        assert CounterAgent._table_cell("line one\n\nline two") == "line one line two"
+
+    def test_escapes_pipes(self):
+        assert "|" not in CounterAgent._table_cell("a | b | c").replace("\\|", "")
+
+    def test_truncates_at_max_len(self):
+        long_text = "x" * 200
+        result = CounterAgent._table_cell(long_text, max_len=20)
+        assert len(result) == 20
+        assert result.endswith("…")
+
+    def test_handles_none(self):
+        assert CounterAgent._table_cell(None) == ""
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

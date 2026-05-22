@@ -1,23 +1,35 @@
-import logging
 import json
+import logging
 import re
-from datetime import datetime
+from bisect import bisect_right
 from pathlib import Path
+
 from agents.base_agent import BaseAgent
-from core.config import PAGES_DIR, RAW_CONSOLIDATE_DIR, WIKI_VAULT_DIR, settings
-from core.parser import run_markdown_quality_checks, extract_json_array, extract_json_object
+from core.config import PAGES_DIR, RAW_CONSOLIDATE_DIR, WIKI_VAULT_DIR
+from core.parser import extract_json_array, extract_json_object
 from core.ui import ui
 from services.text_splitter import TextSplitter
 
 
-class CounterAgent(BaseAgent):
-    """
-    LingLens — scans long articles through user-defined conceptual lenses.
-    Supports multiple files × multiple concepts.
+_CONCEPT_INLINE_RE = re.compile(r'(?:Count|計算|算)\s*[:：]\s*(.+)', re.IGNORECASE)
+_CONCEPT_BLOCK_RE = re.compile(r'(?:Count|計算|算)\s*[:：]\s*\n((?:\s*[-•]\s+.+\n?)+)', re.IGNORECASE)
+_BULLET_RE = re.compile(r'[-•]\s+(.+)')
+_CMD_TOKEN_RE = re.compile(r'(?:@ling-lens|@ling-count|/lens|/count)\b', re.IGNORECASE)
+_WIKILINK_RE = re.compile(r'\[\[.*?\]\]')
+_CONFIDENCE_TOKEN_RE = re.compile(r'(?:Confidence|信心)\s*[:：]\s*\S+', re.IGNORECASE)
+_HEADING_RE = re.compile(r'^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$', re.MULTILINE)
+_PART_HEADING_RE = re.compile(r'^\s{0,3}##\s+(Part\s+\d+)(?::.*?)?\s*#*\s*$', re.MULTILINE)
+_PART_ANY_RE = re.compile(r'^\s{0,3}##\s+Part\s+\d+(?::.*?)?\s*#*\s*$', re.MULTILINE)
+_WS_RE = re.compile(r'\s+')
 
-    Uses a two-pass LLM pipeline per (article, concept) pair:
+
+class CounterAgent(BaseAgent):
+    """LingLens — scans long articles through user-defined conceptual lenses.
+
+    Supports multiple files × multiple concepts. Two-pass LLM pipeline per
+    (article, concept) pair:
       1. Extract: scan each chunk for instances of the target concept.
-      2. Tally:   deduplicate cross-chunk overlaps and produce a final count.
+      2. Tally:   deduplicate cross-chunk overlaps, produce a final count.
     """
 
     def __init__(self, llm, rag=None):
@@ -31,79 +43,42 @@ class CounterAgent(BaseAgent):
         user_directive = task_context.get("user_directive", "")
         confidence = task_context.get("confidence", "medium")
 
-        # Parse multiple concepts
         concepts = self._parse_concepts(user_directive)
         if not concepts:
             ui.error("🔎 LingLens: 無法判斷要觀察的概念鏡片")
-            return self._error_report("Could not determine what to count. "
-                                      "Please include a description after the command, e.g.:\n"
-                                      "`@ling-lens [[Article]] Count: appeals to authority`")
+            return self._error_report(
+                "Could not determine what to count. "
+                "Please include a description after the command, e.g.:\n"
+                "`@ling-lens [[Article]] Count: appeals to authority`"
+            )
 
-        # Resolve all articles
         ui.set_status(f"🔢 正在搜尋文章：{target_titles}")
         articles = self._resolve_articles(target_titles, user_directive)
         if not articles:
             ui.error(f"🔢 找不到任何文章：{target_titles or '(none specified)'}")
-            return self._error_report(f"Could not find article content for: {target_titles or '(none specified)'}. "
-                                      "Please use `[[WikiLink]]` to reference the article.")
+            return self._error_report(
+                f"Could not find article content for: {target_titles or '(none specified)'}. "
+                "Please use `[[WikiLink]]` to reference the article."
+            )
 
-        # Display job summary
-        ui.info(f"🔎 LingLens 啟動")
-        ui.info(f"   📌 計算目標 ({len(concepts)} 個概念):")
-        for c in concepts:
-            ui.info(f"      • [bold yellow]{c}[/bold yellow]")
-        ui.info(f"   📎 分析文章 ({len(articles)} 篇):")
-        for title, _, path in articles:
-            path_hint = f" [dim]({path})[/dim]" if path else ""
-            ui.info(f"      • [bold green]{title}[/bold green]{path_hint}")
-        ui.info(f"   🎯 信心門檻: [green]{confidence}[/green]")
+        self._show_job_summary(concepts, articles, confidence)
 
-        # ── Run all (article, concept) pairs ──────────────────────────
-        # results_matrix[article_title][concept] = tally dict
-        results_matrix = {}
-        total_jobs = len(articles) * len(concepts)
-        job_idx = 0
+        results_matrix = self._run_all_jobs(articles, concepts, confidence)
 
-        for article_title, article_text, resolved_path in articles:
-            results_matrix[article_title] = {}
-            # Chunk article once, reuse for all concepts
-            chunks = self.splitter.split_text(article_text)
-            total_parts = len(chunks)
-            ui.info(f"\n   📄 [{article_title}] — {len(article_text):,} chars → {total_parts} chunks")
-
-            for concept in concepts:
-                job_idx += 1
-                ui.info(f"\n   ── 任務 {job_idx}/{total_jobs}: "
-                        f"[yellow]{concept}[/yellow] × [green]{article_title}[/green] ──")
-
-                tally = self._run_single_count(concept, chunks, total_parts, confidence, job_idx, total_jobs)
-                self._ground_tally_locations(tally, article_text)
-                results_matrix[article_title][concept] = tally
-
-                count = tally.get("total_count", 0)
-                ui.info(f"   🏁 結果: [bold]{count}[/bold] 個實例 "
-                        f"(🟢{tally.get('high_confidence_count',0)} "
-                        f"🟡{tally.get('medium_confidence_count',0)} "
-                        f"🔴{tally.get('low_confidence_count',0)})")
-
-        # ── Build report ──────────────────────────────────────────────
         ui.set_status("🔢 正在生成報告...")
         is_matrix = len(articles) > 1 or len(concepts) > 1
         if is_matrix:
             report = self._format_matrix_report(concepts, articles, results_matrix)
         else:
-            # Single article × single concept — use the classic detailed format
-            article_title = articles[0][0]
-            resolved_path = articles[0][2]
+            article_title, _, resolved_path = articles[0]
             concept = concepts[0]
             tally = results_matrix[article_title][concept]
             report = self._format_report(concept, article_title, tally, resolved_path)
 
-        # Build metadata
         grand_total = sum(
-            t.get("total_count", 0)
-            for art_tallies in results_matrix.values()
-            for t in art_tallies.values()
+            tally.get("total_count", 0)
+            for tallies in results_matrix.values()
+            for tally in tallies.values()
         )
         meta = {
             "target_concepts": concepts,
@@ -115,116 +90,156 @@ class CounterAgent(BaseAgent):
         article_slug = articles[0][0] if len(articles) == 1 else f"{len(articles)} articles"
         self._write_report(
             f"LingLens: {title_slug} in {article_slug}",
-            report, "lens_report", meta,
+            report,
+            "lens_report",
+            meta,
         )
-        ui.success(f"🔎 LingLens 完成！{len(concepts)} 概念 × {len(articles)} 篇文章 → 共 {grand_total} 個實例")
+        ui.success(
+            f"🔎 LingLens 完成！{len(concepts)} 概念 × {len(articles)} 篇文章 → 共 {grand_total} 個實例"
+        )
         return report
+
+    def _show_job_summary(self, concepts, articles, confidence):
+        ui.info(f"🔎 LingLens 啟動")
+        ui.info(f"   📌 計算目標 ({len(concepts)} 個概念):")
+        for c in concepts:
+            ui.info(f"      • [bold yellow]{c}[/bold yellow]")
+        ui.info(f"   📎 分析文章 ({len(articles)} 篇):")
+        for title, _, path in articles:
+            path_hint = f" [dim]({path})[/dim]" if path else ""
+            ui.info(f"      • [bold green]{title}[/bold green]{path_hint}")
+        ui.info(f"   🎯 信心門檻: [green]{confidence}[/green]")
+
+    def _run_all_jobs(self, articles, concepts, confidence):
+        results_matrix: dict[str, dict] = {}
+        total_jobs = len(articles) * len(concepts)
+        job_idx = 0
+
+        for article_title, article_text, _ in articles:
+            results_matrix[article_title] = {}
+            chunks = self.splitter.split_text(article_text)
+            total_parts = len(chunks)
+            ui.info(f"\n   📄 [{article_title}] — {len(article_text):,} chars → {total_parts} chunks")
+
+            # Precompute heading & part-anchor offsets once per article — N
+            # instances would otherwise each re-scan from start of file.
+            location_index = _LocationIndex(article_text)
+
+            for concept in concepts:
+                job_idx += 1
+                ui.info(
+                    f"\n   ── 任務 {job_idx}/{total_jobs}: "
+                    f"[yellow]{concept}[/yellow] × [green]{article_title}[/green] ──"
+                )
+                tally = self._run_single_count(concept, chunks, total_parts, confidence, job_idx, total_jobs)
+                self._ground_tally_locations(tally, article_text, location_index)
+                results_matrix[article_title][concept] = tally
+
+                ui.info(
+                    f"   🏁 結果: [bold]{tally.get('total_count', 0)}[/bold] 個實例 "
+                    f"(🟢{tally.get('high_confidence_count', 0)} "
+                    f"🟡{tally.get('medium_confidence_count', 0)} "
+                    f"🔴{tally.get('low_confidence_count', 0)})"
+                )
+        return results_matrix
 
     # ── Single (article, concept) pipeline ─────────────────────────────
 
     def _run_single_count(self, concept, chunks, total_parts, confidence, job_idx, total_jobs):
-        """Run Extract→Tally for one concept across pre-chunked article."""
-        all_instances = []
+        all_instances: list[dict] = []
 
         for i, chunk in enumerate(chunks):
-            ui.set_status(f"🔢 [{job_idx}/{total_jobs}] Extract: chunk {i+1}/{total_parts} — 累計 {len(all_instances)}")
+            ui.set_status(
+                f"🔢 [{job_idx}/{total_jobs}] Extract: chunk {i + 1}/{total_parts} — 累計 {len(all_instances)}"
+            )
             instances = self._extract_from_chunk(concept, chunk, i + 1, total_parts, confidence)
             all_instances.extend(instances)
 
-            chunk_high = sum(1 for x in instances if x.get('confidence') == 'high')
-            chunk_med = sum(1 for x in instances if x.get('confidence') == 'medium')
-            chunk_low = sum(1 for x in instances if x.get('confidence') == 'low')
             if instances:
-                ui.info(f"      ✅ Chunk {i+1}/{total_parts}: +{len(instances)} "
-                        f"(🟢{chunk_high} 🟡{chunk_med} 🔴{chunk_low}) | 累計: {len(all_instances)}")
+                chunk_high = sum(1 for x in instances if x.get("confidence") == "high")
+                chunk_med = sum(1 for x in instances if x.get("confidence") == "medium")
+                chunk_low = sum(1 for x in instances if x.get("confidence") == "low")
+                ui.info(
+                    f"      ✅ Chunk {i + 1}/{total_parts}: +{len(instances)} "
+                    f"(🟢{chunk_high} 🟡{chunk_med} 🔴{chunk_low}) | 累計: {len(all_instances)}"
+                )
             else:
-                ui.info(f"      ⬜ Chunk {i+1}/{total_parts}: 0 | 累計: {len(all_instances)}")
+                ui.info(f"      ⬜ Chunk {i + 1}/{total_parts}: 0 | 累計: {len(all_instances)}")
 
         if not all_instances:
             return self._build_tally_locally(concept, [])
 
-        ui.set_status(f"🔢 [{job_idx}/{total_jobs}] 正在整理找到的 {len(all_instances)} 個線索，合併重複項目")
-        tally = self._tally_instances(concept, all_instances, total_parts)
-        return tally
+        ui.set_status(
+            f"🔢 [{job_idx}/{total_jobs}] 正在整理找到的 {len(all_instances)} 個線索，合併重複項目"
+        )
+        return self._tally_instances(concept, all_instances, total_parts)
 
-    # ── Concept parsing (multi) ────────────────────────────────────────
+    # ── Concept / article resolution ───────────────────────────────────
 
     def _parse_concepts(self, user_directive: str) -> list[str]:
         """Extract one or more counting targets from the user directive."""
-        concepts = []
+        concepts: list[str] = []
 
-        # Match all "Count:" / "計算:" lines
-        for match in re.finditer(r'(?:Count|計算|算)\s*[:：]\s*(.+)', user_directive, re.IGNORECASE):
-            val = match.group(1).strip().rstrip('?？')
+        for match in _CONCEPT_INLINE_RE.finditer(user_directive):
+            val = match.group(1).strip().rstrip("?？")
             if val:
                 concepts.append(val)
 
-        # Match bullet list items (- item) that follow a Count: header
-        for match in re.finditer(r'(?:Count|計算|算)\s*[:：]\s*\n((?:\s*[-•]\s+.+\n?)+)', user_directive, re.IGNORECASE):
-            block = match.group(1)
-            for bullet in re.findall(r'[-•]\s+(.+)', block):
-                val = bullet.strip().rstrip('?？')
+        for match in _CONCEPT_BLOCK_RE.finditer(user_directive):
+            for bullet in _BULLET_RE.findall(match.group(1)):
+                val = bullet.strip().rstrip("?？")
                 if val and val not in concepts:
                     concepts.append(val)
 
         if concepts:
             return concepts
 
-        # Fallback: treat the remaining text (after removing commands/links) as a single concept
-        cleaned = re.sub(r'(?:@ling-lens|@ling-count|/lens|/count)\b', '', user_directive, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\[\[.*?\]\]', '', cleaned).strip()
-        # Remove confidence line
-        cleaned = re.sub(r'(?:Confidence|信心)\s*[:：]\s*\S+', '', cleaned, flags=re.IGNORECASE).strip()
-        cleaned = cleaned.strip('?？\n\r\t ')
-        if len(cleaned) > 3:
-            return [cleaned]
-
-        return []
-
-    # ── Article resolution (multi) ─────────────────────────────────────
+        cleaned = _CMD_TOKEN_RE.sub("", user_directive)
+        cleaned = _WIKILINK_RE.sub("", cleaned).strip()
+        cleaned = _CONFIDENCE_TOKEN_RE.sub("", cleaned).strip()
+        cleaned = cleaned.strip("?？\n\r\t ")
+        return [cleaned] if len(cleaned) > 3 else []
 
     def _resolve_articles(self, target_titles: list[str], user_directive: str) -> list[tuple[str, str, str]]:
-        """Resolve all target titles. Returns list of (title, text, resolved_path)."""
-        results = []
-        resolved_titles = set()
+        results: list[tuple[str, str, str]] = []
+        seen: set[str] = set()
 
         for title in target_titles:
-            if title in resolved_titles:
+            if title in seen:
                 continue
             text, resolved_path = self._find_in_pages(title)
             if text:
                 results.append((title, text, resolved_path))
-                resolved_titles.add(title)
+                seen.add(title)
                 ui.info(f"   📄 已找到: [green]{title}[/green] ({len(text):,} chars)")
             else:
                 ui.info(f"   ⚠️  未找到: [dim]{title}[/dim]")
 
-        # Fallback: RAG search if nothing found via filesystem
         if not results and self.rag and user_directive:
-            ui.info(f"   🔍 檔案系統未找到任何文章，嘗試 RAG 語意檢索...")
+            ui.info("   🔍 檔案系統未找到任何文章，嘗試 RAG 語意檢索...")
             try:
                 rag_results = self.rag.query_similar_notes(user_directive, top_k=1)
-                if rag_results:
-                    ui.info(f"   📡 RAG 檢索成功")
-                    results.append(("(RAG result)", rag_results[0], ""))
-            except Exception:
-                pass
+            except Exception as e:
+                logging.debug(f"LingLens: RAG fallback failed: {e}")
+                rag_results = []
+            if rag_results:
+                ui.info("   📡 RAG 檢索成功")
+                results.append(("(RAG result)", rag_results[0], ""))
 
         return results
 
     def _find_in_pages(self, title: str) -> tuple[str, str]:
-        """Search pages/ for a file matching the title. Returns (text, resolved_path)."""
         title_clean = title.strip()
         if not title_clean:
             return "", ""
 
         folder = PAGES_DIR / title_clean
         if folder.is_dir():
-            for pattern in [
+            for pattern in (
                 f"{title_clean} (Stitched).md",
                 f"{title_clean} (Synthesis).md",
                 f"{title_clean}.md",
-            ]:
+            ):
                 candidate = folder / pattern
                 if candidate.exists():
                     return candidate.read_text(encoding="utf-8"), str(candidate)
@@ -251,45 +266,39 @@ class CounterAgent(BaseAgent):
     # ── Pass 1: Extraction ─────────────────────────────────────────────
 
     def _extract_from_chunk(self, concept, chunk, part, total, confidence):
-        system_prompt = self._load_prompt("agent_counter")
-        if not system_prompt:
-            system_prompt = (
-                "You are a precise textual analyst. Your job is to scan source text "
-                "and identify every instance of a user-defined concept. "
-                "Return ONLY a valid JSON array. No markdown, no commentary."
-            )
-
-        user_prompt = f"""Target concept: "{concept}"
-Minimum confidence: {confidence}
-
-Source text (Part {part}/{total}):
-{chunk}
-
-Find every instance where the target concept appears in the source text.
-Return a JSON array. Each element must have this exact structure:
-{{
-  "quote": "exact or near-exact quote from the source (max 120 chars)",
-  "reasoning": "brief explanation of why this qualifies",
-  "confidence": "high" or "medium" or "low",
-  "closest_heading": "the exact text of the closest preceding markdown heading (without the # symbols)"
-}}
-
-Rules:
-- Be thorough: scan every paragraph.
-- Only include genuine instances — do not fabricate quotes.
-- If zero instances found, return an empty array: []
-- Return ONLY the JSON array, nothing else.
-"""
+        system_prompt = self._load_prompt("agent_counter") or (
+            "You are a precise textual analyst. Your job is to scan source text "
+            "and identify every instance of a user-defined concept. "
+            "Return ONLY a valid JSON array. No markdown, no commentary."
+        )
+        user_prompt = (
+            f'Target concept: "{concept}"\n'
+            f"Minimum confidence: {confidence}\n\n"
+            f"Source text (Part {part}/{total}):\n{chunk}\n\n"
+            "Find every instance where the target concept appears in the source text.\n"
+            "Return a JSON array. Each element must have this exact structure:\n"
+            "{\n"
+            '  "quote": "exact or near-exact quote from the source (max 120 chars)",\n'
+            '  "reasoning": "brief explanation of why this qualifies",\n'
+            '  "confidence": "high" or "medium" or "low",\n'
+            '  "closest_heading": "the exact text of the closest preceding markdown heading (without the # symbols)"\n'
+            "}\n\n"
+            "Rules:\n"
+            "- Be thorough: scan every paragraph.\n"
+            "- Only include genuine instances — do not fabricate quotes.\n"
+            "- If zero instances found, return an empty array: []\n"
+            "- Return ONLY the JSON array, nothing else.\n"
+        )
         try:
             raw = self.llm.answer_query(user_prompt, wiki_context="", custom_instruction=system_prompt)
-            instances = extract_json_array(raw)
-            for inst in instances:
-                inst["source_part"] = part
-            return instances
         except Exception as e:
             ui.error(f"      ❌ Chunk {part} extraction 失敗: {e}")
             logging.error(f"LingLens extraction failed for chunk {part}: {e}")
             return []
+        instances = extract_json_array(raw)
+        for inst in instances:
+            inst["source_part"] = part
+        return instances
 
     # ── Pass 2: Tally ──────────────────────────────────────────────────
 
@@ -303,29 +312,28 @@ Rules:
             "Return ONLY valid JSON. No markdown, no commentary."
         )
         instances_json = json.dumps(all_instances, ensure_ascii=False, indent=2)
-        user_prompt = f"""Candidate instances of "{concept}" from a {total_parts}-part article:
-
-{instances_json}
-
-Tasks:
-1. Remove exact duplicates (same quote from overlapping chunks).
-2. Merge near-duplicates (keep the best quote).
-3. Assign final confidence to each unique instance.
-4. Number sequentially from 1.
-5. Return JSON:
-{{
-  "concept": "{concept}",
-  "total_count": <int>,
-  "high_confidence_count": <int>,
-  "medium_confidence_count": <int>,
-  "low_confidence_count": <int>,
-  "instances": [
-    {{"id": 1, "quote": "...", "reasoning": "...", "confidence": "high|medium|low", "closest_heading": "..."}}
-  ],
-  "methodology_note": "Brief description"
-}}
-Return ONLY the JSON object.
-"""
+        user_prompt = (
+            f'Candidate instances of "{concept}" from a {total_parts}-part article:\n\n'
+            f"{instances_json}\n\n"
+            "Tasks:\n"
+            "1. Remove exact duplicates (same quote from overlapping chunks).\n"
+            "2. Merge near-duplicates (keep the best quote).\n"
+            "3. Assign final confidence to each unique instance.\n"
+            "4. Number sequentially from 1.\n"
+            "5. Return JSON:\n"
+            "{\n"
+            f'  "concept": "{concept}",\n'
+            '  "total_count": <int>,\n'
+            '  "high_confidence_count": <int>,\n'
+            '  "medium_confidence_count": <int>,\n'
+            '  "low_confidence_count": <int>,\n'
+            '  "instances": [\n'
+            '    {"id": 1, "quote": "...", "reasoning": "...", "confidence": "high|medium|low", "closest_heading": "..."}\n'
+            "  ],\n"
+            '  "methodology_note": "Brief description"\n'
+            "}\n"
+            "Return ONLY the JSON object.\n"
+        )
         try:
             raw = self.llm.answer_query(user_prompt, wiki_context="", custom_instruction=system_prompt)
             tally = extract_json_object(raw)
@@ -336,8 +344,9 @@ Return ONLY the JSON object.
 
         return self._build_tally_locally(concept, all_instances)
 
-    def _build_tally_locally(self, concept, instances):
-        seen = set()
+    @staticmethod
+    def _build_tally_locally(concept, instances):
+        seen: set[str] = set()
         unique = []
         for inst in instances:
             q = inst.get("quote", "").strip().lower()
@@ -350,24 +359,30 @@ Return ONLY the JSON object.
         for idx, inst in enumerate(unique, 1):
             inst["id"] = idx
         return {
-            "concept": concept, "total_count": len(unique),
-            "high_confidence_count": high, "medium_confidence_count": med, "low_confidence_count": low,
+            "concept": concept,
+            "total_count": len(unique),
+            "high_confidence_count": high,
+            "medium_confidence_count": med,
+            "low_confidence_count": low,
             "instances": unique,
             "methodology_note": "Extracted per-chunk, deduplicated by exact quote match.",
         }
 
     # ── Source grounding ───────────────────────────────────────────────
 
-    def _ground_tally_locations(self, tally, article_text):
+    def _ground_tally_locations(self, tally, article_text, location_index=None):
         """Attach deterministic source-location hints based on quoted source text."""
+        if location_index is None:
+            location_index = _LocationIndex(article_text)
+
         for inst in tally.get("instances", []):
-            quote = inst.get("quote", "")
-            start = self._find_quote_offset(article_text, quote)
+            start = self._find_quote_offset(article_text, inst.get("quote", ""))
             if start < 0:
                 continue
             inst["source_offset"] = start
-            heading = self._closest_heading_before(article_text, start)
-            part_anchor = self._closest_part_anchor_before(article_text, start)
+
+            heading = location_index.closest_heading(start)
+            part_anchor = location_index.closest_part(start)
             if part_anchor:
                 inst["source_part_anchor"] = part_anchor
                 source_range = self._part_source_range_for_anchor(article_text, part_anchor)
@@ -377,8 +392,8 @@ Return ONLY the JSON object.
                 inst["closest_heading"] = heading
                 inst["source_anchor"] = part_anchor or heading
 
-    def _find_quote_offset(self, article_text, quote):
-        """Find an exact or normalized quote offset in the original source text."""
+    @staticmethod
+    def _find_quote_offset(article_text, quote):
         quote = (quote or "").strip().strip('"“”')
         if not quote:
             return -1
@@ -387,41 +402,24 @@ Return ONLY the JSON object.
         if exact >= 0:
             return exact
 
-        normalized_quote = re.sub(r'\s+', ' ', quote)
+        normalized_quote = _WS_RE.sub(" ", quote)
         if len(normalized_quote) < 12:
             return -1
 
-        # LLM quotes are capped, so a distinctive prefix is usually enough to
-        # recover the location without trusting a fabricated heading.
         needle = re.escape(normalized_quote[:80])
         flexible = re.sub(r'\\ ', r'\\s+', needle)
         match = re.search(flexible, article_text, flags=re.DOTALL)
-        if match:
-            return match.start()
-        return -1
+        return match.start() if match else -1
 
-    def _closest_heading_before(self, article_text, offset):
-        """Return the closest preceding markdown heading text for an offset."""
-        closest = ""
-        for match in re.finditer(r'^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$', article_text[:offset], flags=re.MULTILINE):
-            closest = match.group(1).strip()
-        return closest
-
-    def _closest_part_anchor_before(self, article_text, offset):
-        """Return the closest Stitched article Part heading before an offset."""
-        closest = ""
-        for match in re.finditer(r'^\s{0,3}##\s+(Part\s+\d+)(?::.*?)?\s*#*\s*$', article_text[:offset], flags=re.MULTILINE):
-            closest = match.group(1).strip()
-        return closest
-
-    def _part_source_range_for_anchor(self, article_text, part_anchor):
+    @staticmethod
+    def _part_source_range_for_anchor(article_text, part_anchor):
         pattern = rf'^\s{{0,3}}##\s+{re.escape(part_anchor)}(?::.*?)?\s*#*\s*$'
         match = re.search(pattern, article_text, flags=re.MULTILINE)
         if not match:
             return {}
 
-        next_part = re.search(r'^\s{0,3}##\s+Part\s+\d+(?::.*?)?\s*#*\s*$', article_text[match.end():], flags=re.MULTILINE)
-        section_end = match.end() + next_part.start() if next_part else len(article_text)
+        next_part = _PART_ANY_RE.search(article_text, match.end())
+        section_end = next_part.start() if next_part else len(article_text)
         section = article_text[match.end():section_end]
 
         line_match = re.search(r'Original range:\s*lines\s*(\d+)\s*-\s*(\d+)', section)
@@ -435,13 +433,11 @@ Return ONLY the JSON object.
             source_range["end_char"] = int(char_match.group(2))
         return source_range
 
-    # ── Report: Matrix format (multi-file × multi-concept) ─────────────
+    # ── Report: Matrix format ──────────────────────────────────────────
 
     def _format_matrix_report(self, concepts, articles, results_matrix):
-        """Build a cross-tabulation report for multiple articles × concepts."""
         lines = ["# 🔎 LingLens — Cross Analysis", ""]
 
-        # ── Summary matrix table ──
         lines.append("## 📊 Summary Matrix")
         lines.append("")
         header = "| Article |" + "|".join(f" {c} " for c in concepts) + "| Total |"
@@ -452,13 +448,15 @@ Return ONLY the JSON object.
             row_counts = []
             row_total = 0
             for concept in concepts:
-                tally = results_matrix.get(article_title, {}).get(concept, {})
-                count = tally.get("total_count", 0)
+                count = results_matrix.get(article_title, {}).get(concept, {}).get("total_count", 0)
                 row_counts.append(str(count))
                 row_total += count
-            lines.append(f"| [[{article_title}]] |" + "|".join(f" {c} " for c in row_counts) + f"| **{row_total}** |")
+            lines.append(
+                f"| [[{article_title}]] |"
+                + "|".join(f" {c} " for c in row_counts)
+                + f"| **{row_total}** |"
+            )
 
-        # Column totals
         col_totals = []
         grand_total = 0
         for concept in concepts:
@@ -468,13 +466,16 @@ Return ONLY the JSON object.
             )
             col_totals.append(str(col_sum))
             grand_total += col_sum
-        lines.append(f"| **Total** |" + "|".join(f" **{c}** " for c in col_totals) + f"| **{grand_total}** |")
+        lines.append(
+            "| **Total** |"
+            + "|".join(f" **{c}** " for c in col_totals)
+            + f"| **{grand_total}** |"
+        )
         lines.append("")
 
-        # ── Per-article × per-concept detail sections ──
         for article_title, _, resolved_path in articles:
             reference_title = self._reference_title(article_title, resolved_path)
-            lines.append(f"---")
+            lines.append("---")
             lines.append(f"## 📄 {article_title}")
             lines.append("")
             for concept in concepts:
@@ -484,24 +485,14 @@ Return ONLY the JSON object.
                 lines.append(f"### 📌 {concept} — {total} instances")
                 lines.append("")
                 if not instances:
-                    lines.append("> 未發現實例")
-                    lines.append("")
+                    lines.extend(["> 未發現實例", ""])
                     continue
-                lines.append(f"| # | Confidence | Quote | Reasoning | Reference |")
-                lines.append(f"|---|------------|-------|-----------|--------|")
-                conf_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}
+                lines.append("| # | Confidence | Quote | Reasoning | Reference |")
+                lines.append("|---|------------|-------|-----------|--------|")
                 for inst in instances:
-                    iid = inst.get("id", "?")
-                    conf = inst.get("confidence", "medium")
-                    emoji = conf_emoji.get(conf, "⚪")
-                    quote = self._table_cell(inst.get("quote", ""), 80)
-                    reasoning = self._table_cell(inst.get("reasoning", ""), 80)
-                    heading = self._instance_anchor(inst)
-                    reference = self._reference_cell(article_title, reference_title, resolved_path, heading, inst)
-                    lines.append(f"| {iid} | {emoji} {conf} | {quote} | {reasoning} | {reference} |")
+                    lines.append(self._matrix_row(inst, article_title, reference_title, resolved_path))
                 lines.append("")
 
-        # Navigation
         lines.append("---")
         lines.append("## 🔗 Navigation")
         for article_title, _, resolved_path in articles:
@@ -511,11 +502,23 @@ Return ONLY the JSON object.
             if original_title != reference_title:
                 lines.append(f"- [[{original_title}|查看原始檔]]")
 
-        report = "\n".join(lines)
-        report, _ = run_markdown_quality_checks(report)
-        return report
+        # _write_report runs the markdown-quality pipeline downstream; no need
+        # to also run it here.
+        return "\n".join(lines)
 
-    # ── Report: Single article × single concept (classic) ──────────────
+    _CONF_EMOJI = {"high": "🟢", "medium": "🟡", "low": "🔴"}
+
+    def _matrix_row(self, inst, article_title, reference_title, resolved_path):
+        iid = inst.get("id", "?")
+        conf = inst.get("confidence", "medium")
+        emoji = self._CONF_EMOJI.get(conf, "⚪")
+        quote = self._table_cell(inst.get("quote", ""), 80)
+        reasoning = self._table_cell(inst.get("reasoning", ""), 80)
+        heading = self._instance_anchor(inst)
+        reference = self._reference_cell(article_title, reference_title, resolved_path, heading, inst)
+        return f"| {iid} | {emoji} {conf} | {quote} | {reasoning} | {reference} |"
+
+    # ── Report: Single article × single concept ────────────────────────
 
     def _format_report(self, concept, article_title, tally, resolved_path=""):
         reference_title = self._reference_title(article_title, resolved_path)
@@ -526,7 +529,6 @@ Return ONLY the JSON object.
         low = tally.get("low_confidence_count", 0)
         methodology = tally.get("methodology_note", "")
         instances = tally.get("instances", [])
-        conf_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}
 
         lines = [
             f"# 🔎 LingLens: {concept}", "",
@@ -539,47 +541,46 @@ Return ONLY the JSON object.
         ]
         if methodology:
             lines.extend(["## 📝 Methodology", "", methodology, ""])
+
         lines.extend(["## 📋 Evidence", ""])
         original_title = self._original_source_title(article_title)
         for inst in instances:
-            iid = inst.get("id", "?")
-            conf = inst.get("confidence", "medium")
-            emoji = conf_emoji.get(conf, "⚪")
-            lines.append(f"### Instance {iid} ({emoji} {conf.capitalize()})")
-            lines.append(f'> "{inst.get("quote", "(no quote)")}"')
-            lines.append("")
-            if inst.get("reasoning"):
-                lines.append(f"**Reasoning**: {inst['reasoning']}")
-            heading = self._instance_anchor(inst)
-            original_link = self._source_link(original_title, "", "🔗 查看原始檔")
-            if heading:
-                alias = "🔗 點擊查看分析錨點" if self._is_stitched_path(resolved_path) else "🔗 點擊查看原文錨點"
-                lines.append(f"**Analysis Reference**: {self._source_link(reference_title, heading, alias)}")
-            else:
-                alias = "🔗 查看分析來源" if self._is_stitched_path(resolved_path) else "🔗 查看原文"
-                lines.append(f"**Analysis Reference**: {self._source_link(reference_title, '', alias)}")
-            if original_title != reference_title:
-                range_text = self._original_range_text(inst)
-                suffix = f" ({range_text})" if range_text else ""
-                lines.append(f"**Original Reference**: {original_link}{suffix}")
-            lines.append("")
+            lines.extend(self._format_instance(inst, reference_title, original_title, resolved_path))
+
         lines.extend(["---", "## 🔗 Navigation", f"- [[{reference_title}|查看分析來源]]"])
         if original_title != reference_title:
             lines.append(f"- [[{original_title}|查看原始檔]]")
-        report = "\n".join(lines)
-        report, _ = run_markdown_quality_checks(report)
-        return report
 
-    def _write_empty_report(self, concept, article_title):
-        report = (
-            f"# 🔎 LingLens: {concept}\n\n"
-            f"> Source: [[{article_title}]] | Total instances found: **0**\n\n"
-            f"No instances of **{concept}** were identified in the article.\n"
-        )
-        self._write_report(f"LingLens: {concept} in {article_title}",
-                           report, "lens_report",
-                           {"target_concept": concept, "source_article": article_title, "total_count": 0})
-        return report
+        return "\n".join(lines)
+
+    def _format_instance(self, inst, reference_title, original_title, resolved_path):
+        iid = inst.get("id", "?")
+        conf = inst.get("confidence", "medium")
+        emoji = self._CONF_EMOJI.get(conf, "⚪")
+
+        lines = [
+            f"### Instance {iid} ({emoji} {conf.capitalize()})",
+            f'> "{inst.get("quote", "(no quote)")}"',
+            "",
+        ]
+        if inst.get("reasoning"):
+            lines.append(f"**Reasoning**: {inst['reasoning']}")
+
+        heading = self._instance_anchor(inst)
+        original_link = self._source_link(original_title, "", "🔗 查看原始檔")
+        if heading:
+            alias = "🔗 點擊查看分析錨點" if self._is_stitched_path(resolved_path) else "🔗 點擊查看原文錨點"
+            lines.append(f"**Analysis Reference**: {self._source_link(reference_title, heading, alias)}")
+        else:
+            alias = "🔗 查看分析來源" if self._is_stitched_path(resolved_path) else "🔗 查看原文"
+            lines.append(f"**Analysis Reference**: {self._source_link(reference_title, '', alias)}")
+
+        if original_title != reference_title:
+            range_text = self._original_range_text(inst)
+            suffix = f" ({range_text})" if range_text else ""
+            lines.append(f"**Original Reference**: {original_link}{suffix}")
+        lines.append("")
+        return lines
 
     def _error_report(self, message):
         report = f"# ❌ LingLens Error\n\n{message}\n"
@@ -588,16 +589,14 @@ Return ONLY the JSON object.
 
     # ── Helpers ────────────────────────────────────────────────────────
 
-
-    def _source_link(self, article_title, heading="", alias="🔗原文"):
-        """Build an Obsidian wikilink to the source article or heading."""
+    @staticmethod
+    def _source_link(article_title, heading="", alias="🔗原文"):
         safe_title = str(article_title).replace("|", "-").strip()
         safe_heading = str(heading or "").replace("|", "-").strip()
         target = f"{safe_title}#{safe_heading}" if safe_heading else safe_title
         return f"[[{target}|{alias}]]"
 
     def _reference_cell(self, article_title, reference_title, resolved_path, heading, inst):
-        """Build a compact table reference with analysis and original links."""
         if heading:
             alias = "🔗分析錨點" if self._is_stitched_path(resolved_path) else "🔗原文錨點"
             analysis_link = self._source_link(reference_title, heading, alias)
@@ -608,57 +607,94 @@ Return ONLY the JSON object.
         original_title = self._original_source_title(article_title)
         range_text = self._original_range_text(inst)
         if original_title == reference_title:
-            if range_text:
-                return f"{analysis_link}<br>{range_text}"
-            return analysis_link
+            return f"{analysis_link}<br>{range_text}" if range_text else analysis_link
+
         original_link = self._source_link(original_title, "", "🔗原始檔")
         if range_text:
             original_link = f"{original_link} ({range_text})"
         return f"{analysis_link}<br>{original_link}"
 
-    def _instance_anchor(self, inst):
-        """Return the best heading anchor recorded for an evidence instance."""
+    @staticmethod
+    def _instance_anchor(inst):
         anchor = inst.get("source_anchor") or inst.get("closest_heading") or ""
         return str(anchor).replace("#", "").strip()
 
-    def _original_range_text(self, inst):
+    @staticmethod
+    def _original_range_text(inst):
         source_range = inst.get("original_source_range") or {}
         start_line = source_range.get("start_line")
         end_line = source_range.get("end_line")
-        if start_line and end_line:
-            return f"原文 lines {start_line}-{end_line}"
-        return ""
+        return f"原文 lines {start_line}-{end_line}" if start_line and end_line else ""
 
-    def _reference_title(self, article_title, resolved_path=""):
-        """Use the actual resolved note title for Obsidian references."""
+    @staticmethod
+    def _reference_title(article_title, resolved_path=""):
         if resolved_path:
             path = Path(resolved_path)
             if path.suffix.lower() == ".md":
                 return path.stem
         return article_title
 
-    def _original_source_title(self, article_title):
-        """Return the best available Obsidian title for the original source."""
+    @staticmethod
+    def _original_source_title(article_title):
         direct = PAGES_DIR / f"{article_title}.md"
         if direct.exists():
             return direct.stem
-
         raw = RAW_CONSOLIDATE_DIR / f"{article_title}.md"
         if raw.exists():
             return raw.stem
-
         for candidate in RAW_CONSOLIDATE_DIR.glob(f"{article_title}_*.md"):
             return candidate.stem
-
         return article_title
 
-    def _is_stitched_path(self, resolved_path=""):
+    @staticmethod
+    def _is_stitched_path(resolved_path=""):
         return bool(resolved_path and Path(resolved_path).stem.endswith("(Stitched)"))
 
-    def _table_cell(self, value, max_len=80):
-        """Keep generated Markdown table cells on one row."""
-        cell = re.sub(r'\s+', ' ', str(value or "")).strip()
+    @staticmethod
+    def _table_cell(value, max_len=80):
+        cell = _WS_RE.sub(" ", str(value or "")).strip()
         cell = cell.replace("|", "\\|")
         if len(cell) > max_len:
             cell = cell[: max_len - 1].rstrip() + "…"
         return cell
+
+
+class _LocationIndex:
+    """Precomputed sorted (heading-end-offset, text) lists for fast lookup.
+
+    Built once per article; each `closest_heading(offset)` lookup is then
+    O(log n) instead of an O(article-size) re-scan from the start of file
+    that the original code did inside a per-instance loop.
+
+    We store heading *end* offsets so that a quote at offset N only sees
+    headings whose entire line ends before N — matching the original code's
+    behaviour of running the regex over `article_text[:offset]`.
+    """
+
+    __slots__ = ("_heading_ends", "_heading_texts", "_part_ends", "_part_texts")
+
+    def __init__(self, article_text: str):
+        self._heading_ends: list[int] = []
+        self._heading_texts: list[str] = []
+        for m in _HEADING_RE.finditer(article_text):
+            self._heading_ends.append(m.end())
+            self._heading_texts.append(m.group(1).strip())
+
+        self._part_ends: list[int] = []
+        self._part_texts: list[str] = []
+        for m in _PART_HEADING_RE.finditer(article_text):
+            self._part_ends.append(m.end())
+            self._part_texts.append(m.group(1).strip())
+
+    def closest_heading(self, offset: int) -> str:
+        return self._lookup_before(self._heading_ends, self._heading_texts, offset)
+
+    def closest_part(self, offset: int) -> str:
+        return self._lookup_before(self._part_ends, self._part_texts, offset)
+
+    @staticmethod
+    def _lookup_before(ends: list[int], texts: list[str], offset: int) -> str:
+        if not ends:
+            return ""
+        idx = bisect_right(ends, offset) - 1
+        return texts[idx] if idx >= 0 else ""

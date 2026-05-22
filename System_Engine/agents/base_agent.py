@@ -1,133 +1,185 @@
 import logging
 import re
-from pathlib import Path
 from datetime import datetime
-from core.config import PROMPTS_DIR, FROM_LLM_DIR, settings
-from core.parser import clean_llm_response, parse_markdown_metadata, dump_markdown_with_metadata
+from pathlib import Path
+
+from core.config import FROM_LLM_DIR, PROMPTS_DIR
+from core.parser import (
+    MERMAID_START_RE,
+    clean_llm_response,
+    dump_markdown_with_metadata,
+    run_markdown_quality_checks,
+)
+from core.utils import MtimeCache
+
+# Shared across all agent instances so a multi-strategy run only re-reads each
+# prompt template once per session (auto-invalidates on edit).
+_PROMPT_CACHE = MtimeCache()
+
+# Fenced mermaid block: capture the inner code so we can repair it in-place
+# while preserving the surrounding text exactly (str.replace is fragile when
+# two identical broken blocks appear in one document).
+_MERMAID_BLOCK_RE = re.compile(r'```mermaid\n(.*?)\n```', re.DOTALL)
+
+# Cheap signal that the body contains raw (un-fenced) mermaid code.
+_MERMAID_KEYWORDS = (
+    "graph TD", "graph LR", "graph TB", "graph BT", "graph RL",
+    "flowchart TD", "flowchart LR", "flowchart TB", "flowchart BT", "flowchart RL",
+    "sequenceDiagram", "classDiagram", "stateDiagram", "stateDiagram-v2",
+    "erDiagram", "gantt", "pie", "mindmap", "timeline", "journey",
+)
+
+# Strip out mermaid `%%` comments and double-quoted labels before any
+# structural inspection: counting brackets in those regions is meaningless.
+_MERMAID_QUOTED_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+_MERMAID_COMMENT_RE = re.compile(r'%%[^\n]*')
+
 
 class BaseAgent:
     def __init__(self, llm, rag=None):
         self.llm = llm
         self.rag = rag
-        self.stats = {
-            "input_chars": 0,
-            "output_chars": 0
-        }
+        self.stats = {"input_chars": 0, "output_chars": 0}
 
     def _load_prompt(self, prompt_name: str) -> str:
-        """Loads a prompt template from the Prompts directory."""
         if not prompt_name.endswith(".md"):
             prompt_name += ".md"
         prompt_path = PROMPTS_DIR / prompt_name
-        if prompt_path.exists():
-            content = prompt_path.read_text(encoding='utf-8')
-            # Track input chars (approximate)
-            self.stats["input_chars"] += len(content)
-            return content
-        logging.warning(f"Prompt template not found: {prompt_name}")
-        return ""
+        content = _PROMPT_CACHE.read(prompt_path)
+        if not content and not prompt_path.exists():
+            logging.warning(f"Prompt template not found: {prompt_name}")
+            return ""
+        self.stats["input_chars"] += len(content)
+        return content
 
     def _load_mermaid_rules(self) -> str:
-        """Loads Obsidian-specific Mermaid rules."""
         return self._load_prompt("mermaid_rules.md")
 
     def _self_correct(self, content: str) -> str:
-        """
-        Performs invisible healing on LLM output.
-        Currently handles:
-        - Markdown unwrapping
-        - Mermaid syntax validation and repair
-        """
-        # 1. Standard Markdown Unwrapping
+        """Invisible healing for LLM output: unwrap, repair mermaid, normalize."""
+        if not content:
+            return content
+
         content = clean_llm_response(content)
-        
-        # 2. Mermaid Syntax Healing
+
+        if "```mermaid" not in content and self._looks_like_bare_mermaid(content):
+            logging.info("Detected raw Mermaid code without backticks. Wrapping.")
+            content = f"```mermaid\n{content.strip()}\n```"
+
         if "```mermaid" in content:
-            content = self._fix_mermaid_syntax(content)
-        elif any(kw in content for kw in ["graph TD", "graph LR", "flowchart TD", "flowchart LR", "sequenceDiagram", "gantt", "classDiagram"]):
-            # Heuristic: if mermaid keywords are found but no backticks, wrap the likely block
-            # This is a simple wrapper for the whole content if it looks like a single diagram
-            if not content.strip().startswith("```"):
-                logging.info("Detected raw Mermaid code without backticks. Wrapping automatically...")
-                content = f"```mermaid\n{content.strip()}\n```"
-            
+            content = self._heal_mermaid_blocks(content)
+
+        content, fixes = run_markdown_quality_checks(content)
+        if fixes:
+            logging.info(f"Applied markdown quality fixes: {', '.join(fixes)}")
         return content
 
-    def _fix_mermaid_syntax(self, content: str) -> str:
+    @staticmethod
+    def _looks_like_bare_mermaid(content: str) -> bool:
+        """True if the body is *only* an unwrapped mermaid diagram."""
+        stripped = content.strip()
+        if not stripped or stripped.startswith("```"):
+            return False
+        if not any(kw in stripped for kw in _MERMAID_KEYWORDS):
+            return False
+        first_line = next((ln for ln in stripped.splitlines() if ln.strip()), "")
+        return bool(MERMAID_START_RE.match(first_line))
+
+    def _heal_mermaid_blocks(self, content: str) -> str:
+        """Repair each fenced mermaid block in `content` via LLM when broken.
+
+        Substitution is done by character offset so identical blocks don't
+        collide, and an LLM repair that still looks broken is rejected.
         """
-        Detects mermaid blocks and attempts to fix them using LLM if needed.
-        """
-        # This is a simplified version. A more robust one would use a parser or multiple passes.
-        mermaid_blocks = re.findall(r'```mermaid\n(.*?)\n```', content, re.DOTALL)
-        if not mermaid_blocks:
-            return content
-            
-        fixed_content = content
-        for block in mermaid_blocks:
-            # Simple heuristic: if it looks broken (e.g., unbalanced brackets), try to fix it.
+        pieces: list[str] = []
+        cursor = 0
+        for match in _MERMAID_BLOCK_RE.finditer(content):
+            pieces.append(content[cursor:match.start()])
+            block = match.group(1)
             if self._is_mermaid_broken(block):
-                logging.info("Detected potentially broken Mermaid block. Attempting self-correction...")
-                rules = self._load_mermaid_rules()
-                repair_prompt = f"""
-{rules}
+                logging.info("Detected potentially broken Mermaid block. Attempting self-correction.")
+                repaired = self._llm_repair_mermaid(block)
+                if repaired and not self._is_mermaid_broken(repaired):
+                    pieces.append(f"```mermaid\n{repaired}\n```")
+                    cursor = match.end()
+                    continue
+                logging.warning("Mermaid self-correction rejected (still broken or empty); keeping original.")
+            pieces.append(match.group(0))
+            cursor = match.end()
+        pieces.append(content[cursor:])
+        return "".join(pieces)
 
-The following Mermaid code is broken or incompatible with Obsidian. Please fix it.
-Return ONLY the corrected code inside a mermaid block.
+    def _llm_repair_mermaid(self, block: str) -> str:
+        rules = self._load_mermaid_rules()
+        prompt = (
+            f"{rules}\n\n"
+            "The following Mermaid code is broken or incompatible with Obsidian. Please fix it.\n"
+            "Return ONLY the corrected code inside a mermaid block.\n\n"
+            "BROKEN CODE:\n"
+            f"```mermaid\n{block}\n```\n"
+        )
+        try:
+            response = self.llm.answer_query(
+                prompt,
+                wiki_context="",
+                custom_instruction="You are a Mermaid syntax expert for Obsidian.",
+            )
+        except Exception as e:
+            logging.error(f"Mermaid LLM repair failed: {e}")
+            return ""
+        response = clean_llm_response(response or "")
+        match = _MERMAID_BLOCK_RE.search(response)
+        return match.group(1).strip() if match else ""
 
-BROKEN CODE:
-```mermaid
-{block}
-```
-"""
-                correction = self.llm.answer_query(repair_prompt, wiki_context="", custom_instruction="You are a Mermaid syntax expert for Obsidian.")
-                correction = clean_llm_response(correction)
-                # Extract the code from the response
-                new_block_match = re.search(r'```mermaid\n(.*?)\n```', correction, re.DOTALL)
-                if new_block_match:
-                    new_block = new_block_match.group(1).strip()
-                    fixed_content = fixed_content.replace(block, new_block)
-                    
-        return fixed_content
-
-    def _is_mermaid_broken(self, block: str) -> bool:
-        """Simple heuristic for broken mermaid syntax."""
-        # Unbalanced brackets
-        if block.count('[') != block.count(']') or block.count('(') != block.count(')'):
+    @staticmethod
+    def _is_mermaid_broken(block: str) -> bool:
+        """Heuristic: brackets unbalanced *outside* quoted labels and comments."""
+        if not block.strip():
             return True
-        # Common illegal characters in node IDs if not quoted
-        # (This is just a placeholder for more complex logic)
+        scrubbed = _MERMAID_QUOTED_RE.sub("", block)
+        scrubbed = _MERMAID_COMMENT_RE.sub("", scrubbed)
+        if scrubbed.count("[") != scrubbed.count("]"):
+            return True
+        if scrubbed.count("(") != scrubbed.count(")"):
+            return True
+        if scrubbed.count("{") != scrubbed.count("}"):
+            return True
         return False
 
-    def _write_report(self, title: str, body: str, report_type: str, metadata: dict = None) -> Path:
-        """Standardized report writing with stats and metadata."""
-        if metadata is None:
-            metadata = {}
-            
+    def _write_report(
+        self, title: str, body: str, report_type: str, metadata: dict | None = None
+    ) -> tuple[Path, str]:
+        """Self-correct `body`, write a timestamped report file, return (path, full_markdown).
+
+        The second element is the *complete* document — frontmatter + body —
+        exactly as written to disk. Callers that need to mirror the file
+        elsewhere (Insights/) should write those bytes verbatim to stay
+        byte-identical with the canonical report.
+
+        Callers that ignored the return value previously still work.
+        """
         from core.version import VERSION
+
+        body = self._self_correct(body)
+
+        metadata = dict(metadata or {})
         metadata.update({
             "title": title,
             "type": report_type,
             "version": VERSION,
             "date_created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "input_chars": self.stats["input_chars"],
-            "output_chars": len(body)
+            "output_chars": len(body),
         })
-        
-        # Ensure we don't have redundant wrappers
-        body = self._self_correct(body)
-        
+
         full_markdown = dump_markdown_with_metadata(metadata, body)
-        
-        # Create a safe filename
         safe_title = re.sub(r'[\\/*?:"<>|]', "-", title)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         filename = f"✅{report_type}-{safe_title}-{timestamp}.md"
-        
         output_path = FROM_LLM_DIR / filename
-        output_path.write_text(full_markdown, encoding='utf-8')
+        output_path.write_text(full_markdown, encoding="utf-8")
         logging.info(f"Report generated: {output_path.name} ({len(body)} chars)")
-        return output_path
+        return output_path, full_markdown
 
     def execute(self, task_context: dict):
-        """Abstract method for agent execution."""
         raise NotImplementedError("Subclasses must implement execute()")

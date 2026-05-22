@@ -1,120 +1,108 @@
-"""
-IngestionPipeline — extracted from ClippingWatcher.
+"""Ingestion pipeline — turns raw markdown into wiki pages.
 
-Handles the core document processing logic:
-  - Single-page wiki ingestion
-  - Long-document chunking, part-by-part digestion, stitching, and synthesis
-  - Digest formatting and appendix generation
-  - Wiki page writing with navigation links
+Two flows:
+  - **Single-page**: short doc → one LLM call → one wiki note.
+  - **Long-document**: chunk → per-part LLM → stitched + synthesis.
+
+Originally extracted from ClippingWatcher.
 """
-import json
+
+from __future__ import annotations
+
 import logging
 import re
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
-from services.text_splitter import TextSplitter
-from core.config import INDEX_FILE, PAGES_DIR, settings
+from core.config import INDEX_FILE, PAGES_DIR
+from core.parser import (
+    dump_markdown_with_metadata,
+    parse_markdown_metadata,
+    run_markdown_quality_checks,
+)
 from core.ui import ui
-from core.vault_utils import update_wiki_index
-from core.parser import parse_markdown_metadata, dump_markdown_with_metadata, run_markdown_quality_checks
 from core.utils import digest_value_to_text
+from core.vault_utils import update_wiki_index
+from services.text_splitter import TextSplitter
+
+
+_HEADING_RE = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
+_FRONTMATTER_RE = re.compile(r'^---\s*\n.*?\n---\s*\n?', re.DOTALL)
+_PART_DIGEST_HEADER = "## 🧩 Part Digest Appendix"
 
 
 class IngestionPipeline:
-    """Orchestrates the conversion of raw content into wiki pages."""
+    """Orchestrates raw content → wiki pages."""
 
     def __init__(self, llm_client, rag_manager):
         self.llm = llm_client
         self.rag = rag_manager
         self.splitter = TextSplitter()
 
-    # ── Public Entry Points ──────────────────────────────────────────
+    # ── Public entry points ──────────────────────────────────────────
 
     def ingest_markdown(self, content: str, source_filepath: Path):
-        """Route a markdown document through single-page or long-document pipeline."""
-        base_title = source_filepath.stem
-
         if len(content) > self.splitter.chunk_size + 1000:
-            self._ingest_long_document(content, source_filepath, base_title)
+            self._ingest_long_document(content, source_filepath, source_filepath.stem)
         else:
             self.ingest_to_wiki(content, source_filepath)
 
-    def ingest_to_wiki(self, raw_content: str, source_filepath: Path, llm_result: dict = None, part_info: dict = None):
-        """Convert raw content (or a pre-existing LLM result) into a wiki page."""
+    def ingest_to_wiki(
+        self,
+        raw_content: str,
+        source_filepath: Path,
+        llm_result: dict | None = None,
+        part_info: dict | None = None,
+    ):
+        """Convert raw content into one wiki page.
+
+        `part_info` flags this as a long-document part; when set, RAG indexing
+        and wiki-index rebuild can be deferred to the driver so we don't
+        rebuild the entire index N times for an N-part document.
+        """
         try:
             if not llm_result:
-                context_hint = part_info.get('context_hint', '') if part_info else ''
-                index_content = INDEX_FILE.read_text('utf-8') if INDEX_FILE.exists() else ""
-                llm_result = self.llm.generate_entity_page(raw_content, source_filepath.name, index_content, context_hint=context_hint)
+                context_hint = (part_info or {}).get("context_hint", "")
+                index_content = (part_info or {}).get("index_content")
+                if index_content is None:
+                    index_content = INDEX_FILE.read_text(encoding="utf-8") if INDEX_FILE.exists() else ""
+                llm_result = self.llm.generate_entity_page(
+                    raw_content,
+                    source_filepath.name,
+                    index_content,
+                    context_hint=context_hint,
+                )
                 if not llm_result:
                     raise ValueError("LLM generation failed.")
 
             base_title = source_filepath.stem.strip().replace("/", "-").replace("\\", "-")
-            title = f"{base_title} (Synthesis)"
+            title = f"{base_title} (Part {part_info['current']})" if part_info else f"{base_title} (Synthesis)"
 
-            if part_info:
-                title = f"{base_title} (Part {part_info['current']})"
+            tags = (part_info or {}).get("master_tags") or llm_result.get("tags", [])
+            page_type = llm_result.get("type", "entity")
 
-            tags = llm_result.get('tags', [])
-            if part_info and part_info['master_tags']:
-                tags = part_info['master_tags']
+            body, quality_fixes = run_markdown_quality_checks(
+                llm_result.get("content", ""),
+                strip_frontmatter=True,
+            )
+            body += self._build_navigation(base_title, part_info)
 
-            page_type = llm_result.get('type', 'entity')
-            body_content = llm_result.get('content', '')
-            body_content, quality_fixes = run_markdown_quality_checks(body_content, strip_frontmatter=True)
+            wiki_meta = self._build_part_metadata(title, page_type, tags, part_info, quality_fixes)
+            wiki_markdown = dump_markdown_with_metadata(wiki_meta, body)
 
-            # Enhanced Navigation
-            nav = "\n\n---\n## 🔗 知識導航\n"
-            if part_info:
-                nav += f"*   🔙 **[[{base_title} (Synthesis)|查看全文總結 (Synthesis)]]**\n"
-                nav += f"*   📚 **[[{base_title} (Stitched)|查看忠實接合版 (Stitched)]]**\n"
-                nav += f"*   📄 **[[{base_title}|查看完整原始檔 (Original)]]**\n"
-
-                adj_links = []
-                if part_info['current'] > 1:
-                    adj_links.append(f"[[{base_title} (Part {part_info['current']-1})|◀ 上一篇]]")
-                if part_info['current'] < part_info['total']:
-                    adj_links.append(f"[[{base_title} (Part {part_info['current']+1})|下一篇 ▶]]")
-
-                if adj_links:
-                    nav += f"*   📑 {' | '.join(adj_links)}\n"
-            else:
-                # Single-page synthesis navigation
-                nav += f"*   📄 **[[{base_title}|查看完整原始檔 (Original)]]**\n"
-
-            body_content += nav
-
-            date_created = datetime.now().strftime("%Y-%m-%d")
-
-            wiki_meta = {
-                "title": title,
-                "type": page_type,
-                "date_created": date_created,
-                "tags": tags,
-                "quality_checker": "deterministic-markdown-v1"
-            }
-            if part_info:
-                wiki_meta["part"] = part_info["current"]
-                wiki_meta["parts_count"] = part_info["total"]
-                wiki_meta["digest_schema"] = "part-digest-v1"
-                source_span = part_info.get("source_span") or {}
-                wiki_meta.update(source_span)
-            if quality_fixes:
-                wiki_meta["quality_fixes"] = quality_fixes
-            wiki_markdown = dump_markdown_with_metadata(wiki_meta, body_content)
-
-            # Always save in a dedicated entity folder
             page_folder = PAGES_DIR / base_title
             page_folder.mkdir(parents=True, exist_ok=True)
             page_path = page_folder / f"{title}.md"
-
-            with open(page_path, 'w', encoding='utf-8') as f:
-                f.write(wiki_markdown)
+            page_path.write_text(wiki_markdown, encoding="utf-8")
 
             if not (part_info and part_info.get("defer_rag")):
                 self.rag.add_document(page_path, title, wiki_markdown, tags=tags)
-            update_wiki_index(page_path, title)
+
+            # Long-doc parts pass `defer_index=True` so we only rebuild the
+            # wiki index once at the end of the run, not per part.
+            if not (part_info and part_info.get("defer_index")):
+                update_wiki_index(page_path, title)
+
             llm_result["_page_path"] = str(page_path)
             llm_result["_title"] = title
             llm_result["_tags"] = tags
@@ -124,83 +112,207 @@ class IngestionPipeline:
             logging.error(f"Ingestion failed for {source_filepath.name}: {e}")
             return None
 
-    # ── Long-Document Pipeline ───────────────────────────────────────
+    # ── Single-page helpers ──────────────────────────────────────────
+
+    @staticmethod
+    def _build_navigation(base_title: str, part_info: dict | None) -> str:
+        lines = ["\n\n---\n## 🔗 知識導航"]
+        if part_info:
+            lines.append(f"*   🔙 **[[{base_title} (Synthesis)|查看全文總結 (Synthesis)]]**")
+            lines.append(f"*   📚 **[[{base_title} (Stitched)|查看忠實接合版 (Stitched)]]**")
+            lines.append(f"*   📄 **[[{base_title}|查看完整原始檔 (Original)]]**")
+
+            adj_links = []
+            current = part_info["current"]
+            total = part_info["total"]
+            if current > 1:
+                adj_links.append(f"[[{base_title} (Part {current - 1})|◀ 上一篇]]")
+            if current < total:
+                adj_links.append(f"[[{base_title} (Part {current + 1})|下一篇 ▶]]")
+            if adj_links:
+                lines.append(f"*   📑 {' | '.join(adj_links)}")
+        else:
+            lines.append(f"*   📄 **[[{base_title}|查看完整原始檔 (Original)]]**")
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _build_part_metadata(
+        title: str,
+        page_type: str,
+        tags: list,
+        part_info: dict | None,
+        quality_fixes: list,
+    ) -> dict:
+        meta = {
+            "title": title,
+            "type": page_type,
+            "date_created": datetime.now().strftime("%Y-%m-%d"),
+            "tags": tags,
+            "quality_checker": "deterministic-markdown-v1",
+        }
+        if part_info:
+            meta["part"] = part_info["current"]
+            meta["parts_count"] = part_info["total"]
+            meta["digest_schema"] = "part-digest-v1"
+            meta.update(part_info.get("source_span") or {})
+        if quality_fixes:
+            meta["quality_fixes"] = quality_fixes
+        return meta
+
+    # ── Long-document pipeline ──────────────────────────────────────
 
     def _ingest_long_document(self, content: str, source_filepath: Path, base_title: str):
-        """Multi-part chunking → per-part digestion → stitching → synthesis."""
-        entity_dir = PAGES_DIR / base_title
-        synthesis_file = entity_dir / f"{base_title} (Synthesis).md"
-
         chunk_spans = self.splitter.split_text_with_spans(content)
-        chunks = [item["text"] for item in chunk_spans]
-        source_spans = [
-            self._source_span_for_chunk(content, span, i + 1)
-            for i, span in enumerate(chunk_spans)
-        ]
+        chunks = [s["text"] for s in chunk_spans]
+        source_spans = [self._source_span_for_chunk(content, span, i + 1) for i, span in enumerate(chunk_spans)]
         logging.info(f"Long document detected ({len(content)} chars). Splitting into {len(chunks)} parts.")
 
-        master_tags = []
+        # Read the wiki index ONCE for the whole run; previously each part
+        # re-read it from disk.
+        index_content = INDEX_FILE.read_text(encoding="utf-8") if INDEX_FILE.exists() else ""
+
+        part_state = self._process_parts(chunks, source_spans, source_filepath, base_title, index_content)
+
+        ui.set_status(f"Stitching: {base_title}...")
+        stitched_path = self._write_stitched_article(
+            base_title,
+            part_state["part_paths"],
+            part_state["master_tags"],
+            len(content),
+            part_state["total_output_chars"],
+        )
+        if stitched_path:
+            part_state["navigation_items"].append(
+                f"- [[{base_title} (Stitched)]]: 忠實接合版，保留 Part notes 的主要內容"
+            )
+
+        ui.set_status(f"Synthesizing: {base_title}...")
+        synthesis_file = self._write_synthesis(
+            base_title=base_title,
+            content=content,
+            chunks=chunks,
+            source_spans=source_spans,
+            part_state=part_state,
+        )
+
+        # Single index rebuild at the very end of the long-doc run, covering
+        # every part + stitched + synthesis we just wrote.
+        update_wiki_index(synthesis_file, base_title)
+
+    def _process_parts(
+        self,
+        chunks: list[str],
+        source_spans: list[dict],
+        source_filepath: Path,
+        base_title: str,
+        index_content: str,
+    ) -> dict:
+        master_tags: list = []
         pending_concepts = ""
-        part_digests = []
-        part_paths = []
-        navigation_items = []
+        part_digests: list = []
+        part_paths: list[Path] = []
+        navigation_items: list[str] = []
         total_output_chars = 0
+        total = len(chunks)
 
         for i, chunk in enumerate(chunks):
-            source_span = source_spans[i]
-            ui.set_status(f"Distilling Part {i+1} of {len(chunks)}...")
+            ui.set_status(f"Distilling Part {i + 1} of {total}...")
 
-            context_hint = f"Part {i+1}/{len(chunks)}."
+            context_hint = f"Part {i + 1}/{total}."
             if i > 0 and pending_concepts:
-                context_hint += f" Previously you identified these pending concepts: {pending_concepts}. Please focus on them."
-
-            if i < len(chunks) - 1:
+                context_hint += (
+                    f" Previously you identified these pending concepts: {pending_concepts}. Please focus on them."
+                )
+            if i < total - 1:
                 context_hint += " Since more parts follow, PLEASE include a 'pending_concepts' field in your YAML."
 
             part_info = {
                 "current": i + 1,
-                "total": len(chunks),
+                "total": total,
                 "master_tags": master_tags,
                 "context_hint": context_hint,
                 "defer_rag": True,
-                "source_span": source_span
+                "defer_index": True,
+                "source_span": source_spans[i],
+                "index_content": index_content,
             }
             result = self.ingest_to_wiki(chunk, source_filepath, part_info=part_info)
+            if not result:
+                continue
 
-            if result:
-                if not master_tags and result.get('tags'):
-                    master_tags = result.get('tags')
-                pending_concepts = result.get('pending_concepts', '')
+            if not master_tags and result.get("tags"):
+                master_tags = result["tags"]
+            pending_concepts = result.get("pending_concepts", "")
 
-                part_content = result.get('content', '')
-                total_output_chars += len(part_content)
-                digest = self.llm.generate_part_digest(
-                    base_title, i + 1, len(chunks),
-                    chunk, part_content, pending_concepts
-                )
-                part_digests.append(digest)
-                self._append_part_digest_to_note(result, digest)
-                nav_summary = digest_value_to_text(digest.get('thesis')) if isinstance(digest, dict) else ""
-                if not nav_summary:
-                    nav_summary = part_content.strip().split('\n')[0][:100]
-                navigation_items.append(f"- [[{base_title} (Part {i+1})]]: {nav_summary[:140]}")
-                if result.get("_page_path"):
-                    part_paths.append(Path(result["_page_path"]))
+            part_content = result.get("content", "")
+            total_output_chars += len(part_content)
+            digest = self.llm.generate_part_digest(
+                base_title, i + 1, total, chunk, part_content, pending_concepts,
+            )
+            part_digests.append(digest)
+            self._append_part_digest_to_note(result, digest)
 
-        # --- Faithful stitched article ---
-        ui.set_status(f"Stitching: {base_title}...")
-        stitched_path = self._write_stitched_article(
-            base_title, part_paths, master_tags, len(content), total_output_chars
+            nav_summary = digest_value_to_text(digest.get("thesis")) if isinstance(digest, dict) else ""
+            if not nav_summary:
+                nav_summary = part_content.strip().split("\n")[0][:100]
+            navigation_items.append(f"- [[{base_title} (Part {i + 1})]]: {nav_summary[:140]}")
+
+            if result.get("_page_path"):
+                part_paths.append(Path(result["_page_path"]))
+
+        return {
+            "master_tags": master_tags,
+            "pending_concepts": pending_concepts,
+            "part_digests": part_digests,
+            "part_paths": part_paths,
+            "navigation_items": navigation_items,
+            "total_output_chars": total_output_chars,
+        }
+
+    def _write_synthesis(
+        self,
+        *,
+        base_title: str,
+        content: str,
+        chunks: list[str],
+        source_spans: list[dict],
+        part_state: dict,
+    ) -> Path:
+        from core.version import VERSION
+
+        synthesis_text = self.llm.generate_synthesis(
+            base_title,
+            part_state["part_digests"],
+            part_state["pending_concepts"],
         )
-        if stitched_path:
-            navigation_items.append(f"- [[{base_title} (Stitched)]]: 忠實接合版，保留 Part notes 的主要內容")
-
-        # --- Final Synthesis ---
-        ui.set_status(f"Synthesizing: {base_title}...")
-        synthesis_text = self.llm.generate_synthesis(base_title, part_digests, pending_concepts)
         synthesis_text, synthesis_fixes = run_markdown_quality_checks(synthesis_text, strip_frontmatter=True)
 
-        from core.version import VERSION
+        digest_appendix = self.format_digest_appendix(part_state["part_digests"])
+        master_tags = part_state["master_tags"]
+        nav_block = "\n".join(part_state["navigation_items"])
+        syn_nav = (
+            f"\n\n---\n## 🔗 原始溯源\n"
+            f"*   📚 **[[{base_title} (Stitched)|查看忠實接合版 (Stitched)]]**\n"
+            f"*   📄 **[[{base_title}|查看完整原始檔 (Original)]]**"
+        )
+        tag_line = " ".join(f"#{t}" for t in master_tags if "part-" not in t)
+
+        final_content = (
+            f"# ✨ {base_title} (Synthesis)\n"
+            f"---\n\n"
+            f"## 📝 Executive Summary\n{synthesis_text}\n\n"
+            f"## 📂 Navigation\n{nav_block}{syn_nav}\n\n"
+            f"{digest_appendix}\n\n"
+            f"## 🗺️ Knowledge Map\n(Tags: {tag_line})\n\n"
+            f"## 📊 System Metadata\n"
+            f"- **Original Content Size**: {len(content)} chars\n"
+            f"- **Generated Content Size**: {part_state['total_output_chars']} chars\n"
+            f"- **Total Parts**: {len(chunks)}\n"
+            f"- **Model**: {self.llm.model}\n"
+            f"- **Status**: #PerfectPitch\n"
+        )
+        final_content, final_fixes = run_markdown_quality_checks(final_content)
+
         final_meta = {
             "title": f"{base_title} (Synthesis)",
             "tags": (master_tags or []) + ["synthesis", "completed"],
@@ -209,112 +321,86 @@ class IngestionPipeline:
             "date_completed": datetime.now().strftime("%Y-%m-%d"),
             "model": self.llm.model,
             "input_chars": len(content),
-            "output_chars": total_output_chars,
+            "output_chars": part_state["total_output_chars"],
             "parts_count": len(chunks),
             "part_source_map": source_spans,
             "synthesis_pipeline": "structured-digest-v1",
             "digest_schema": "part-digest-v1",
-            "quality_checker": "deterministic-markdown-v1"
+            "quality_checker": "deterministic-markdown-v1",
         }
-        if synthesis_fixes:
-            final_meta["quality_fixes"] = synthesis_fixes
+        combined_fixes = sorted(set((synthesis_fixes or []) + (final_fixes or [])))
+        if combined_fixes:
+            final_meta["quality_fixes"] = combined_fixes
 
-        # Synthesis Navigation
-        syn_nav = f"\n\n---\n## 🔗 原始溯源\n*   📚 **[[{base_title} (Stitched)|查看忠實接合版 (Stitched)]]**\n*   📄 **[[{base_title}|查看完整原始檔 (Original)]]**"
-        digest_appendix = self.format_digest_appendix(part_digests)
-
-        final_content = f"""# ✨ {base_title} (Synthesis)
----
-
-## 📝 Executive Summary
-{synthesis_text}
-
-## 📂 Navigation
-{chr(10).join(navigation_items)}{syn_nav}
-
-{digest_appendix}
-
-## 🗺️ Knowledge Map
-(Tags: {" ".join([f"#{t}" for t in (master_tags or []) if "part-" not in t])})
-
-## 📊 System Metadata
-- **Original Content Size**: {len(content)} chars
-- **Generated Content Size**: {total_output_chars} chars
-- **Total Parts**: {len(chunks)}
-- **Model**: {self.llm.model}
-- **Status**: #PerfectPitch
-"""
-        final_content, final_fixes = run_markdown_quality_checks(final_content)
-        if final_fixes:
-            final_meta["quality_fixes"] = sorted(set(final_meta.get("quality_fixes", []) + final_fixes))
+        entity_dir = PAGES_DIR / base_title
         entity_dir.mkdir(parents=True, exist_ok=True)
-        synthesis_file.write_text(dump_markdown_with_metadata(final_meta, final_content), encoding='utf-8')
+        synthesis_file = entity_dir / f"{base_title} (Synthesis).md"
+        synthesis_file.write_text(dump_markdown_with_metadata(final_meta, final_content), encoding="utf-8")
 
         self.rag.add_document(synthesis_file, base_title, final_content, tags=final_meta["tags"])
-        update_wiki_index(synthesis_file, base_title)
+        return synthesis_file
 
-    # ── Digest Formatting ────────────────────────────────────────────
+    # ── Digest formatting ────────────────────────────────────────────
 
     def format_digest_appendix(self, part_digests: list) -> str:
-        """Format structured part digests into a readable Markdown appendix."""
         if not part_digests:
             return ""
 
-        def as_text(value) -> str:
-            return digest_value_to_text(value)
+        lines = [
+            _PART_DIGEST_HEADER,
+            "",
+            "> 每個 Part 的結構化摘要。這是 Ling Ling 進行總合成前的中間理解，可用來檢查 final synthesis 是否有根據。",
+            "",
+        ]
+
+        for index, digest in enumerate(part_digests, 1):
+            lines.extend(self._format_one_digest(index, digest))
+
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _format_one_digest(index: int, digest) -> list[str]:
+        if isinstance(digest, str):
+            return [f"### Part {index}", "", digest.strip(), ""]
+        if not isinstance(digest, dict):
+            return [f"### Part {index}", "", str(digest or "(empty digest)"), ""]
 
         def clean_list(values):
             if not values:
                 return []
             if isinstance(values, str):
                 values = [values]
-            return [as_text(value) for value in values if as_text(value)]
+            return [t for v in values if (t := digest_value_to_text(v))]
 
         def bullet_block(label: str, values) -> list[str]:
             items = clean_list(values)
             if not items:
                 return []
-            lines = [f"- **{label}**:"]
-            lines.extend(f"  - {item}" for item in items)
-            return lines
+            block = [f"- **{label}**:"]
+            block.extend(f"  - {item}" for item in items)
+            return block
 
-        lines = [
-            "## 🧩 Part Digest Appendix",
-            "",
-            "> 每個 Part 的結構化摘要。這是 Ling Ling 進行總合成前的中間理解，可用來檢查 final synthesis 是否有根據。",
-            ""
-        ]
+        part_number = digest.get("part", index)
+        title = digest.get("title") or f"Part {part_number}"
+        out = [f"### Part {part_number}: {title}", ""]
 
-        for index, digest in enumerate(part_digests, 1):
-            if isinstance(digest, str):
-                lines.extend([f"### Part {index}", "", digest.strip(), ""])
-                continue
-            if not isinstance(digest, dict):
-                lines.extend([f"### Part {index}", "", str(digest or "(empty digest)"), ""])
-                continue
+        thesis = digest_value_to_text(digest.get("thesis", ""))
+        if thesis:
+            out.append(f"- **Thesis**: {thesis}")
 
-            part_number = digest.get("part", index)
-            title = digest.get("title") or f"Part {part_number}"
-            lines.extend([f"### Part {part_number}: {title}", ""])
+        out.extend(bullet_block("Key Points", digest.get("key_points", [])))
+        out.extend(bullet_block("Evidence", digest.get("evidence", [])))
+        out.extend(bullet_block("Terms", digest.get("terms", [])))
+        out.extend(bullet_block("Open Questions", digest.get("open_questions", [])))
 
-            thesis = as_text(digest.get("thesis", ""))
-            if thesis:
-                lines.append(f"- **Thesis**: {thesis}")
+        handoff = digest_value_to_text(digest.get("handoff", ""))
+        if handoff:
+            out.append(f"- **Handoff**: {handoff}")
 
-            lines.extend(bullet_block("Key Points", digest.get("key_points", [])))
-            lines.extend(bullet_block("Evidence", digest.get("evidence", [])))
-            lines.extend(bullet_block("Terms", digest.get("terms", [])))
-            lines.extend(bullet_block("Open Questions", digest.get("open_questions", [])))
+        out.append("")
+        return out
 
-            handoff = as_text(digest.get("handoff", ""))
-            if handoff:
-                lines.append(f"- **Handoff**: {handoff}")
-
-            lines.append("")
-
-        return "\n".join(lines).strip()
-
-    def _append_part_digest_to_note(self, ingest_result: dict, digest):
+    def _append_part_digest_to_note(self, ingest_result: dict, digest) -> None:
         page_path_value = ingest_result.get("_page_path") if isinstance(ingest_result, dict) else None
         if not page_path_value:
             return
@@ -327,33 +413,42 @@ class IngestionPipeline:
         if not appendix:
             return
 
-        content = page_path.read_text(encoding='utf-8').rstrip()
-        if "## 🧩 Part Digest Appendix" in content:
-            content = content.split("## 🧩 Part Digest Appendix", 1)[0].rstrip()
+        content = page_path.read_text(encoding="utf-8").rstrip()
+        if _PART_DIGEST_HEADER in content:
+            content = content.split(_PART_DIGEST_HEADER, 1)[0].rstrip()
 
         updated = f"{content}\n\n{appendix}\n"
-        page_path.write_text(updated, encoding='utf-8')
+        page_path.write_text(updated, encoding="utf-8")
 
         title = ingest_result.get("_title") or page_path.stem
         tags = ingest_result.get("_tags") or ingest_result.get("tags", [])
         self.rag.add_document(page_path, title, updated, tags=tags)
 
-    # ── Stitched Article ─────────────────────────────────────────────
+    # ── Stitched article ────────────────────────────────────────────
 
-    def _write_stitched_article(self, base_title: str, part_paths: list[Path], tags: list[str], input_chars: int, output_chars: int) -> Path | None:
-        readable_parts = [path for path in part_paths if path and path.exists()]
+    def _write_stitched_article(
+        self,
+        base_title: str,
+        part_paths: list[Path],
+        tags: list[str],
+        input_chars: int,
+        output_chars: int,
+    ) -> Path | None:
+        readable_parts = [p for p in part_paths if p and p.exists()]
         if not readable_parts:
             return None
 
-        stitched_sections = []
+        sections: list[str] = []
         for index, part_path in enumerate(readable_parts, 1):
-            part_meta = parse_markdown_metadata(part_path.read_text(encoding="utf-8"))
-            body = self._extract_stitchable_body(part_path)
+            # Read the file once and reuse it for both metadata + body extraction.
+            content = part_path.read_text(encoding="utf-8")
+            part_meta = parse_markdown_metadata(content)
+            body = self._extract_stitchable_body(content)
             if not body:
                 continue
 
             source_range = self._format_source_range(part_meta)
-            stitched_sections.append(
+            sections.append(
                 f"## Part {index}\n\n"
                 f"Source note: [[{part_path.stem}]]\n\n"
                 f"{source_range}"
@@ -361,7 +456,7 @@ class IngestionPipeline:
                 f"{body}"
             )
 
-        if not stitched_sections:
+        if not sections:
             return None
 
         from core.version import VERSION
@@ -377,21 +472,19 @@ class IngestionPipeline:
             "output_chars": output_chars,
             "parts_count": len(readable_parts),
             "stitch_pipeline": "part-note-stitch-v1",
-            "quality_checker": "deterministic-markdown-v1"
+            "quality_checker": "deterministic-markdown-v1",
         }
 
-        body = f"""# {base_title} (Stitched)
-
-> 忠實接合版：保留各 Part note 的主要內容，移除每篇的 navigation、metadata 與 digest appendix。這份文件偏向完整閱讀，不等同於洞察型 Synthesis。
-
-## 🔗 Navigation
-- [[{base_title} (Synthesis)|查看洞察總結 (Synthesis)]]
-- [[{base_title}|查看完整原始檔 (Original)]]
-
----
-
-{chr(10).join(f'{section}{chr(10)}' for section in stitched_sections)}
-"""
+        body = (
+            f"# {base_title} (Stitched)\n\n"
+            "> 忠實接合版：保留各 Part note 的主要內容，移除每篇的 navigation、metadata 與 digest appendix。"
+            "這份文件偏向完整閱讀，不等同於洞察型 Synthesis。\n\n"
+            "## 🔗 Navigation\n"
+            f"- [[{base_title} (Synthesis)|查看洞察總結 (Synthesis)]]\n"
+            f"- [[{base_title}|查看完整原始檔 (Original)]]\n\n"
+            "---\n\n"
+            + "\n".join(f"{section}\n" for section in sections)
+        )
         body, quality_fixes = run_markdown_quality_checks(body)
         if quality_fixes:
             metadata["quality_fixes"] = quality_fixes
@@ -402,12 +495,12 @@ class IngestionPipeline:
         stitched_file.write_text(stitched_markdown, encoding="utf-8")
 
         self.rag.add_document(stitched_file, f"{base_title} (Stitched)", stitched_markdown, tags=metadata["tags"])
-        update_wiki_index(stitched_file, f"{base_title} (Stitched)")
         return stitched_file
 
-    # ── Helpers ───────────────────────────────────────────────────────
+    # ── Helpers ──────────────────────────────────────────────────────
 
-    def _source_span_for_chunk(self, source_text: str, chunk_span: dict, part_number: int) -> dict:
+    @staticmethod
+    def _source_span_for_chunk(source_text: str, chunk_span: dict, part_number: int) -> dict:
         start = int(chunk_span.get("start", 0))
         end = int(chunk_span.get("end", start))
         return {
@@ -418,7 +511,8 @@ class IngestionPipeline:
             "source_end_line": source_text.count("\n", 0, end) + 1,
         }
 
-    def _format_source_range(self, part_meta: dict) -> str:
+    @staticmethod
+    def _format_source_range(part_meta: dict) -> str:
         start_line = part_meta.get("source_start_line")
         end_line = part_meta.get("source_end_line")
         start_char = part_meta.get("source_start_char")
@@ -432,26 +526,29 @@ class IngestionPipeline:
             return ""
         return "\n".join(lines) + "\n\n"
 
-    def _extract_stitchable_body(self, part_path: Path) -> str:
-        content = part_path.read_text(encoding="utf-8")
-        content = re.sub(r'^---\s*\n.*?\n---\s*\n?', '', content, count=1, flags=re.DOTALL).strip()
+    def _extract_stitchable_body(self, content_or_path) -> str:
+        """Strip frontmatter, navigation, and digest appendix from a part note."""
+        if isinstance(content_or_path, Path):
+            content = content_or_path.read_text(encoding="utf-8")
+        else:
+            content = content_or_path
 
-        cut_markers = [
-            "\n## 🔗 知識導航",
-            "\n## 🧩 Part Digest Appendix",
-        ]
-        cut_positions = [content.find(marker) for marker in cut_markers if content.find(marker) != -1]
-        if cut_positions:
-            content = content[:min(cut_positions)].rstrip()
+        content = _FRONTMATTER_RE.sub("", content, count=1).strip()
+
+        cut_markers = ("\n## 🔗 知識導航", "\n" + _PART_DIGEST_HEADER)
+        positions = [pos for marker in cut_markers if (pos := content.find(marker)) != -1]
+        if positions:
+            content = content[: min(positions)].rstrip()
 
         content = self._demote_headings(content, levels=2)
         content, _ = run_markdown_quality_checks(content)
         return content.strip()
 
-    def _demote_headings(self, markdown: str, levels: int = 1) -> str:
+    @staticmethod
+    def _demote_headings(markdown: str, levels: int = 1) -> str:
         def replace(match: re.Match) -> str:
             hashes = match.group(1)
             text = match.group(2)
             return f"{'#' * min(len(hashes) + levels, 6)} {text}"
 
-        return re.sub(r'^(#{1,6})\s+(.+)$', replace, markdown, flags=re.MULTILINE)
+        return _HEADING_RE.sub(replace, markdown)

@@ -411,3 +411,55 @@ gantt
 | Bugs fixed | 4 (private API access, LLM re-instantiation, TagManager disk I/O per-call, unused safe_title) |
 | Silent error-swallowing sites fixed | 7 |
 | ClippingWatcher reduction | 555 → 120 LOC (−78%) |
+
+---
+
+## 8. 2026-05-23 Follow-up Review
+
+After the broad refactor, a focused review found two regressions:
+
+1. Mermaid label quoting could corrupt normal arrow syntax.
+2. `InsightAgent` mirror files in `Insights/` could lose canonical report frontmatter.
+
+Both have been fixed and pinned with LLM-free regression coverage.
+
+### Fixes
+
+| Area | Resolution |
+|------|------------|
+| Mermaid node labels | `_MERMAID_NODE_HEAD_RE` now requires node IDs to start with a word/CJK character, so arrow operators such as `-->` are never parsed as node IDs. |
+| Mermaid shape support | Label quoting covers common Mermaid shapes including rectangle, round, circle, rhombus, hexagon, subroutine, cylinder, stadium, and asymmetric nodes. |
+| Insight mirrors | `BaseAgent._write_report()` returns `(path, full_markdown)`, where `full_markdown` is the exact YAML-frontmatter-plus-body document written to disk. |
+| `Insights/` contract | `InsightAgent._mirror_to_insights()` writes `full_markdown` verbatim, making the mirror byte-identical to the canonical `fromLingLing/` report. |
+| Text splitting | `TextSplitter` precomputes fenced-code regions and keeps back-compat helpers for `_inside_code_block()` and `_next_closing_fence_line_end()`. |
+
+### New Regression Tests
+
+| File | Coverage |
+|------|----------|
+| `tests/test_mermaid.py` | Mermaid label quoting, fence repair, idempotency, duplicate broken-block repair. |
+| `tests/test_insight_agent.py` | Insight mirror copies are byte-identical to canonical reports and keep full frontmatter. |
+| `tests/test_text_splitter_fences.py` | Fence-region splitting invariants and legacy helper compatibility. |
+| `tests/test_llm_client.py` | LLMClient helper parsing, cached file reads, part digest fallback/formatting. |
+| `tests/test_ingestion_pipeline.py` | Ingestion helper behavior without LLM/RAG calls. |
+| `tests/test_counter_agent.py` | LingLens deterministic helpers and source-location grounding. |
+
+### Verification Commands
+
+```bash
+python3 -m compileall -q System_Engine
+git diff --check
+PYTHONPATH="$PWD/System_Engine" python3 System_Engine/scratch/test_markdown_quality.py
+```
+
+Full pytest suite:
+
+```bash
+PYTHONPATH="$PWD/System_Engine" python3 -m pytest -q System_Engine/tests
+```
+
+> [!NOTE]
+> The local review environment used for the 2026-05-23 check did not have
+> `pytest` installed, so only compile, diff-check, targeted parser smoke tests,
+> and import-level checks were run there. The pytest suite is documented above
+> as the intended full regression command.

@@ -1,405 +1,517 @@
-import json
-import logging
+"""LLM provider client.
+
+Public API (used across agents/, services/, watchers/, maintenance/):
+
+    LLMClient()
+        .answer_query(query_content, wiki_context, ...) -> str
+        .generate_entity_page(markdown_content=..., filename=..., ...) -> dict | None
+        .translate_tags(tags) -> dict
+        .generate_part_digest(title, part_number, total_parts, raw_chunk, ...) -> dict
+        .generate_synthesis(title, part_digests, final_concepts) -> str
+
+This module is the single seam between the agent layer and the upstream LLM
+provider (vllm / gemini / ollama). All provider-specific branching is
+contained here so the agents stay provider-agnostic.
+"""
+
+from __future__ import annotations
+
 import base64
+import logging
 import mimetypes
+import os
 import re
-import yaml
 from pathlib import Path
-from datetime import datetime
-from core.config import LLM_PROVIDER, PERSONAS_DIR, TEMPLATES_DIR, GUIDELINES_DIR, PROJECT_ROOT, settings
-from core.parser import strip_body_frontmatter, extract_json_object
-from core.utils import digest_value_to_text
+from typing import Any
+
+import yaml
+
+from core.config import (
+    GUIDELINES_DIR,
+    LLM_PROVIDER,
+    PERSONAS_DIR,
+    PROJECT_ROOT,
+    TEMPLATES_DIR,
+    settings,
+)
+from core.parser import extract_json_object, strip_body_frontmatter
+from core.utils import MtimeCache, digest_value_to_text
+
+
+# ─── Constants ────────────────────────────────────────────────────────
+
+_OPENAI_COMPATIBLE_PROVIDERS = frozenset({"vllm", "ollama"})
+
+_LANG_HINT_MAP = {
+    "Traditional Chinese (繁體中文)": {"file": "檔案名稱", "content": "素材內容"},
+    "Japanese (日本語)":              {"file": "ファイル名", "content": "素材内容"},
+}
+_DEFAULT_LABELS = {"file": "Filename", "content": "Content"}
+
+_FENCED_MARKDOWN_RE = re.compile(r'^```(?:markdown|md)?\s*\n(.*?)\n```$', re.DOTALL | re.IGNORECASE)
+_YAML_HEADER_RE = re.compile(r'(?:^|\n)(?:---|```yaml)\s*\n(.*?)\n(?:---|```)\s*(?:\n|$)', re.DOTALL)
+_YAML_MARKDOWN_CLEANUP_RE = re.compile(
+    r'(^|[:\[,\s])[\*\_]{1,2}(.*?)[\*\_]{1,2}(?=[\]\s,:]|$)',
+    re.MULTILINE,
+)
+_H1_TITLE_RE = re.compile(r'^#\s+(.*)', re.MULTILINE)
+
+_PROJECT_IDENTITY_FILES = ("README.md", "SCHEMA.md")
+_PROJECT_IDENTITY_TRUNCATE = 4000
+
+
+# ─── Lazy provider SDK imports ────────────────────────────────────────
+
+_GENAI_MOD = None
+
+
+def _genai():
+    """Lazy-load google.genai (only when gemini provider is active)."""
+    global _GENAI_MOD
+    if _GENAI_MOD is None:
+        from google import genai as _g
+        _GENAI_MOD = _g
+    return _GENAI_MOD
+
+
+# ─── Client ────────────────────────────────────────────────────────────
 
 class LLMClient:
     def __init__(self):
         self.provider = LLM_PROVIDER
+        self._file_cache = MtimeCache()
+
         if self.provider == "vllm":
-            try: from openai import OpenAI
-            except ImportError: raise ImportError("pip install openai")
-            import os
-            self.client = OpenAI(
+            self.client, self.model = self._build_openai_client(
                 base_url=os.getenv("VLLM_API_BASE", "http://192.168.1.103:9000/v1"),
                 api_key=os.getenv("VLLM_API_KEY", "dummy-token"),
-                timeout=300.0
+                model=os.getenv("VLLM_MODEL", "gpt-oss-20b"),
             )
-            self.model = os.getenv("VLLM_MODEL", "gpt-oss-20b")
-        elif self.provider == "gemini":
-            try: from google import genai
-            except ImportError: raise ImportError("pip install google-genai")
-            import os
-            self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-            self.model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
         elif self.provider == "ollama":
-            try: from openai import OpenAI
-            except ImportError: raise ImportError("pip install openai")
-            import os
-            self.client = OpenAI(
+            self.client, self.model = self._build_openai_client(
                 base_url=os.getenv("OLLAMA_API_BASE", "http://localhost:11434/v1"),
                 api_key=os.getenv("OLLAMA_API_KEY", "ollama"),
-                timeout=300.0
+                model=os.getenv("OLLAMA_MODEL", "gemma2:27b"),
             )
-            self.model = os.getenv("OLLAMA_MODEL", "gemma2:27b")
-            
-    def _get_lang_hint(self) -> str:
-        lang = settings.OUTPUT_LANGUAGE.lower()
-        if "chinese" in lang or "中文" in lang: return "Traditional Chinese (繁體中文)"
-        if "japanese" in lang or "日本語" in lang: return "Japanese (日本語)"
-        return settings.OUTPUT_LANGUAGE
-
-    def _load_localized_content(self, file_path: Path) -> str:
-        lang = settings.OUTPUT_LANGUAGE.lower()
-        suffix = ".zh" if ("chinese" in lang or "中文" in lang) else ".ja" if ("japanese" in lang or "日本語" in lang) else ""
-        if suffix:
-            localized_path = file_path.parent / f"{file_path.stem}{suffix}{file_path.suffix}"
-            if localized_path.exists(): return localized_path.read_text('utf-8')
-        return file_path.read_text('utf-8') if file_path.exists() else ""
-
-    def _build_system_prompt(self, instruction_type: str, forced_template: str = None, default_template: str = None, require_yaml_header: bool = True) -> str:
-        role_instructions = self._load_localized_content(PERSONAS_DIR / f"{settings.AGENT_ROLE}.md")
-        
-        if forced_template == "none":
-            template_instructions = ""
+        elif self.provider == "gemini":
+            self.client = _genai().Client(api_key=os.getenv("GEMINI_API_KEY"))
+            self.model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
         else:
-            template_name = (forced_template if forced_template else default_template) or settings.USE_TEMPLATE or "wiki-note"
-            if not template_name.endswith('.md'): template_name += '.md'
-            template_instructions = self._load_localized_content(TEMPLATES_DIR / template_name)
-        viz_instructions = self._load_localized_content(GUIDELINES_DIR / "Visualization.md")
-        
-        lang_hint = self._get_lang_hint()
-        strict_hint = "\n## STRICT ADHERENCE REQUIRED\nYou MUST follow the provided Markdown template exactly. Do NOT add conversational fillers, greetings, or meta-comments. Focus exclusively on structured content." if settings.STRICT_MODE else ""
-        yaml_rule = "Use the standard YAML header (--- title: ... ---) at the beginning of your response." if require_yaml_header else "Do not include YAML frontmatter unless the user explicitly asks for it."
-        common_rules = f"\n## Output Language\nPlease output everything in {lang_hint}.{strict_hint}\n\n## Task\n{instruction_type}\n\n{viz_instructions}\n\n{yaml_rule}"
-        return f"{role_instructions}\n\n{template_instructions}\n\n{common_rules}"
+            raise ValueError(
+                f"Unknown LLM_PROVIDER {self.provider!r}. "
+                f"Expected one of: vllm, gemini, ollama."
+            )
 
-    def _complete_text(self, system_prompt: str, user_msg: str, temperature: float = None, max_tokens: int = None) -> str:
+    @staticmethod
+    def _build_openai_client(*, base_url: str, api_key: str, model: str):
+        try:
+            from openai import OpenAI
+        except ImportError as e:
+            raise ImportError("pip install openai") from e
+        return OpenAI(base_url=base_url, api_key=api_key, timeout=300.0), model
+
+    # ─── Provider dispatch ──────────────────────────────────────────────
+
+    def _complete_text(
+        self,
+        system_prompt: str,
+        user_msg: Any,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
         temperature = settings.CREATIVITY if temperature is None else temperature
         max_tokens = settings.MAX_OUTPUT if max_tokens is None else max_tokens
 
         if self.provider == "gemini":
-            from google import genai
+            genai = _genai()
             response = self.client.models.generate_content(
-                model=self.model, contents=[str(user_msg)],
+                model=self.model,
+                contents=user_msg if isinstance(user_msg, list) else [str(user_msg)],
                 config=genai.types.GenerateContentConfig(
                     system_instruction=system_prompt,
                     temperature=temperature,
-                    max_output_tokens=max_tokens
-                )
+                    max_output_tokens=max_tokens,
+                ),
             )
             return response.text or ""
 
+        return self._openai_chat(system_prompt, user_msg, temperature, max_tokens)
+
+    def _openai_chat(self, system_prompt: str, user_msg: Any, temperature: float, max_tokens: int) -> str:
+        extra_body = {"num_ctx": settings.MEMORY_LIMIT} if self.provider == "ollama" else {}
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg},
+            ],
             temperature=temperature,
             max_tokens=max_tokens,
-            extra_body={"num_ctx": settings.MEMORY_LIMIT} if self.provider == "ollama" else {}
+            extra_body=extra_body,
         )
         return response.choices[0].message.content or ""
 
+    # ─── Localized prompt loading ───────────────────────────────────────
 
-    def _strip_accidental_frontmatter(self, text: str) -> str:
+    def _get_lang_hint(self) -> str:
+        lang = settings.OUTPUT_LANGUAGE.lower()
+        if "chinese" in lang or "中文" in lang:
+            return "Traditional Chinese (繁體中文)"
+        if "japanese" in lang or "日本語" in lang:
+            return "Japanese (日本語)"
+        return settings.OUTPUT_LANGUAGE
+
+    def _localized_suffix(self) -> str:
+        lang = settings.OUTPUT_LANGUAGE.lower()
+        if "chinese" in lang or "中文" in lang:
+            return ".zh"
+        if "japanese" in lang or "日本語" in lang:
+            return ".ja"
+        return ""
+
+    def _load_localized_content(self, file_path: Path) -> str:
+        suffix = self._localized_suffix()
+        if suffix:
+            localized = file_path.parent / f"{file_path.stem}{suffix}{file_path.suffix}"
+            if localized.exists():
+                return self._file_cache.read(localized)
+        return self._file_cache.read(file_path)
+
+    def _load_project_identity(self) -> str:
+        parts = []
+        for filename in _PROJECT_IDENTITY_FILES:
+            content = self._file_cache.read(PROJECT_ROOT / filename)
+            if content:
+                parts.append(content[:_PROJECT_IDENTITY_TRUNCATE])
+        return "\n\n---\n\n".join(parts)
+
+    def _build_system_prompt(
+        self,
+        instruction_type: str,
+        forced_template: str | None = None,
+        default_template: str | None = None,
+        require_yaml_header: bool = True,
+    ) -> str:
+        role_instructions = self._load_localized_content(PERSONAS_DIR / f"{settings.AGENT_ROLE}.md")
+
+        if forced_template == "none":
+            template_instructions = ""
+        else:
+            template_name = (forced_template or default_template) or settings.USE_TEMPLATE or "wiki-note"
+            if not template_name.endswith(".md"):
+                template_name += ".md"
+            template_instructions = self._load_localized_content(TEMPLATES_DIR / template_name)
+
+        viz_instructions = self._load_localized_content(GUIDELINES_DIR / "Visualization.md")
+
+        lang_hint = self._get_lang_hint()
+        strict_hint = (
+            "\n## STRICT ADHERENCE REQUIRED\n"
+            "You MUST follow the provided Markdown template exactly. "
+            "Do NOT add conversational fillers, greetings, or meta-comments. "
+            "Focus exclusively on structured content."
+            if settings.STRICT_MODE else ""
+        )
+        yaml_rule = (
+            "Use the standard YAML header (--- title: ... ---) at the beginning of your response."
+            if require_yaml_header
+            else "Do not include YAML frontmatter unless the user explicitly asks for it."
+        )
+        common_rules = (
+            f"\n## Output Language\nPlease output everything in {lang_hint}.{strict_hint}\n\n"
+            f"## Task\n{instruction_type}\n\n{viz_instructions}\n\n{yaml_rule}"
+        )
+        return f"{role_instructions}\n\n{template_instructions}\n\n{common_rules}"
+
+    # ─── Output cleanup ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _strip_accidental_frontmatter(text: str) -> str:
         if not text:
             return ""
-
         text = text.strip()
-        text = re.sub(r'^```(?:markdown|md)?\s*\n(.*?)\n```$', r'\1', text, flags=re.DOTALL | re.IGNORECASE).strip()
+        text = _FENCED_MARKDOWN_RE.sub(r'\1', text).strip()
         text, _ = strip_body_frontmatter(text)
         return text.strip()
 
-    def _load_project_identity(self) -> str:
-        readme_path = PROJECT_ROOT / "README.md"
-        schema_path = PROJECT_ROOT / "SCHEMA.md"
-        parts = []
-        for path in [readme_path, schema_path]:
-            try:
-                if path.exists():
-                    parts.append(path.read_text(encoding='utf-8')[:4000])
-            except Exception:
-                continue
-        return "\n\n---\n\n".join(parts)
+    @staticmethod
+    def _hybrid_parse(text: str) -> dict:
+        """Find the Wiki Note YAML+body inside a model response."""
+        result = {"title": "Untitled", "tags": [], "type": "entity", "content": text.strip() if text else ""}
+        if not text:
+            return result
 
-    def generate_entity_page(self, markdown_content: str = None, filename: str = None, index_content: str = "", image_path: Path = None, context_hint: str = None) -> dict:
+        yaml_match = _YAML_HEADER_RE.search(text)
+        if yaml_match:
+            yaml_str = yaml_match.group(1).strip()
+            try:
+                # Bold/italic markers can sneak into LLM-produced YAML.
+                clean_yaml_str = _YAML_MARKDOWN_CLEANUP_RE.sub(r'\1"\2"', yaml_str)
+                metadata = yaml.safe_load(clean_yaml_str)
+            except Exception as e:
+                if "```yaml" in yaml_match.group(0):
+                    logging.warning(f"YAML parse failed: {e}\nOffending string:\n{yaml_str}")
+                metadata = None
+
+            if isinstance(metadata, dict):
+                for key in ("title", "tags", "type", "pending_concepts"):
+                    if key in metadata:
+                        result[key] = str(metadata[key]) if key == "title" else metadata[key]
+                result["content"] = text[yaml_match.end():].strip()
+                return result
+
+        title_match = _H1_TITLE_RE.search(text)
+        if title_match:
+            result["title"] = title_match.group(1).strip()
+        return result
+
+    # ─── Public API ─────────────────────────────────────────────────────
+
+    def generate_entity_page(
+        self,
+        markdown_content: str | None = None,
+        filename: str | None = None,
+        index_content: str = "",
+        image_path: Path | None = None,
+        context_hint: str | None = None,
+    ) -> dict | None:
         instruction_type = "Convert this material into a structured Wiki entity page."
         system_prompt = self._build_system_prompt(instruction_type)
-
-        lang_hint = self._get_lang_hint()
-        labels = {
-            "Traditional Chinese (繁體中文)": {"file": "檔案名稱", "content": "素材內容"},
-            "Japanese (日本語)": {"file": "ファイル名", "content": "素材内容"}
-        }.get(lang_hint, {"file": "Filename", "content": "Content"})
-
-        if image_path:
-            mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
-            with open(image_path, "rb") as f:
-                raw_bytes = f.read()
-                
-            if self.provider == "gemini":
-                from google import genai
-                user_msg = [
-                    f"{labels['file']}: {filename}",
-                    genai.types.Part.from_bytes(data=raw_bytes, mime_type=mime_type)
-                ]
-            else:
-                encoded_image = base64.b64encode(raw_bytes).decode('utf-8')
-                user_msg = [
-                    {"type": "text", "text": f"{labels['file']}: {filename}"}, 
-                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded_image}"}}
-                ]
-        else:
-            user_msg = f"{labels['file']}: {filename}\n\n"
-            if context_hint:
-                user_msg += f"[Context]: {context_hint}\n\n"
-            user_msg += f"{labels['content']}:\n{markdown_content}"
+        labels = _LANG_HINT_MAP.get(self._get_lang_hint(), _DEFAULT_LABELS)
 
         try:
             if image_path:
-                # Multimodal path — requires provider-specific payload formatting
-                if self.provider == "gemini":
-                    from google import genai
-                    contents_payload = user_msg if isinstance(user_msg, list) else [str(user_msg)]
-                    response = self.client.models.generate_content(
-                        model=self.model, contents=contents_payload,
-                        config=genai.types.GenerateContentConfig(
-                            system_instruction=system_prompt,
-                            temperature=settings.CREATIVITY,
-                            max_output_tokens=settings.MAX_OUTPUT
-                        )
-                    )
-                    return self._hybrid_parse(response.text)
-                else:
-                    response = self.client.chat.completions.create(
-                        model=self.model,
-                        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
-                        temperature=settings.CREATIVITY,
-                        max_tokens=settings.MAX_OUTPUT,
-                        extra_body={"num_ctx": settings.MEMORY_LIMIT} if self.provider == "ollama" else {}
-                    )
-                    return self._hybrid_parse(response.choices[0].message.content)
+                user_msg = self._build_multimodal_user_msg(image_path, filename, labels)
+                response = self._complete_text(system_prompt, user_msg)
             else:
-                # Text-only path — delegate to unified _complete_text
-                return self._hybrid_parse(self._complete_text(system_prompt, user_msg))
+                user_text = f"{labels['file']}: {filename}\n\n"
+                if context_hint:
+                    user_text += f"[Context]: {context_hint}\n\n"
+                user_text += f"{labels['content']}:\n{markdown_content}"
+                response = self._complete_text(system_prompt, user_text)
+            return self._hybrid_parse(response)
         except Exception as e:
-            logging.error(f"LLM Error: {e}")
+            logging.error(f"LLM Error in generate_entity_page: {e}")
             return None
 
-    def _hybrid_parse(self, text: str) -> dict:
-        """A robust parser that finds the Wiki Note within the model response."""
-        result = {"title": "Untitled", "tags": [], "type": "entity", "content": text.strip() if text else ""}
-        
-        if not text: return result
-        
-        # 1. Find the first YAML block (support both --- and ```yaml)
-        # Using (?:^|\n) to ensure it starts on a new line
-        yaml_match = re.search(r'(?:^|\n)(?:---|```yaml)\s*\n(.*?)\n(?:---|```)\s*(?:\n|$)', text, re.DOTALL)
-        if yaml_match:
-            yaml_str = yaml_match.group(1).strip()
-            
-            try:
-                # Aggressive cleanup: handle markdown symbols at start of line, after brackets, commas, or colons
-                clean_yaml_str = re.sub(r'(^|[:\[,\s])[\*\_]{1,2}(.*?)[\*\_]{1,2}(?=[\]\s,:]|$)', r'\1"\2"', yaml_str, flags=re.MULTILINE)
-                metadata = yaml.safe_load(clean_yaml_str)
-                if isinstance(metadata, dict):
-                    if "title" in metadata: result["title"] = str(metadata["title"])
-                    if "tags" in metadata: result["tags"] = metadata["tags"]
-                    if "type" in metadata: result["type"] = metadata["type"]
-                    if "pending_concepts" in metadata: result["pending_concepts"] = metadata["pending_concepts"]
-                    
-                    # Success! Truncate the content to remove the parsed frontmatter.
-                    result["content"] = text[yaml_match.end():].strip()
-                    return result
-            except Exception as e:
-                # If it explicitly started with ```yaml, it was meant to be YAML but had a syntax error.
-                if "```yaml" in yaml_match.group(0):
-                    logging.warning(f"YAML parse failed: {e}\nOffending string:\n{yaml_str}")
-                # Otherwise, it was likely just a markdown horizontal rule (---). We safely ignore it.
-                pass
-                
-        # 2. Fallback: If no YAML (or it failed), try to find the first H1 title
-        title_match = re.search(r'^#\s+(.*)', text, re.MULTILINE)
-        if title_match:
-            result["title"] = title_match.group(1).strip()
-            # We don't truncate the H1 title from the content here, as it's useful to keep the header.
-        
-        return result
+    def _build_multimodal_user_msg(self, image_path: Path, filename: str | None, labels: dict) -> Any:
+        mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+        raw_bytes = Path(image_path).read_bytes()
 
-    def answer_query(self, query_content: str, wiki_context: str, custom_instruction: str = None, temperature: float = None, forced_template: str = None, default_template: str = None) -> str:
+        if self.provider == "gemini":
+            genai = _genai()
+            return [
+                f"{labels['file']}: {filename}",
+                genai.types.Part.from_bytes(data=raw_bytes, mime_type=mime_type),
+            ]
+        encoded = base64.b64encode(raw_bytes).decode("utf-8")
+        return [
+            {"type": "text", "text": f"{labels['file']}: {filename}"},
+            {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded}"}},
+        ]
+
+    def answer_query(
+        self,
+        query_content: str,
+        wiki_context: str,
+        custom_instruction: str | None = None,
+        temperature: float | None = None,
+        forced_template: str | None = None,
+        default_template: str | None = None,
+    ) -> str:
         if custom_instruction:
-            task = custom_instruction
-            system_prompt = self._build_system_prompt(task, forced_template=forced_template, default_template=default_template, require_yaml_header=False)
+            system_prompt = self._build_system_prompt(
+                custom_instruction,
+                forced_template=forced_template,
+                default_template=default_template,
+                require_yaml_header=False,
+            )
             user_msg = query_content
         else:
             lang_hint = self._get_lang_hint()
-            system_prompt = f"""You are Ling-Ling's question-answering interface.
+            system_prompt = (
+                "You are Ling-Ling's question-answering interface.\n\n"
+                f"Answer the user's question directly in {lang_hint}.\n"
+                "Use the provided knowledge context only as reference material.\n"
+                "Do not rewrite, summarize, or continue the context unless the user explicitly asks for that.\n"
+                "If the context is irrelevant or insufficient, say so briefly and answer from the project identity information.\n"
+                "When the user asks what Ling-Ling is, describe Ling-Ling as an Obsidian-vault-based agentic RAG knowledge system "
+                "driven by Scripture, Skills, and Templates.\n"
+                "Do not include YAML frontmatter.\n"
+            )
+            identity = self._load_project_identity() or "(No project identity available.)"
+            ctx = wiki_context if wiki_context.strip() else "(No relevant context retrieved.)"
+            user_msg = (
+                f"## User Question\n{query_content}\n\n"
+                f"## Project Identity\n{identity}\n\n"
+                f"## Retrieved Knowledge Context\n{ctx}\n"
+            )
 
-Answer the user's question directly in {lang_hint}.
-Use the provided knowledge context only as reference material.
-Do not rewrite, summarize, or continue the context unless the user explicitly asks for that.
-If the context is irrelevant or insufficient, say so briefly and answer from the project identity information.
-When the user asks what Ling-Ling is, describe Ling-Ling as an Obsidian-vault-based agentic RAG knowledge system driven by Scripture, Skills, and Templates.
-Do not include YAML frontmatter.
-"""
-            user_msg = f"""## User Question
-{query_content}
-
-## Project Identity
-{self._load_project_identity() or "(No project identity available.)"}
-
-## Retrieved Knowledge Context
-{wiki_context if wiki_context.strip() else "(No relevant context retrieved.)"}
-"""
         try:
             return self._complete_text(system_prompt, user_msg, temperature=temperature)
         except Exception as e:
+            logging.error(f"LLM Error in answer_query: {e}")
             return f"Error: {e}"
 
     def translate_tags(self, tags: list[str]) -> dict:
         system_prompt = "Return a JSON mapping of {original_tag: english_equivalent} for these tags."
+        user_msg = f"Tags: {tags}"
         try:
             if self.provider == "gemini":
-                from google import genai
+                genai = _genai()
                 response = self.client.models.generate_content(
-                    model=self.model, contents=[f"Tags: {tags}"],
+                    model=self.model,
+                    contents=[user_msg],
                     config=genai.types.GenerateContentConfig(
-                        system_instruction=system_prompt, 
+                        system_instruction=system_prompt,
                         temperature=0.1,
-                        response_mime_type="application/json"
-                    )
+                        response_mime_type="application/json",
+                    ),
                 )
-                return json.loads(response.text)
+                raw = response.text or ""
             else:
                 response = self.client.chat.completions.create(
                     model=self.model,
-                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": f"Tags: {tags}"}],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_msg},
+                    ],
                     response_format={"type": "json_object"},
-                    temperature=0.1
+                    temperature=0.1,
                 )
-                return json.loads(response.choices[0].message.content)
+                raw = response.choices[0].message.content or ""
         except Exception as e:
             logging.warning(f"Tag translation failed: {e}")
             return {}
 
-    def generate_part_digest(self, title: str, part_number: int, total_parts: int, raw_chunk: str, part_note: str, pending_concepts: str = "") -> dict:
-        """Creates a structured map digest for one part of a long document."""
+        # extract_json_object handles fenced JSON (some providers wrap in ```json)
+        # and stray prose around the object.
+        return extract_json_object(raw) or {}
+
+    def generate_part_digest(
+        self,
+        title: str,
+        part_number: int,
+        total_parts: int,
+        raw_chunk: str,
+        part_note: str,
+        pending_concepts: str = "",
+    ) -> dict:
+        """Create a structured map digest for one part of a long document."""
         lang_hint = self._get_lang_hint()
-        system_prompt = f"""You create compact, evidence-aware map digests for a later synthesis pass.
-Output language: {lang_hint}.
-Return JSON only. No Markdown, no YAML, no commentary.
-"""
-        prompt = f"""Document title: {title}
-Part: {part_number}/{total_parts}
-
-Prior unresolved concepts:
-{pending_concepts or "(none)"}
-
-Raw source chunk:
-{raw_chunk}
-
-Generated part note:
-{part_note}
-
-Return one JSON object with this schema:
-{{
-  "part": {part_number},
-  "title": "short part title",
-  "thesis": "the central claim or function of this part",
-  "key_points": ["3-6 concrete points, preserving names, mechanisms, and distinctions"],
-  "evidence": ["2-5 source-grounded details, examples, quotes, terms, or data points"],
-  "terms": ["important proper nouns or technical terms"],
-  "open_questions": ["ambiguities, missing context, contradictions, or follow-up questions"],
-  "handoff": "what the next or final synthesis must remember"
-}}
-
-Rules:
-- Prefer specific details over generic summary language.
-- Do not invent facts that are not supported by the source chunk or generated note.
-- Keep each list item concise but information-rich.
-"""
+        system_prompt = (
+            "You create compact, evidence-aware map digests for a later synthesis pass.\n"
+            f"Output language: {lang_hint}.\n"
+            "Return JSON only. No Markdown, no YAML, no commentary.\n"
+        )
+        prompt = (
+            f"Document title: {title}\n"
+            f"Part: {part_number}/{total_parts}\n\n"
+            "Prior unresolved concepts:\n"
+            f"{pending_concepts or '(none)'}\n\n"
+            "Raw source chunk:\n"
+            f"{raw_chunk}\n\n"
+            "Generated part note:\n"
+            f"{part_note}\n\n"
+            "Return one JSON object with this schema:\n"
+            "{\n"
+            f'  "part": {part_number},\n'
+            '  "title": "short part title",\n'
+            '  "thesis": "the central claim or function of this part",\n'
+            '  "key_points": ["3-6 concrete points, preserving names, mechanisms, and distinctions"],\n'
+            '  "evidence": ["2-5 source-grounded details, examples, quotes, terms, or data points"],\n'
+            '  "terms": ["important proper nouns or technical terms"],\n'
+            '  "open_questions": ["ambiguities, missing context, contradictions, or follow-up questions"],\n'
+            '  "handoff": "what the next or final synthesis must remember"\n'
+            "}\n\n"
+            "Rules:\n"
+            "- Prefer specific details over generic summary language.\n"
+            "- Do not invent facts that are not supported by the source chunk or generated note.\n"
+            "- Keep each list item concise but information-rich.\n"
+        )
 
         try:
-            parsed = extract_json_object(self._complete_text(system_prompt, prompt, temperature=0.2, max_tokens=1800))
+            raw = self._complete_text(system_prompt, prompt, temperature=0.2, max_tokens=1800)
+            parsed = extract_json_object(raw)
             if parsed:
-                parsed.setdefault("part", part_number)
-                parsed.setdefault("title", f"Part {part_number}")
-                parsed.setdefault("thesis", "")
-                parsed.setdefault("key_points", [])
-                parsed.setdefault("evidence", [])
-                parsed.setdefault("terms", [])
-                parsed.setdefault("open_questions", [])
-                parsed.setdefault("handoff", "")
-                return parsed
+                return self._apply_part_digest_defaults(parsed, part_number)
         except Exception as e:
             logging.error(f"Part digest generation failed for {title} part {part_number}: {e}")
 
-        fallback = self._strip_accidental_frontmatter(part_note).strip().splitlines()
-        fallback_lines = [line.strip("#- * \t") for line in fallback if line.strip()][:6]
+        return self._part_digest_fallback(title, part_number, part_note, pending_concepts)
+
+    @staticmethod
+    def _apply_part_digest_defaults(parsed: dict, part_number: int) -> dict:
+        parsed.setdefault("part", part_number)
+        parsed.setdefault("title", f"Part {part_number}")
+        parsed.setdefault("thesis", "")
+        parsed.setdefault("key_points", [])
+        parsed.setdefault("evidence", [])
+        parsed.setdefault("terms", [])
+        parsed.setdefault("open_questions", [])
+        parsed.setdefault("handoff", "")
+        return parsed
+
+    def _part_digest_fallback(self, title: str, part_number: int, part_note: str, pending_concepts: str) -> dict:
+        cleaned = self._strip_accidental_frontmatter(part_note).strip().splitlines()
+        lines = [line.strip("#- * \t") for line in cleaned if line.strip()][:6]
         return {
             "part": part_number,
             "title": f"Part {part_number}",
-            "thesis": fallback_lines[0] if fallback_lines else f"{title} part {part_number}",
-            "key_points": fallback_lines[1:5],
+            "thesis": lines[0] if lines else f"{title} part {part_number}",
+            "key_points": lines[1:5],
             "evidence": [],
             "terms": [],
             "open_questions": [],
-            "handoff": pending_concepts or ""
+            "handoff": pending_concepts or "",
         }
 
-    def _format_part_digest_for_prompt(self, digest) -> str:
+    @staticmethod
+    def _format_part_digest_for_prompt(digest) -> str:
         if isinstance(digest, str):
             return digest
         if not isinstance(digest, dict):
             return str(digest or "(empty digest)")
 
-        def as_text(value) -> str:
-            return digest_value_to_text(value)
-
-        def bullets(values):
+        def bullets(values) -> str:
             if not values:
                 return "- (none)"
             if isinstance(values, str):
                 values = [values]
-            return "\n".join(f"- {as_text(value)}" for value in values if as_text(value)) or "- (none)"
+            rendered = [f"- {digest_value_to_text(v)}" for v in values if digest_value_to_text(v)]
+            return "\n".join(rendered) or "- (none)"
 
         part = digest.get("part", "?")
         title = digest.get("title", f"Part {part}")
-        return f"""### Part {part}: {title}
-Thesis: {as_text(digest.get('thesis', ''))}
-
-Key points:
-{bullets(digest.get('key_points', []))}
-
-Evidence and source-grounded details:
-{bullets(digest.get('evidence', []))}
-
-Terms:
-{bullets(digest.get('terms', []))}
-
-Open questions:
-{bullets(digest.get('open_questions', []))}
-
-Handoff:
-{as_text(digest.get('handoff', '')) or '(none)'}
-"""
+        return (
+            f"### Part {part}: {title}\n"
+            f"Thesis: {digest_value_to_text(digest.get('thesis', ''))}\n\n"
+            "Key points:\n"
+            f"{bullets(digest.get('key_points', []))}\n\n"
+            "Evidence and source-grounded details:\n"
+            f"{bullets(digest.get('evidence', []))}\n\n"
+            "Terms:\n"
+            f"{bullets(digest.get('terms', []))}\n\n"
+            "Open questions:\n"
+            f"{bullets(digest.get('open_questions', []))}\n\n"
+            "Handoff:\n"
+            f"{digest_value_to_text(digest.get('handoff', '')) or '(none)'}\n"
+        )
 
     def generate_synthesis(self, title: str, part_digests: list, final_concepts: str) -> str:
-        """Generates a synthesis from structured part digests."""
+        """Synthesize a long document from per-part digests."""
         lang_hint = self._get_lang_hint()
-        digest_text = "\n\n".join(self._format_part_digest_for_prompt(digest) for digest in part_digests)
-        prompt = f"""You have processed a long document titled "{title}" using a map-reduce pipeline.
-
-Structured digests from each part:
-{digest_text}
-
-Final unresolved concepts or carry-over notes:
-{final_concepts or "(none)"}
-
-Task:
-Write the final synthesis in {lang_hint}.
-"""
-        # Resolve to global default or 'wiki-note' if not set
+        digest_text = "\n\n".join(self._format_part_digest_for_prompt(d) for d in part_digests)
+        prompt = (
+            f'You have processed a long document titled "{title}" using a map-reduce pipeline.\n\n'
+            f"Structured digests from each part:\n{digest_text}\n\n"
+            f"Final unresolved concepts or carry-over notes:\n{final_concepts or '(none)'}\n\n"
+            f"Task:\nWrite the final synthesis in {lang_hint}.\n"
+        )
         system_prompt = self._build_system_prompt(
             "Create a source-grounded synthesis from structured part digests.",
             forced_template=settings.USE_TEMPLATE or "wiki-note",
-            require_yaml_header=False
+            require_yaml_header=False,
         )
 
         try:
@@ -407,4 +519,5 @@ Write the final synthesis in {lang_hint}.
                 self._complete_text(system_prompt, prompt, temperature=0.25, max_tokens=settings.MAX_OUTPUT)
             )
         except Exception as e:
+            logging.error(f"Synthesis failed for {title}: {e}")
             return f"Synthesis failed: {e}"

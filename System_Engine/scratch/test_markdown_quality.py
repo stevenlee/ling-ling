@@ -65,6 +65,18 @@ F --> G["已經正確: 不要重包"]
     assert 'G["已經正確: 不要重包"]' in fixed
 
 
+def test_quotes_mermaid_decision_labels_with_parentheses():
+    source = """```mermaid
+graph TD
+A --> C{ABC (XYZ)}
+```"""
+
+    fixed, fixes = run_markdown_quality_checks(source)
+
+    assert "quoted_mermaid_labels" in fixes
+    assert 'C{"ABC (XYZ)"}' in fixed
+
+
 def test_strips_accidental_body_frontmatter():
     source = """---
 title: Bad
@@ -93,6 +105,7 @@ if __name__ == "__main__":
     test_does_not_swallow_prose_after_bare_mermaid()
     test_preserves_existing_mermaid_fence_and_quotes_label()
     test_quotes_mermaid_labels_with_punctuation()
+    test_quotes_mermaid_decision_labels_with_parentheses()
     test_strips_accidental_body_frontmatter()
     test_repairs_latex_carriage_return_arrow()
     print("markdown quality tests passed")

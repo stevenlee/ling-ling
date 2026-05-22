@@ -20,9 +20,10 @@ Ling-Ling 是一個 file-based agent。你用 Obsidian 管理資料，Ling-Ling 
 - **Source-grounded Parts**：每個 Part 會記錄原文 char/line range，Stitched Article 也會顯示 `Original range`，方便從分析結果回到原始段落。
 - **Stitched Article**：`Title (Stitched).md` 保留各 Part 的主要正文，適合完整閱讀與校對。
 - **Synthesis Note**：`Title (Synthesis).md` 使用 Part digests 進行總合成，並附上 Part Digest Appendix。
+- **Insight mirror reports**：`@ling-insight` 會同時寫入 canonical report 到 `fromLingLing/`，並在 `Insights/` 放一份 byte-identical copy，保留完整 YAML frontmatter 供 Obsidian/Dataview/indexing 使用。
 - **LingLens 概念透鏡**：`@ling-lens` 可用概念視角掃描文章，找出不能只靠 Ctrl+F 找到的語意實例；`@ling-count` 保留為 legacy alias。
 - **Agentic command workflow**：在 `toLingLing/` 放入 `@ling-*` 指令檔，即可觸發巡邏、修復、洞察、合併、備份、還原等任務。支援 `/template` 指令動態切換輸出格式。
-- **Markdown quality checker**：寫入 Obsidian 前會修復常見 Markdown/ Mermaid 問題，並在 metadata 留下 `quality_checker` 紀錄。
+- **Markdown quality checker**：寫入 Obsidian 前會修復常見 Markdown/Mermaid/LaTeX 問題，包含裸 Mermaid block、未關閉 fence、node label quote、body frontmatter 與 `\rightarrow` 這類 carriage-return 轉義錯誤，並在 metadata 留下 `quality_checker` 紀錄。
 - **Knowledge dashboard**：`index.md` 會自動更新，支援自然排序與 Obsidian callouts。
 
 ## 快速開始
@@ -153,6 +154,14 @@ lings-desktop/
 
 ## Refactor Notes
 
+### 2026-05-23 Refactor Follow-up
+
+- `BaseAgent._write_report()` 現在回傳 `(path, full_markdown)`；第二個值是已寫入磁碟的完整文件（YAML frontmatter + body）。需要 mirror report 的 caller 應直接寫這份完整內容。
+- `InsightAgent` 的 `Insights/` mirror copy 改為與 `fromLingLing/` canonical report byte-identical，避免 mirror 失去 `title`、`type`、`version`、`date_created`、`input_chars`、`output_chars` 等 metadata。
+- Mermaid label repair 擴充到多種 node shape（`[]`, `()`, `{}`, `{{}}`, `[[ ]]`, `[()]`, `([ ])` 等），並修正 `A[Start] --> B[End]` 這類箭頭被誤判成 asymmetric node 的 regression。
+- `TextSplitter` 預先計算 fenced-code regions，避免在每個 chunk boundary 重新掃描全部 fence，並保留 legacy helper API 供測試與外部呼叫。
+- 新增 LLM-free regression tests，覆蓋 CounterAgent、IngestionPipeline、Insight mirror、LLMClient helper、Mermaid repair、TextSplitter fence protection。
+
 ### 2026-05-15 Ingestion Pipeline Refactor
 
 - `ClippingWatcher` 現在只負責 filesystem events、busy state、檔案類型分流與歸檔。
@@ -185,7 +194,14 @@ lings-desktop/
 
 ## 開發檢查
 
-語法檢查：
+語法與 whitespace 檢查：
+
+```bash
+python3 -m compileall -q System_Engine
+git diff --check
+```
+
+若使用 `venv`：
 
 ```bash
 venv/bin/python -m py_compile \
@@ -198,6 +214,19 @@ venv/bin/python -m py_compile \
   System_Engine/core/parser.py \
   System_Engine/core/utils.py \
   System_Engine/services/text_splitter.py
+```
+
+pytest regression suite（需要先安裝 pytest）：
+
+```bash
+venv/bin/pip install pytest
+PYTHONPATH="$PWD/System_Engine" venv/bin/python -m pytest -q System_Engine/tests
+```
+
+Markdown/Mermaid smoke test：
+
+```bash
+PYTHONPATH="$PWD/System_Engine" venv/bin/python System_Engine/scratch/test_markdown_quality.py
 ```
 
 LingLens scratch regression：

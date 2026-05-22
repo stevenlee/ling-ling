@@ -1,13 +1,41 @@
-import json
-import re
-import yaml
-import logging
+"""Markdown / Mermaid / JSON helpers used throughout the agent pipeline.
 
-# Cached TagManager singleton — avoids re-reading the tag map file on every call
+The public surface (callers across agents/, services/, watchers/, maintenance/):
+
+    parse_markdown_metadata(content)        -> dict
+    dump_markdown_with_metadata(meta, body) -> str
+    clean_llm_response(text)                -> str
+    run_markdown_quality_checks(text, ...)  -> (str, list[str])
+    repair_mermaid_fences(text)             -> (str, list[str])
+    repair_mermaid_label_quotes(text)       -> (str, list[str])
+    repair_latex_carriage_returns(text)     -> (str, list[str])
+    strip_body_frontmatter(text)            -> (str, list[str])
+    extract_json_array(text)                -> list[dict]
+    extract_json_object(text)               -> dict
+
+Every repair function is idempotent: running it twice yields the same output
+as running it once, and the fix-list will be empty on the second pass. This
+matters because the pipeline used to invoke `run_markdown_quality_checks`
+twice in a row.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from typing import Iterable
+
+import yaml
+
+
+# ─── Tag manager (lazy singleton) ──────────────────────────────────────
+
 _tag_manager_instance = None
 
+
 def _get_tag_manager():
-    """Return a cached TagManager instance (lazy-loaded)."""
+    """Return a cached TagManager instance (lazy import to avoid cycles)."""
     global _tag_manager_instance
     if _tag_manager_instance is None:
         from core.tag_manager import TagManager
@@ -15,75 +43,74 @@ def _get_tag_manager():
         _tag_manager_instance = TagManager(TAG_MAP_FILE)
     return _tag_manager_instance
 
-def parse_markdown_metadata(content: str) -> dict:
-    """
-    Extracts YAML frontmatter and body hashtags from markdown content.
-    Returns a dictionary with 'tags' (list) and any other frontmatter fields.
-    """
-    metadata = {
-        "tags": set()
-    }
-    
-    # 1. Parse YAML Frontmatter
-    frontmatter_match = re.search(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
-    remaining_content = content
-    
-    if frontmatter_match:
-        try:
-            yaml_data = yaml.safe_load(frontmatter_match.group(1))
-            if yaml_data and isinstance(yaml_data, dict):
-                # Merge all YAML data into metadata
-                for key, value in yaml_data.items():
-                    if key == 'tags':
-                        if isinstance(value, list):
-                            for t in value: metadata["tags"].add(str(t).strip())
-                        elif isinstance(value, str):
-                            for t in value.split(','): metadata["tags"].add(t.strip())
-                    else:
-                        metadata[key] = value
-            remaining_content = content[frontmatter_match.end():]
-        except Exception as e:
-            logging.error(f"Parser: Failed to parse YAML frontmatter: {e}")
 
-    # 2. Parse Body Hashtags
-    # Regex: Look for # followed by word characters, ensuring it's not part of a header or URL
-    # We use remaining_content to avoid parsing tags that might be inside YAML strings (though unlikely)
-    hashtags = re.findall(r'(?:^|\s)#([\w\u4e00-\u9fff]+)', remaining_content)
-    for tag in hashtags:
-        metadata["tags"].add(tag.strip())
-        
-    # Convert tags set to sorted list and normalize
+# ─── Frontmatter ───────────────────────────────────────────────────────
+
+_FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*\n', re.DOTALL)
+# Body hashtag: `#word` preceded by SOL or whitespace.  CJK ranges included.
+_HASHTAG_RE = re.compile(r'(?:^|\s)#([\w一-鿿]+)')
+
+
+def parse_markdown_metadata(content: str) -> dict:
+    """Extract YAML frontmatter + body hashtags from a markdown string."""
+    if not content:
+        return {"tags": []}
+
+    tags: set[str] = set()
+    metadata: dict = {}
+    remaining = content
+
+    fm = _FRONTMATTER_RE.search(content)
+    if fm:
+        try:
+            yaml_data = yaml.safe_load(fm.group(1))
+        except Exception as e:
+            logging.error(f"Parser: failed to parse YAML frontmatter: {e}")
+            yaml_data = None
+
+        if isinstance(yaml_data, dict):
+            for key, value in yaml_data.items():
+                if key == "tags":
+                    if isinstance(value, list):
+                        tags.update(str(t).strip() for t in value)
+                    elif isinstance(value, str):
+                        tags.update(t.strip() for t in value.split(","))
+                else:
+                    metadata[key] = value
+        remaining = content[fm.end():]
+
+    tags.update(_HASHTAG_RE.findall(remaining))
+
     tm = _get_tag_manager()
-    metadata["tags"] = sorted(list(set([tm.normalize(t) for t in metadata["tags"] if t])))
-    
+    metadata["tags"] = sorted({tm.normalize(t) for t in tags if t})
     return metadata
 
+
 def dump_markdown_with_metadata(metadata: dict, content: str) -> str:
-    """
-    Combines metadata (as YAML frontmatter) and content into a single markdown string.
-    """
-    # Clean up metadata: convert sets to lists for YAML serialization
-    clean_meta = {}
-    for k, v in metadata.items():
-        if isinstance(v, (set, list)):
-            # Special handling for tags to ensure they are unique and sorted
-            if k == "tags":
-                clean_meta[k] = sorted(list(set(v)))
-            else:
-                clean_meta[k] = list(v)
+    """Serialize metadata + body as a single markdown document."""
+    clean: dict = {}
+    for k, v in (metadata or {}).items():
+        if k == "tags" and isinstance(v, (set, list, tuple)):
+            clean[k] = sorted({str(t) for t in v})
+        elif isinstance(v, set):
+            clean[k] = sorted(v)
         else:
-            clean_meta[k] = v
-            
-    frontmatter = yaml.safe_dump(clean_meta, allow_unicode=True, sort_keys=False).strip()
+            clean[k] = v
+
+    frontmatter = yaml.safe_dump(clean, allow_unicode=True, sort_keys=False).strip()
     return f"---\n{frontmatter}\n---\n\n{content}"
+
+
+# ─── Mermaid: shared regexes ───────────────────────────────────────────
 
 MERMAID_START_RE = re.compile(
     r'^\s*(graph\s+(?:TD|TB|BT|RL|LR)|flowchart\s+(?:TD|TB|BT|RL|LR)|'
     r'sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|mindmap|timeline)\b',
-    re.IGNORECASE
+    re.IGNORECASE,
 )
 
 MARKDOWN_BOUNDARY_RE = re.compile(r'^\s*(#{1,6}\s+|---\s*$|\*\*\*\s*$|___\s*$)')
+
 MERMAID_CONTINUATION_RE = re.compile(
     r'^\s*('
     r'graph\b|flowchart\b|subgraph\b|end\b|style\b|classDef\b|class\b|'
@@ -93,198 +120,335 @@ MERMAID_CONTINUATION_RE = re.compile(
     r'pie\b|mindmap\b|timeline\b|section\b|title\b|%%|'
     r'[\w".()[\]{}:/ -]+\s*(?:-->|---|-.->|==>|--|:|\|)'
     r')',
-    re.IGNORECASE
+    re.IGNORECASE,
 )
-MERMAID_NODE_LABEL_RE = re.compile(
-    r'(?P<node>[\w-]+)\s*'
-    r'(?P<open>[\[{])'
-    r'(?P<label>[^\]\}\n]+)'
-    r'(?P<close>[\]}])'
+
+# Mermaid node-shape opener/closer pairs we know how to quote-repair.
+# Order matters: longer/more-specific openers first so we never match e.g. `[`
+# inside an actual `[[` opener.
+_MERMAID_SHAPES: tuple[tuple[str, str], ...] = (
+    ("[[", "]]"),   # subroutine
+    ("[(", ")]"),   # cylinder
+    ("[/", "/]"),   # parallelogram-alt
+    ("[\\", "\\]"), # parallelogram
+    ("[/", "\\]"),  # trapezoid
+    ("[\\", "/]"),  # trapezoid-alt
+    ("((", "))"),   # circle
+    ("{{", "}}"),   # hexagon
+    ("([", "])"),   # stadium
+    (">",  "]"),    # asymmetric
+    ("[",  "]"),    # rectangle
+    ("(",  ")"),    # round
+    ("{",  "}"),    # rhombus
 )
+
+# Node IDs must start with a word/CJK character — never with `-`. Allowing
+# leading `-` lets the walker match arrow operators like `-->` as if they were
+# node ids, which combined with the `>...]` asymmetric shape silently
+# corrupts `A[X] --> B[Y]` into `A["X"] -->"B[Y"]`.
+_MERMAID_NODE_HEAD_RE = re.compile(r'[\w一-鿿][\w\-一-鿿]*')
+
 LATEX_CR_COMMAND_RE = re.compile(r'\r(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b')
 
+
 def repair_latex_carriage_returns(text: str) -> tuple[str, list[str]]:
-    """
-    Repairs Python/LLM text that contains an actual carriage return where a
-    LaTeX command should have had a literal backslash-r, e.g. $\rightarrow$.
-    """
+    """Repair `\r` that should have been a literal `\\r` (LaTeX command)."""
     if not text:
         return "", []
-
     repaired = LATEX_CR_COMMAND_RE.sub(r'\\r\1', text)
     if repaired != text:
         return repaired, ["repaired_latex_carriage_return"]
     return text, []
 
+
+# ─── Mermaid: label quoting ────────────────────────────────────────────
+
+def _strip_mermaid_comment(line: str) -> str:
+    """Return the portion of a mermaid line before any `%%` comment."""
+    idx = line.find("%%")
+    return line if idx < 0 else line[:idx]
+
+
+def _find_shape_end(text: str, start: int, opener: str, closer: str) -> int:
+    """Return the index of the matching closer for an opener at `start`.
+
+    Skips closers that appear inside double-quoted segments. Returns -1 if no
+    matching closer is found.
+    """
+    i = start + len(opener)
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                if text[i] == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                i += 1
+            i += 1
+            continue
+        if text.startswith(closer, i):
+            return i
+        i += 1
+    return -1
+
+
+def _quote_labels_in_line(line: str) -> tuple[str, bool]:
+    """Quote unquoted labels inside the recognized mermaid shapes on one line.
+
+    Returns (new_line, changed). Comments (everything after `%%`) are left
+    untouched.
+    """
+    code_part = _strip_mermaid_comment(line)
+    comment_part = line[len(code_part):]
+    if not code_part.strip():
+        return line, False
+
+    out: list[str] = []
+    i = 0
+    n = len(code_part)
+    changed = False
+
+    while i < n:
+        # Skip double-quoted strings as-is.
+        if code_part[i] == '"':
+            out.append(code_part[i])
+            i += 1
+            while i < n and code_part[i] != '"':
+                if code_part[i] == "\\" and i + 1 < n:
+                    out.append(code_part[i:i + 2])
+                    i += 2
+                    continue
+                out.append(code_part[i])
+                i += 1
+            if i < n:
+                out.append(code_part[i])
+                i += 1
+            continue
+
+        # Try to match `nodeId<opener>label<closer>` starting here.
+        head = _MERMAID_NODE_HEAD_RE.match(code_part, i)
+        if not head:
+            out.append(code_part[i])
+            i += 1
+            continue
+
+        head_end = head.end()
+        matched = False
+        for opener, closer in _MERMAID_SHAPES:
+            if not code_part.startswith(opener, head_end):
+                continue
+            close_at = _find_shape_end(code_part, head_end, opener, closer)
+            if close_at < 0:
+                continue
+            label_start = head_end + len(opener)
+            label = code_part[label_start:close_at]
+            stripped = label.strip()
+            if stripped and not stripped.startswith(('"', "'")):
+                escaped = stripped.replace("\\", "\\\\").replace('"', '\\"')
+                out.append(code_part[i:head_end])
+                out.append(opener)
+                out.append(f'"{escaped}"')
+                out.append(closer)
+                changed = True
+            else:
+                out.append(code_part[i:close_at + len(closer)])
+            i = close_at + len(closer)
+            matched = True
+            break
+
+        if not matched:
+            out.append(code_part[i:head_end])
+            i = head_end
+
+    return "".join(out) + comment_part, changed
+
+
 def repair_mermaid_label_quotes(text: str) -> tuple[str, list[str]]:
-    """
-    Quotes Mermaid node labels in [] and {} shapes.
-    This is intentionally limited to fenced Mermaid blocks and explicit
-    NodeId[label] / NodeId{label} patterns.
-    """
+    """Quote bare labels inside mermaid node shapes within fenced blocks."""
     if not text:
         return "", []
 
     lines = text.splitlines()
-    output = []
-    fixes = []
+    out: list[str] = []
     in_mermaid = False
-
-    def quote_label(match: re.Match) -> str:
-        label = match.group("label").strip()
-        if label.startswith(('"', "'")):
-            return match.group(0)
-
-        escaped = label.replace("\\", "\\\\").replace('"', '\\"')
-        fixes.append("quoted_mermaid_labels")
-        return f'{match.group("node")}{match.group("open")}"{escaped}"{match.group("close")}'
+    any_changed = False
 
     for line in lines:
         stripped = line.strip().lower()
-        if stripped == "```mermaid":
+        if not in_mermaid and stripped == "```mermaid":
             in_mermaid = True
-            output.append(line)
+            out.append(line)
             continue
         if in_mermaid and stripped == "```":
             in_mermaid = False
-            output.append(line)
+            out.append(line)
             continue
 
-        output.append(MERMAID_NODE_LABEL_RE.sub(quote_label, line) if in_mermaid else line)
+        if in_mermaid:
+            new_line, changed = _quote_labels_in_line(line)
+            any_changed = any_changed or changed
+            out.append(new_line)
+        else:
+            out.append(line)
 
-    return "\n".join(output), sorted(set(fixes))
+    return "\n".join(out), (["quoted_mermaid_labels"] if any_changed else [])
+
+
+# ─── Mermaid: fence repair ────────────────────────────────────────────
+
+_FENCE_RE = re.compile(r'^```(\w*)\s*$')
+
+
+def _is_mermaid_continuation(line: str) -> bool:
+    s = line.strip()
+    return not s or bool(MERMAID_CONTINUATION_RE.match(s))
+
+
+def _build_next_nonempty(lines: list[str]) -> list[int]:
+    """For each index, return the index of the next non-empty line (or len)."""
+    n = len(lines)
+    nxt = [n] * (n + 1)
+    last = n
+    for i in range(n - 1, -1, -1):
+        nxt[i] = i if lines[i].strip() else last
+        last = nxt[i]
+    return nxt
+
 
 def repair_mermaid_fences(text: str) -> tuple[str, list[str]]:
-    """
-    Repairs common Mermaid formatting failures in LLM output.
-    Returns the repaired text and a list of applied fix labels.
-    """
+    """Fix common LLM mistakes around mermaid code fences."""
     if not text:
         return "", []
 
     lines = text.splitlines()
-    output = []
-    fixes = []
+    nxt = _build_next_nonempty(lines)
+    out: list[str] = []
+    fixes: list[str] = []
     in_fence = False
     fence_lang = ""
     i = 0
+    n = len(lines)
 
-    def next_nonempty_line(start: int) -> str:
-        for j in range(start, len(lines)):
-            if lines[j].strip():
-                return lines[j]
-        return ""
+    def peek_next_nonempty(start: int) -> str:
+        idx = nxt[start] if start < len(nxt) else n
+        return lines[idx] if idx < n else ""
 
-    def is_mermaid_continuation(line: str) -> bool:
-        stripped_line = line.strip()
-        return not stripped_line or bool(MERMAID_CONTINUATION_RE.match(stripped_line))
-
-    while i < len(lines):
+    while i < n:
         line = lines[i]
         stripped = line.strip()
-        fence_match = re.match(r'^```(\w*)\s*$', stripped)
+        fence_match = _FENCE_RE.match(stripped)
 
         if fence_match:
-            # If we are closing a mermaid block, check if it's premature.
-            # LLMs sometimes incorrectly close the fence immediately after 'graph TD'.
+            # Closing a mermaid block: drop premature ``` if more mermaid follows.
             if in_fence and fence_lang == "mermaid":
-                following = next_nonempty_line(i + 1)
-                if following and not MARKDOWN_BOUNDARY_RE.match(following) and is_mermaid_continuation(following):
+                following = peek_next_nonempty(i + 1)
+                if (
+                    following
+                    and not MARKDOWN_BOUNDARY_RE.match(following)
+                    and _is_mermaid_continuation(following)
+                ):
                     fixes.append("ignored_premature_mermaid_close")
                     i += 1
                     continue
 
             in_fence = not in_fence
             fence_lang = fence_match.group(1).lower() if in_fence else ""
-            output.append(line)
+            out.append(line)
             i += 1
             continue
 
-        if not in_fence and stripped.lower() == "mermaid" and MERMAID_START_RE.match(next_nonempty_line(i + 1)):
+        # Bare `mermaid` keyword followed by a real diagram → wrap it.
+        if (
+            not in_fence
+            and stripped.lower() == "mermaid"
+            and MERMAID_START_RE.match(peek_next_nonempty(i + 1))
+        ):
             fixes.append("wrapped_bare_mermaid")
-            output.append("```mermaid")
+            out.append("```mermaid")
             i += 1
 
-            while i < len(lines):
+            while i < n:
                 current = lines[i]
-                current_stripped = current.strip()
+                cs = current.strip()
 
-                if current_stripped == "```":
+                if cs == "```":
                     i += 1
                     break
 
-                if current_stripped and MARKDOWN_BOUNDARY_RE.match(current) and output[-1].strip():
+                if cs and MARKDOWN_BOUNDARY_RE.match(current) and out[-1].strip():
                     break
 
-                following = next_nonempty_line(i + 1)
-                if not current_stripped and following and (
-                    MARKDOWN_BOUNDARY_RE.match(following) or not is_mermaid_continuation(following)
+                following = peek_next_nonempty(i + 1)
+                if not cs and following and (
+                    MARKDOWN_BOUNDARY_RE.match(following)
+                    or not _is_mermaid_continuation(following)
                 ):
                     i += 1
                     break
 
-                if current_stripped and not is_mermaid_continuation(current):
+                if cs and not _is_mermaid_continuation(current):
                     break
 
-                output.append(current)
+                out.append(current)
                 i += 1
 
-            while output and not output[-1].strip():
-                output.pop()
-            output.append("```")
+            while out and not out[-1].strip():
+                out.pop()
+            out.append("```")
             continue
 
-        output.append(line)
+        out.append(line)
         i += 1
 
     if in_fence and fence_lang == "mermaid":
         fixes.append("closed_unterminated_mermaid")
-        output.append("```")
+        out.append("```")
 
-    return "\n".join(output), fixes
+    return "\n".join(out), fixes
+
+
+# ─── Misc cleanup ──────────────────────────────────────────────────────
 
 def strip_body_frontmatter(text: str) -> tuple[str, list[str]]:
-    """
-    Removes accidental YAML frontmatter from an LLM body.
-    The real file-level frontmatter is added separately by dump_markdown_with_metadata.
-    """
+    """Remove accidental YAML frontmatter from an LLM-generated body."""
     if not text:
         return "", []
-
     cleaned = re.sub(r'^\s*---\s*\n.*?\n---\s*\n?', '', text.strip(), count=1, flags=re.DOTALL)
     if cleaned != text.strip():
         return cleaned.strip(), ["removed_body_frontmatter"]
     return text, []
 
-def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> tuple[str, list[str]]:
-    """
-    Applies deterministic, low-risk cleanup to generated Markdown.
-    This intentionally avoids semantic rewrites; LLM retry can be layered later.
-    """
-    fixes = []
-    cleaned = text or ""
 
+def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> tuple[str, list[str]]:
+    """Run deterministic cleanup passes. Idempotent."""
+    if not text:
+        return "", []
+
+    fixes: list[str] = []
+    cleaned = text
+
+    pipeline: list = []
     if strip_frontmatter:
-        cleaned, applied = strip_body_frontmatter(cleaned)
+        pipeline.append(strip_body_frontmatter)
+    pipeline.extend([
+        repair_latex_carriage_returns,
+        repair_mermaid_fences,
+        repair_mermaid_label_quotes,
+    ])
+
+    for step in pipeline:
+        cleaned, applied = step(cleaned)
         fixes.extend(applied)
 
-    cleaned, applied = repair_latex_carriage_returns(cleaned)
-    fixes.extend(applied)
-
-    cleaned, applied = repair_mermaid_fences(cleaned)
-    fixes.extend(applied)
-
-    cleaned, applied = repair_mermaid_label_quotes(cleaned)
-    fixes.extend(applied)
-
-    # Trailing whitespace removal (line-level)
-    stripped_lines = [line.rstrip() for line in cleaned.split('\n')]
-    stripped = '\n'.join(stripped_lines)
+    # Line-level trailing whitespace.
+    stripped = "\n".join(line.rstrip() for line in cleaned.split("\n"))
     if stripped != cleaned:
         fixes.append("trailing_whitespace")
         cleaned = stripped
 
-    # Collapse excessive blank lines (3+ → 2)
+    # Collapse 3+ blank lines down to 2.
     collapsed = re.sub(r'\n{3,}', '\n\n', cleaned)
     if collapsed != cleaned:
         fixes.append("excessive_blank_lines")
@@ -292,85 +456,77 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
 
     return cleaned.strip(), fixes
 
+
+_OUTER_FENCE_RE = re.compile(r'^```(\w*)\n(.*?)\n```$', re.DOTALL | re.IGNORECASE)
+_CONTAINER_LANGS = frozenset({"", "markdown", "md", "txt", "text", "markdown-math"})
+
+
 def clean_llm_response(text: str) -> str:
-    """
-    Safely unwraps the LLM response if it's wrapped in a response container (like ```markdown).
-    Preserves functional code blocks (like ```mermaid, ```python).
-    """
+    r"""Unwrap an outer ```markdown container, but keep mermaid/python intact."""
     if not text:
         return ""
-    
     text = text.strip()
-    
-    # Match an outer code block
-    pattern = r'^```(\w*)\n(.*?)\n```$'
-    match = re.match(pattern, text, re.DOTALL | re.IGNORECASE)
-    
-    if match:
-        lang = match.group(1).lower()
-        content = match.group(2).strip()
-        
-        # Whitelist of languages that are likely used as "response containers"
-        # If the block uses one of these (or no language), we unwrap it.
-        # If it's anything else (mermaid, python, etc.), it's likely intended functional code.
-        container_langs = ['', 'markdown', 'md', 'txt', 'text', 'markdown-math']
-        
-        if lang in container_langs:
-            return content
-        else:
-            # It's a functional block (e.g. ```mermaid), keep the wrapper
-            return text
-            
+    match = _OUTER_FENCE_RE.match(text)
+    if not match:
+        return text
+    lang = match.group(1).lower()
+    if lang in _CONTAINER_LANGS:
+        return match.group(2).strip()
     return text
 
 
+# ─── JSON extraction ───────────────────────────────────────────────────
+
+_FENCED_JSON_RE = re.compile(r'```(?:json)?\s*\n(.*?)\n```', re.DOTALL | re.IGNORECASE)
+
+
+def _candidate_payloads(text: str) -> Iterable[str]:
+    """Yield candidate JSON payloads: fenced first (if present), then raw."""
+    fenced = _FENCED_JSON_RE.search(text)
+    if fenced:
+        yield fenced.group(1).strip()
+    yield text.strip()
+
+
 def extract_json_array(text: str) -> list:
-    """Extract a JSON array from LLM output text, handling fenced code blocks."""
+    """Extract a JSON array of dicts from LLM output."""
     if not text:
         return []
-    fenced = re.search(r'```(?:json)?\s*\n(.*?)\n```', text, re.DOTALL | re.IGNORECASE)
-    candidates = [fenced.group(1)] if fenced else []
-    candidates.append(text)
-    for candidate in candidates:
-        candidate = candidate.strip()
+    for candidate in _candidate_payloads(text):
         try:
             parsed = json.loads(candidate)
-            if isinstance(parsed, list):
-                return [item for item in parsed if isinstance(item, dict)]
         except Exception:
-            pass
+            parsed = None
+        if isinstance(parsed, list):
+            return [item for item in parsed if isinstance(item, dict)]
         match = re.search(r'\[.*\]', candidate, re.DOTALL)
         if match:
             try:
                 parsed = json.loads(match.group(0))
-                if isinstance(parsed, list):
-                    return [item for item in parsed if isinstance(item, dict)]
             except Exception:
-                pass
+                continue
+            if isinstance(parsed, list):
+                return [item for item in parsed if isinstance(item, dict)]
     return []
 
 
 def extract_json_object(text: str) -> dict:
-    """Extract a JSON object from LLM output text, handling fenced code blocks."""
+    """Extract a JSON object from LLM output."""
     if not text:
         return {}
-    fenced = re.search(r'```(?:json)?\s*\n(.*?)\n```', text, re.DOTALL | re.IGNORECASE)
-    candidates = [fenced.group(1)] if fenced else []
-    candidates.append(text)
-
     decoder = json.JSONDecoder()
-    for candidate in candidates:
-        candidate = candidate.strip()
+    for candidate in _candidate_payloads(text):
         try:
             parsed = json.loads(candidate)
-            return parsed if isinstance(parsed, dict) else {}
         except Exception:
-            pass
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
         for match in re.finditer(r'\{', candidate):
             try:
                 parsed, _ = decoder.raw_decode(candidate[match.start():])
-                if isinstance(parsed, dict):
-                    return parsed
             except Exception:
                 continue
+            if isinstance(parsed, dict):
+                return parsed
     return {}
