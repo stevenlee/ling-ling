@@ -15,6 +15,13 @@ from core.parser import extract_json_array, extract_json_object
 _WIKILINK_RE = re.compile(r'\[\[(.*?)\]\]')
 _HASHTAG_RE = re.compile(r'#([^\s#]+)')
 _SKILL_FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*\n', re.DOTALL)
+_BOOK_SUFFIX_RE = re.compile(r'\s*\((?:Part\s+\d+|Stitched|Synthesis)\)\s*$', re.IGNORECASE)
+_STITCHED_SUFFIX_RE = re.compile(r'\(Stitched\)\s*$', re.IGNORECASE)
+_SYNTHESIS_SUFFIX_RE = re.compile(r'\(Synthesis\)\s*$', re.IGNORECASE)
+
+# Auto-attached by ingestion_pipeline.py — not content topics, so excluded
+# from tag-cluster sampling (otherwise nearly every run picks one).
+_SYSTEM_TAGS = frozenset({"synthesis", "completed", "stitched", "longform", "perfectpitch"})
 
 
 class InsightAgent(BaseAgent):
@@ -171,6 +178,7 @@ class InsightAgent(BaseAgent):
         top_k = config.get("top_k", 3)
         num_rounds = config.get("num_rounds", 3)
         limit = config.get("limit", 10)
+        chunks_per_book = config.get("chunks_per_book", 5)
 
         from core.ui import ui
 
@@ -180,7 +188,9 @@ class InsightAgent(BaseAgent):
         # and _resolve_target_doc need it; previously each call re-issued the
         # same scan, which dominated runtime on large vaults.
         title_meta = self._fetch_all_title_meta()
-        all_docs = self._get_all_documents(limit * 5, title_meta=title_meta)
+        all_docs = self._get_all_documents(
+            limit * 5, chunks_per_book=chunks_per_book, title_meta=title_meta,
+        )
         if len(all_docs) < 2:
             logging.warning("Monte Carlo: not enough documents for pairing, falling back to single.")
             return self._run_single(config, user_directive, resolved_template)
@@ -280,32 +290,80 @@ class InsightAgent(BaseAgent):
             out.setdefault(title, meta)
         return out
 
-    def _get_all_documents(self, max_docs: int = 50, title_meta: dict | None = None) -> list[dict]:
-        """Get up to max_docs unique-by-title docs, each with one random chunk.
+    def _get_all_documents(
+        self,
+        max_docs: int = 50,
+        chunks_per_book: int = 5,
+        title_meta: dict | None = None,
+    ) -> list[dict]:
+        """Sample books uniformly, then up to `chunks_per_book` concept chunks per book.
 
-        Two-phase approach avoids chunk bias: we first discover unique titles
-        (no chunk content fetched), then fetch one representative chunk per
-        title.
+        Book-level uniform sampling prevents a 143-Part book from drowning
+        out a 5-Part note. Within a sampled book, multiple chunks are drawn
+        from raw Parts (preferred) so the carrier pool reflects concept-level
+        diversity rather than just one distilled summary per book.
         """
         if title_meta is None:
             title_meta = self._fetch_all_title_meta()
         if not title_meta:
             return []
 
-        unique_titles = list(title_meta.keys())
-        if len(unique_titles) > max_docs:
-            unique_titles = random.sample(unique_titles, max_docs)
+        book_to_titles: dict[str, list[str]] = {}
+        for title in title_meta:
+            book_to_titles.setdefault(self._book_root(title), []).append(title)
+
+        book_roots = list(book_to_titles)
+        target_books = max(1, max_docs // max(chunks_per_book, 1))
+        if len(book_roots) > target_books:
+            book_roots = random.sample(book_roots, target_books)
 
         docs = []
-        for title in unique_titles:
-            doc = self._doc_from_rag_title(
-                title,
-                tags=self._parse_stored_tags(title_meta[title].get("tags", "")),
+        for book in book_roots:
+            docs.extend(
+                self._docs_from_book(book_to_titles[book], title_meta, chunks_per_book)
             )
+
+        logging.info(
+            f"Monte Carlo: {len(title_meta)} titles across {len(book_to_titles)} books, "
+            f"loaded {len(docs)} chunks from {len(book_roots)} sampled books "
+            f"(chunks_per_book={chunks_per_book})"
+        )
+        return docs
+
+    @staticmethod
+    def _book_root(title: str) -> str:
+        """Strip `(Part N)` / `(Stitched)` / `(Synthesis)` so book parts collapse."""
+        return _BOOK_SUFFIX_RE.sub('', title or '').strip()
+
+    def _docs_from_book(
+        self,
+        book_titles: list[str],
+        title_meta: dict,
+        k: int,
+    ) -> list[dict]:
+        """Return up to k chunk docs from one book.
+
+        Tier priority: raw Parts > (Synthesis) > (Stitched). Raw Parts win
+        because they preserve unrefined concepts; the distilled tiers compress
+        many concepts into one view and dampen collision novelty.
+        """
+        stitched = [t for t in book_titles if _STITCHED_SUFFIX_RE.search(t)]
+        synthesis = [t for t in book_titles if _SYNTHESIS_SUFFIX_RE.search(t)]
+        stitched_set = set(stitched)
+        synthesis_set = set(synthesis)
+        parts = [t for t in book_titles if t not in stitched_set and t not in synthesis_set]
+
+        tier = parts or synthesis or stitched
+        if not tier:
+            return []
+
+        chosen_titles = random.sample(tier, min(k, len(tier)))
+        docs = []
+        for t in chosen_titles:
+            tags = self._parse_stored_tags(title_meta[t].get("tags", ""))
+            doc = self._doc_from_rag_title(t, tags=tags)
             if doc:
                 docs.append(doc)
-
-        logging.info(f"Monte Carlo: discovered {len(title_meta)} unique titles, loaded {len(docs)} docs")
         return docs
 
     def _doc_from_rag_title(self, title: str, tags: list[str] | None = None) -> dict | None:
@@ -787,13 +845,21 @@ class InsightAgent(BaseAgent):
                 return self._get_random_sample_context(limit)
 
             if not target_tag:
-                tag_counts: Counter = Counter()
+                # Count tags per book, not per chunk — otherwise a 1000-chunk
+                # textbook makes every one of its single-book tags trivially
+                # pass `c >= 2`, and `interesting` ends up dominated by tags
+                # that only exist in one book (defeating "cluster").
+                tag_books: dict[str, set[str]] = {}
                 for meta in results["metadatas"]:
-                    tag_counts.update(self._parse_stored_tags(meta.get("tags", "")))
-                if not tag_counts:
+                    book = self._book_root(meta.get("title", ""))
+                    for tag in self._parse_stored_tags(meta.get("tags", "")):
+                        if tag.lower() in _SYSTEM_TAGS:
+                            continue
+                        tag_books.setdefault(tag, set()).add(book)
+                if not tag_books:
                     return self._get_random_sample_context(limit)
-                interesting = [t for t, c in tag_counts.items() if c >= 2]
-                target_tag = random.choice(interesting if interesting else list(tag_counts))
+                interesting = [t for t, books in tag_books.items() if len(books) >= 2]
+                target_tag = random.choice(interesting if interesting else list(tag_books))
 
             cluster_docs = [
                 doc for doc, meta in zip(results["documents"], results["metadatas"])

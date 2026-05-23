@@ -28,6 +28,20 @@ THOUGHTFUL_USE_LLM_FOR_COUNTER  = os.getenv("THOUGHTFUL_USE_LLM_FOR_COUNTER", "f
 THOUGHTFUL_EMIT_SUMMARY         = os.getenv("THOUGHTFUL_EMIT_SUMMARY", "false").lower() == "true"
 THOUGHTFUL_CACHE_DIR            = os.getenv("THOUGHTFUL_CACHE_DIR") or None
 
+# ─── Embedding Configuration ──────────────────────────────────────────
+EMBEDDING_PROVIDER              = os.getenv("EMBEDDING_PROVIDER", "local").lower()
+EMBEDDING_MODEL                 = os.getenv("EMBEDDING_MODEL") or None
+EMBEDDING_CACHE_ENABLED         = os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() == "true"
+
+# ─── Reranker Configuration ───────────────────────────────────────────
+RERANKER_ENABLED                = os.getenv("RERANKER_ENABLED", "false").lower() == "true"
+RERANKER_MODEL                  = os.getenv("RERANKER_MODEL") or "BAAI/bge-reranker-v2-m3"
+RERANKER_MULTIPLIER             = int(os.getenv("RERANKER_MULTIPLIER", "5"))
+
+# ─── Hybrid Retrieval (BM25 + RRF) ────────────────────────────────────
+HYBRID_RETRIEVAL_ENABLED        = os.getenv("HYBRID_RETRIEVAL_ENABLED", "false").lower() == "true"
+BM25_MULTIPLIER                 = int(os.getenv("BM25_MULTIPLIER", "3"))
+
 # ─── Paths ────────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()

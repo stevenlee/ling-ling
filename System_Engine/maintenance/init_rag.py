@@ -16,11 +16,15 @@ def init_rag_from_scratch(wipe: bool = False):
     Initializes the RAG database by indexing all markdown files in pages/ and Notes/.
     If wipe=True, wipes the existing collection first via ChromaDB API.
     """
-    manager = RAGManager()
+    # Initialize with skip_config_check=True to allow wipe self-recovery
+    manager = RAGManager(skip_config_check=True)
     
     if wipe:
         logging.info("💥 Wiping existing ChromaDB collection...")
         manager.wipe_collection()
+    else:
+        # If not wiping, run the mismatch guard validation check
+        manager._check_metadata_mismatch()
             
     vault_dir = WIKI_VAULT_DIR
     
@@ -41,6 +45,7 @@ def init_rag_from_scratch(wipe: bool = False):
             md_files.extend(list(d.rglob("*.md")))
     
     total = len(md_files)
+    failed_count = 0
     
     for i, filepath in enumerate(md_files, 1):
         try:
@@ -52,12 +57,18 @@ def init_rag_from_scratch(wipe: bool = False):
             meta = parse_markdown_metadata(content)
             tags = meta.get('tags', [])
             
-            manager.add_document(filepath, filepath.stem, content, tags=tags)
+            # Pass strict=True to raise any failures so they are counted
+            manager.add_document(filepath, filepath.stem, content, tags=tags, strict=True)
             logging.info(f"[{i}/{total}] Indexed: {filepath.stem}")
         except Exception as e:
             logging.error(f"Failed to read/index {filepath.name}: {e}")
+            failed_count += 1
             
-    logging.info(f"✨ RAG initialization complete! Total documents in DB: {manager.collection.count()}")
+    if failed_count > 0:
+        logging.error(f"💥 RAG initialization complete with {failed_count} indexing failures!")
+        sys.exit(1)
+    else:
+        logging.info(f"✨ RAG initialization complete! Total documents in DB: {manager.collection.count()}")
 
 if __name__ == "__main__":
     import sys

@@ -64,6 +64,13 @@ class TagManager:
         t = _MULTI_DASH_RE.sub("-", t)
         return t.strip("-")
 
+    @staticmethod
+    def normalize_list(tags) -> list[str]:
+        """Normalize, dedupe, and sort a tag list. Drops empties."""
+        if not tags:
+            return []
+        return sorted({n for n in (TagManager.normalize(t) for t in tags) if n})
+
     def get_equivalent(self, tag: str) -> str | None:
         return self._map.get(self.normalize(tag))
 

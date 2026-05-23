@@ -32,7 +32,18 @@ def main():
     settings.reload()  # Load initial settings from Wiki
     llm_client = LLMClient()
     rag_manager = RAGManager()
-    
+
+    # 2.1. Apply any pending DB migrations before watchers start writing.
+    # Failures are logged but non-fatal (the migration stays pending and
+    # will be retried next launch).
+    from maintenance.migrate import apply_pending
+    try:
+        applied = apply_pending(rag_manager)
+        if applied:
+            ui.info(f"Applied {len(applied)} DB migration(s): {[m['id'] for m in applied]}")
+    except Exception as e:
+        logging.error(f"Migration runner crashed (continuing without migrating): {e}")
+
     # 3. Initialize Watchers
     event_handler_clippings = ClippingWatcher(llm_client, rag_manager)
     event_handler_prompts = PromptWatcher(llm_client, rag_manager)

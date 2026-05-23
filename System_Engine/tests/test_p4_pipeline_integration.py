@@ -322,15 +322,24 @@ class TestChromaDBSectionMetadata:
         # Instead, monkeypatch _upsert_with_retry to capture metadatas.
         captured = {}
 
+        class _FakeBM25:
+            def mark_dirty(self):
+                pass
+
+        class _FakeSplitter:
+            def split_text_with_spans(self, text):
+                return [
+                    {"text": text[i : i + 100], "start": i, "end": min(i + 100, len(text))}
+                    for i in range(0, len(text), 100)
+                ] or [{"text": "", "start": 0, "end": 0}]
+
         class _FakeRAG(RAGManager):
             def __init__(self):
-                pass
+                self.splitter = _FakeSplitter()
+                self._bm25 = _FakeBM25()
 
             def delete_document(self, title):
                 pass
-
-            def _chunk_text(self, text):
-                return [text[i : i + 100] for i in range(0, len(text), 100)] or [""]
 
             def _upsert_with_retry(self, **kwargs):
                 captured["metadatas"] = kwargs["metadatas"]
@@ -354,15 +363,21 @@ class TestChromaDBSectionMetadata:
 
         captured = {}
 
+        class _FakeBM25:
+            def mark_dirty(self):
+                pass
+
+        class _FakeSplitter:
+            def split_text_with_spans(self, text):
+                return [{"text": "chunk1", "start": 0, "end": len(text)}]
+
         class _FakeRAG(RAGManager):
             def __init__(self):
-                pass
+                self.splitter = _FakeSplitter()
+                self._bm25 = _FakeBM25()
 
             def delete_document(self, title):
                 pass
-
-            def _chunk_text(self, text):
-                return ["chunk1"]
 
             def _upsert_with_retry(self, **kwargs):
                 captured["metadatas"] = kwargs["metadatas"]

@@ -154,6 +154,36 @@ lings-desktop/
 
 ## Refactor Notes
 
+### 2026-05-23 RAG Quality & Cost Stack
+
+第二輪 ChromaDB 優化，疊在 embedding provider / mismatch guard / migrations 之上。所有功能都可獨立 toggle，預設行為與舊版兼容。
+
+**Ingestion 端（無腦省錢）**
+- **Content-hash skip**：每個 chunk 多存 `content_hash = sha256(text + tags + section_path)`。`add_document` 比對既有 hash，相符就直接 return，連 delete 都不做。在 Obsidian 反覆存檔但未真的修改內容的情況下，零 embedding call。
+- **Persistent embedding cache**（[services/embedding_cache.py](System_Engine/services/embedding_cache.py)）：SQLite at `Database/embedding_cache.sqlite`，key = `sha256(model || text)`。Cache hit ≈ 0.1ms vs cold ≈ 70ms (local MiniLM)。跨 provider 切換、wipe + reindex 都從 cache 直接回。控制：`EMBEDDING_CACHE_ENABLED`。
+
+**Retrieval 端（品質 pipeline）**
+- **MMR diversity**：`query_notes(diversity: float)` 0~1。over-fetch top_k*3，cosine-MMR 選出 top_k，消除相鄰 chunk 霸佔 top-k 的問題。
+- **Cross-encoder reranker**（[services/reranker.py](System_Engine/services/reranker.py)）：`rerank=True` 時 over-fetch top_k*5，用 cross-encoder（預設 `BAAI/bge-reranker-v2-m3`）重新打分。延遲導入，未啟用時零開銷；sentence-transformers 缺失會 graceful fallback 到向量檢索。控制：`RERANKER_ENABLED` + `RERANKER_MODEL` + `RERANKER_MULTIPLIER`。
+- **Hybrid BM25 + RRF**（[services/bm25_index.py](System_Engine/services/bm25_index.py)）：`hybrid=True` 時並列查向量與 BM25，Reciprocal Rank Fusion 合併。BM25 lazy rebuild from collection，add/delete 觸發 dirty flag；對「@ling-lens」「XYZBLATZ」這類精確 token 查詢顯著回升 recall。控制：`HYBRID_RETRIEVAL_ENABLED` + `BM25_MULTIPLIER`。
+
+三層 retrieval feature 可以自由組合：`hybrid → rerank → MMR` 依此順序套用，rerank 的分數會餵給 MMR 當 relevance 訊號，hybrid 的 RRF 分數同理。
+
+**啟動成本**
+- `_check_metadata_mismatch` 不再每次啟動都 probe 一次 embedding dimension。Provider+model name 已是 authoritative key，匹配時直接 return；只在空 collection 初始化 metadata 時才打一次模型。Gemini 用戶啟動時節省一次 paid API call。
+
+**依賴**
+- `rank_bm25` 已加入 `requirements.txt`（純 Python，~10KB）。
+- `sentence-transformers` 列為選用依賴；只在需要 reranker 時手動 `pip install`。
+
+### 2026-05-23 Monte Carlo Concept-Level Sampling
+
+- `InsightAgent._get_all_documents` 改成兩階段抽樣：先 uniform 抽 Book，再從每本書抽多個 chunk，讓碰撞池呈現概念層級的多樣性，而不是每本書只露出一個代表 chunk。
+- 每本書內的 tier 優先順序反轉為 **raw Parts > (Synthesis) > (Stitched)**，保留未經提煉的原始概念給 Monte Carlo 碰撞使用；distilled tier 只在沒有 Parts 時 fallback。
+- 新增 strategy frontmatter 參數 `chunks_per_book`（預設 5）。設小會更廣（更多本書、每本少抽），設大會更深（少本書、每本多抽）。
+- 同一本書的不同 chunk 仍可配對，允許跨章節的概念碰撞。
+- 移除舊的 `_pick_representative_title`，由新的 `_docs_from_book` 取代。
+
 ### 2026-05-23 Refactor Follow-up
 
 - `BaseAgent._write_report()` 現在回傳 `(path, full_markdown)`；第二個值是已寫入磁碟的完整文件（YAML frontmatter + body）。需要 mirror report 的 caller 應直接寫這份完整內容。

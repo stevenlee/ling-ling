@@ -1,11 +1,33 @@
 import os
+import hashlib
 from pathlib import Path
 import chromadb
 from chromadb.utils import embedding_functions
 import logging
 import time
 from functools import wraps
+from datetime import datetime
 
+from core.config import (
+    EMBEDDING_PROVIDER,
+    EMBEDDING_MODEL,
+    EMBEDDING_CACHE_ENABLED,
+    RERANKER_ENABLED,
+    RERANKER_MODEL,
+    RERANKER_MULTIPLIER,
+    HYBRID_RETRIEVAL_ENABLED,
+    BM25_MULTIPLIER,
+    WIKI_VAULT_DIR,
+    USE_THOUGHTFUL_SPLITTER
+)
+from core.tag_manager import TagManager
+from services.embedding_cache import CachedEmbeddingFunction
+from services.bm25_index import BM25Index, rrf_merge
+
+OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "http://localhost:11434/v1")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Decorator to handle temporary database locks in SQLite
 def retry_on_db_lock(retries=3, delay=1):
     def decorator(func):
         @wraps(func)
@@ -25,56 +47,340 @@ def retry_on_db_lock(retries=3, delay=1):
         return wrapper
     return decorator
 
+
+def get_effective_model_name(provider: str, model: str | None) -> str:
+    if provider == "local":
+        return "all-MiniLM-L6-v2"
+    if provider == "ollama":
+        return model or "nomic-embed-text"
+    if provider == "gemini":
+        return model or "text-embedding-004"
+    return model or "unknown"
+
+
+class GeminiEmbeddingFunction(chromadb.EmbeddingFunction):
+    def __init__(self, api_key: str, model_name: str = "text-embedding-004"):
+        from google import genai
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = model_name
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        response = self.client.models.embed_content(
+            model=self.model_name,
+            contents=input,
+        )
+        return [emb.values for emb in response.embeddings]
+
+    def embed_query(self, input: list[str]) -> list[list[float]]:
+        return self(input)
+
+    def name(self) -> str:
+        return "GeminiEmbeddingFunction"
+
+
+class OllamaEmbeddingFunction(chromadb.EmbeddingFunction):
+    def __init__(self, api_base: str, model_name: str = "nomic-embed-text"):
+        self.api_url = f"{api_base.rstrip('/')}/api/embed"
+        self.model_name = model_name
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        import requests
+        # Truncate each input string to 1200 characters to prevent context length errors in Ollama
+        safe_input = [text[:1200] for text in input]
+        try:
+            resp = requests.post(
+                self.api_url,
+                json={"model": self.model_name, "input": safe_input},
+                timeout=60
+            )
+            if resp.status_code != 200:
+                logging.error(f"Ollama embedding HTTP error {resp.status_code}: {resp.text}")
+            resp.raise_for_status()
+            return resp.json()["embeddings"]
+        except Exception as e:
+            logging.error(f"Ollama embedding failed for model {self.model_name}: {e}")
+            raise e
+
+    def embed_query(self, input: list[str]) -> list[list[float]]:
+        return self(input)
+
+    def name(self) -> str:
+        return "OllamaEmbeddingFunction"
+
+
 class RAGManager:
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: str = None, skip_config_check: bool = False):
         from core.config import DATABASE_DIR
-        # If db_path is provided, use it as a subfolder, otherwise use DATABASE_DIR
         self.db_dir = (DATABASE_DIR / db_path) if db_path else DATABASE_DIR
         self.db_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize ChromaDB persistent client
+        # Initialize persistent client
         self.client = chromadb.PersistentClient(path=str(self.db_dir))
         
-        # Use simple default ONNX embedding model to keep things local and PyTorch-free
-        # Default is all-MiniLM-L6-v2 which is great given its size.
-        self.ef = embedding_functions.DefaultEmbeddingFunction()
-        
-        # Collection for wiki pages
-        self.collection = self.client.get_or_create_collection(
-            name="wiki_pages",
-            embedding_function=self.ef
-        )
+        # Initialize embedding function based on configuration
+        if EMBEDDING_PROVIDER == "gemini":
+            if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
+                raise ValueError("GEMINI_API_KEY is not configured but gemini embedding provider is selected.")
+            self.ef = GeminiEmbeddingFunction(api_key=GEMINI_API_KEY, model_name=EMBEDDING_MODEL or "text-embedding-004")
+        elif EMBEDDING_PROVIDER == "ollama":
+            api_base = OLLAMA_API_BASE
+            if api_base.endswith("/v1"):
+                api_base = api_base[:-3]
+            self.ef = OllamaEmbeddingFunction(api_base=api_base, model_name=EMBEDDING_MODEL or "nomic-embed-text")
+        else:
+            self.ef = embedding_functions.DefaultEmbeddingFunction()
 
-    def _chunk_text(self, text: str, max_chunk_size: int = 1000, overlap: int = 200):
-        """
-        Simple text chunker based on character count with overlap.
-        In production, recursive character splitting or markdown-header splitting is better.
-        """
-        chunks = []
-        start = 0
-        text_length = len(text)
-        
-        while start < text_length:
-            end = start + max_chunk_size
-            
-            # If we're not at the very end, try to find a natural break (like double newline)
-            if end < text_length:
-                break_point = text.rfind("\n\n", start, end)
-                if break_point != -1 and break_point > start + (max_chunk_size // 2):
-                    end = break_point + 2
-                else:
-                    # Fallback to single newline
-                    break_point = text.rfind("\n", start, end)
-                    if break_point != -1 and break_point > start + (max_chunk_size // 2):
-                        end = break_point + 1
-                        
-            chunk = text[start:end].strip()
-            if chunk:
-                chunks.append(chunk)
+        # Wrap with persistent cache so re-embedding the same text (after
+        # wipe, provider swap, or partial reindex) is a SQLite lookup
+        # rather than a fresh model call. Disable via EMBEDDING_CACHE_ENABLED=false.
+        if EMBEDDING_CACHE_ENABLED:
+            self.ef = CachedEmbeddingFunction(
+                inner=self.ef,
+                model_name=get_effective_model_name(EMBEDDING_PROVIDER, EMBEDDING_MODEL),
+                db_path=self.db_dir / "embedding_cache.sqlite",
+            )
+
+        # Collection for wiki pages
+        try:
+            if skip_config_check:
+                try:
+                    self.collection = self.client.get_collection(
+                        name="wiki_pages",
+                        embedding_function=self.ef,
+                    )
+                except Exception:
+                    self.collection = self.client.create_collection(
+                        name="wiki_pages",
+                        embedding_function=self.ef
+                    )
+            else:
+                self.collection = self.client.get_or_create_collection(
+                    name="wiki_pages",
+                    embedding_function=self.ef
+                )
+        except ValueError as e:
+            if "embedding function" in str(e).lower() or "conflict" in str(e).lower():
+                curr_provider = EMBEDDING_PROVIDER
+                curr_model = get_effective_model_name(curr_provider, EMBEDDING_MODEL)
+                try:
+                    old_coll = self.client.get_collection(name="wiki_pages")
+                    db_metadata = old_coll.metadata
+                    if not db_metadata or "embedding_provider" not in db_metadata:
+                        db_provider = "local"
+                        db_model = "all-MiniLM-L6-v2"
+                        db_dim = 384
+                    else:
+                        db_provider = db_metadata.get("embedding_provider")
+                        db_model = db_metadata.get("embedding_model")
+                        db_dim = int(db_metadata.get("embedding_dimension") or 0)
+                except Exception:
+                    db_provider, db_model, db_dim = "unknown", "unknown", "unknown"
                 
-            start = end - overlap
+                error_msg = (
+                    f"Embedding configuration mismatch detected!\n"
+                    f"Database collection has: provider={db_provider}, model={db_model}, dimension={db_dim}\n"
+                    f"Current config expects: provider={curr_provider}, model={curr_model}\n"
+                    f"Please wipe the database and perform a full re-index to apply changes:\n"
+                    f"run 'python System_Engine/maintenance/init_rag.py --wipe'"
+                )
+                logging.critical(error_msg)
+                raise ValueError(error_msg) from e
+            else:
+                raise e
+
+        # Initialize appropriate text splitter
+        if USE_THOUGHTFUL_SPLITTER:
+            from services.thoughtful_splitter import ThoughtfulSplitter
+            self.splitter = ThoughtfulSplitter(
+                default_use_llm=False,
+                default_emit_summary=False
+            )
+        else:
+            from services.text_splitter import TextSplitter
+            self.splitter = TextSplitter()
+
+        # Lazy-loaded cross-encoder; first query with rerank=True triggers
+        # the import + model download. ``False`` sentinel means we already
+        # tried and failed (don't keep retrying).
+        self._reranker = None
+
+        # BM25 lexical index for hybrid retrieval; rebuilt lazily.
+        self._bm25 = BM25Index(self.collection)
+
+        if not skip_config_check:
+            self._check_metadata_mismatch()
+
+    def _get_reranker(self):
+        if self._reranker is False:
+            return None
+        if self._reranker is None:
+            try:
+                from services.reranker import CrossEncoderReranker
+                self._reranker = CrossEncoderReranker(RERANKER_MODEL)
+            except ImportError as e:
+                logging.warning(
+                    f"Reranker disabled: sentence-transformers not installed ({e})"
+                )
+                self._reranker = False
+                return None
+            except Exception as e:
+                logging.warning(f"Reranker init failed, falling back to vector-only: {e}")
+                self._reranker = False
+                return None
+        return self._reranker
+
+    def _check_metadata_mismatch(self):
+        """Validate the persisted embedding config matches the current one.
+
+        We avoid probing the embedding model on every startup — provider and
+        model name (recorded in collection metadata) are authoritative. The
+        dimension probe only runs when we genuinely need it: an empty
+        collection that needs its metadata initialised. That makes startup
+        a no-op for steady-state Gemini/Ollama setups (no wasted API call).
+        """
+        curr_provider = EMBEDDING_PROVIDER
+        curr_model = get_effective_model_name(curr_provider, EMBEDDING_MODEL)
+        db_metadata = self.collection.metadata or {}
+
+        has_complete_meta = all(
+            key in db_metadata
+            for key in ("embedding_provider", "embedding_model", "embedding_dimension")
+        )
+        if (
+            has_complete_meta
+            and db_metadata.get("embedding_provider") == curr_provider
+            and db_metadata.get("embedding_model") == curr_model
+        ):
+            return
+
+        if self.collection.count() == 0:
+            try:
+                curr_dim = len(self.ef(["test"])[0])
+            except Exception as e:
+                logging.warning(f"Could not automatically detect embedding dimension: {e}")
+                curr_dim = 768 if curr_provider in ("ollama", "gemini") else 384
+            new_meta = {
+                **db_metadata,
+                "embedding_provider": curr_provider,
+                "embedding_model": curr_model,
+                "embedding_dimension": curr_dim,
+            }
+            self.collection.modify(metadata=new_meta)
+            return
+
+        if not db_metadata or "embedding_provider" not in db_metadata:
+            db_provider = "local"
+            db_model = "all-MiniLM-L6-v2"
+            db_dim = 384
+        else:
+            db_provider = db_metadata.get("embedding_provider")
+            db_model = db_metadata.get("embedding_model")
+            db_dim = int(db_metadata.get("embedding_dimension") or 0)
+
+        if db_provider == curr_provider and db_model == curr_model:
+            return
+
+        error_msg = (
+            f"Embedding configuration mismatch detected!\n"
+            f"Database collection has: provider={db_provider}, model={db_model}, dimension={db_dim}\n"
+            f"Current config expects: provider={curr_provider}, model={curr_model}\n"
+            f"Please wipe the database and perform a full re-index to apply changes:\n"
+            f"run 'python System_Engine/maintenance/init_rag.py --wipe'"
+        )
+        logging.critical(error_msg)
+        raise ValueError(error_msg)
+
+    @staticmethod
+    def _get_doc_id(filepath: Path) -> str:
+        try:
+            abs_filepath = Path(filepath).resolve()
+            abs_vault_dir = WIKI_VAULT_DIR.resolve()
+            rel_path = abs_filepath.relative_to(abs_vault_dir)
+        except Exception:
+            try:
+                rel_path = Path(filepath).relative_to(WIKI_VAULT_DIR)
+            except Exception:
+                rel_path = Path(filepath)
+        
+        posix_path = str(rel_path).replace("\\", "/")
+        return hashlib.sha256(posix_path.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _sanitize_tag_key(tag_name: str) -> str:
+        tag = TagManager.normalize(tag_name)
+        if not tag:
+            return ""
+        sanitized = tag.replace("/", "_").replace("\\", "_")
+        res = "".join(c for c in sanitized if c.isalnum() or c in ("_", "-"))
+        while "__" in res:
+            res = res.replace("__", "_")
+        while "--" in res:
+            res = res.replace("--", "-")
+        res = res.strip("_").strip("-")
+        return f"tag_{res}" if res else ""
+
+    def _build_where_clause(
+        self,
+        tags: list[str] | None = None,
+        section_path: list[str] | None = None,
+        where_filter: dict | None = None
+    ) -> dict | None:
+        filters = []
+        
+        if tags:
+            for t in tags:
+                san_tag = self._sanitize_tag_key(t)
+                if san_tag:
+                    filters.append({san_tag: True})
+                    
+        if section_path:
+            for idx, level in enumerate(section_path):
+                if idx < 6:
+                    filters.append({f"section_l{idx + 1}": level.lower().strip()})
+                    
+        if where_filter:
+            filters.append(where_filter)
             
-        return chunks
+        if not filters:
+            return None
+        if len(filters) == 1:
+            return filters[0]
+        return {"$and": filters}
+
+    @staticmethod
+    def _compute_content_hash(
+        text: str,
+        norm_tags: list[str],
+        section_path: list[str] | None,
+    ) -> str:
+        """Fingerprint everything that would change the indexed output.
+
+        Text + tags + section_path are joined with NUL separators so that
+        e.g. an empty tag list cannot collide with a one-tag list whose
+        sole element is the empty string.
+        """
+        payload = "\x00".join([
+            text,
+            ",".join(norm_tags),
+            ",".join(section_path or []),
+        ])
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _get_existing_content_hash(self, doc_id: str) -> str | None:
+        """Return the content_hash of any existing chunk for this doc_id, or None."""
+        try:
+            results = self.collection.get(
+                where={"doc_id": doc_id},
+                limit=1,
+                include=["metadatas"],
+            )
+        except Exception as e:
+            logging.debug(f"content_hash lookup failed for {doc_id[:8]}: {e}")
+            return None
+        metadatas = results.get("metadatas") or []
+        if not metadatas:
+            return None
+        return (metadatas[0] or {}).get("content_hash")
 
     def add_document(
         self,
@@ -83,105 +389,414 @@ class RAGManager:
         text: str,
         tags: list[str] = None,
         section_path: list[str] | None = None,
+        strict: bool = False,
+        force: bool = False,
     ):
-        """
-        Chunk and add a markdown document to the ChromaDB.
+        """Chunk and add a markdown document to the ChromaDB.
 
-        `section_path` (ThoughtfulSplitter P4) is the heading hierarchy this
-        document/part lives under, e.g. ["Chapter 1", "Background"]. It's
-        encoded into chunk metadata as `>chapter 1>background>` so RAG
-        queries can structurally filter by section.
+        Unchanged docs short-circuit via content_hash so reindex runs don't
+        re-embed the entire vault. Pass ``force=True`` to bypass the check
+        (used by migrations or after schema changes).
         """
-        import time
-        from datetime import datetime
         try:
-            # 1. Clean up stale chunks for this title first (Zombie Prevention)
+            doc_id = self._get_doc_id(filepath)
+            timestamp = datetime.now().isoformat()
+            norm_tags = TagManager.normalize_list(tags)
+            tags_display = f",{','.join(norm_tags)}," if norm_tags else ""
+
+            content_hash = self._compute_content_hash(text, norm_tags, section_path)
+            if not force:
+                existing = self._get_existing_content_hash(doc_id)
+                if existing == content_hash:
+                    logging.info(f"Skipped '{title}' ({doc_id[:8]}): content unchanged")
+                    return
+
+            self.delete_document(doc_id)
             self.delete_document(title)
 
-            timestamp = datetime.now().isoformat()
-            chunks = self._chunk_text(text)
-            if not chunks:
+            try:
+                rel_path = Path(filepath).resolve().relative_to(WIKI_VAULT_DIR.resolve())
+            except Exception:
+                try:
+                    rel_path = Path(filepath).relative_to(WIKI_VAULT_DIR)
+                except Exception:
+                    rel_path = Path(filepath)
+            source_path = str(rel_path).replace("\\", "/")
+
+            if USE_THOUGHTFUL_SPLITTER:
+                ts_chunks = self.splitter.split_thoughtful(text)
+                chunks_data = []
+                for ts_chunk in ts_chunks:
+                    s_path = list(ts_chunk.section_path) if ts_chunk.section_path else (section_path or [])
+                    boundary = ts_chunk.boundary_type.label
+                    chunks_data.append({
+                        "text": ts_chunk.text,
+                        "start": ts_chunk.start,
+                        "end": ts_chunk.end,
+                        "section_path": s_path,
+                        "boundary_type": boundary,
+                    })
+            else:
+                ts_chunks = self.splitter.split_text_with_spans(text)
+                chunks_data = []
+                for ts_chunk in ts_chunks:
+                    chunks_data.append({
+                        "text": ts_chunk["text"],
+                        "start": ts_chunk["start"],
+                        "end": ts_chunk["end"],
+                        "section_path": section_path or [],
+                        "boundary_type": "paragraph",
+                    })
+
+            if not chunks_data:
                 return
 
             ids = []
             documents = []
             metadatas = []
-            # Lowercase + `>...>` so ChromaDB `where` clauses can use
-            # `$contains: ">background>"` to find content in that section.
-            section_marker = (
-                ">" + ">".join(s.lower().strip() for s in section_path) + ">"
-                if section_path else ""
-            )
 
-            for i, chunk in enumerate(chunks):
-                ids.append(f"{title}_chunk_{i}")
-                documents.append(chunk)
+            for chunk_info in chunks_data:
+                start = chunk_info["start"]
+                end = chunk_info["end"]
+                chunk_text = chunk_info["text"]
+                s_path = chunk_info["section_path"]
+                boundary = chunk_info["boundary_type"]
+
+                # Lowercase + `>...>` so ChromaDB `where` clauses can use
+                # `$contains: ">background>"` to find content in that section.
+                section_marker = (
+                    ">" + ">".join(s.lower().strip() for s in s_path) + ">"
+                    if s_path else ""
+                )
+
+                chunk_id = f"{doc_id}_chunk_{start}_{end}"
+                ids.append(chunk_id)
+                documents.append(chunk_text)
+
                 meta = {
                     "source": filepath.name,
+                    "source_path": source_path,
+                    "doc_id": doc_id,
                     "title": title,
-                    "chunk_index": i,
+                    "start_offset": start,
+                    "end_offset": end,
                     "timestamp": timestamp,
-                    "tags": f",{','.join(tags)}," if tags else "",
+                    "tags": tags_display,
                     "section_path": section_marker,
+                    "boundary_type": boundary,
+                    "content_hash": content_hash,
                 }
+
+                # Add boolean tag fields for sanitization
+                for tag in norm_tags:
+                    san_tag = self._sanitize_tag_key(tag)
+                    if san_tag:
+                        meta[san_tag] = True
+
+                # Add section level mappings (l1 to l6)
+                meta["section_depth"] = len(s_path)
+                for idx in range(6):
+                    key = f"section_l{idx + 1}"
+                    if idx < len(s_path):
+                        meta[key] = s_path[idx].lower().strip()
+                    else:
+                        meta[key] = ""
+                
+                meta["section_path_full"] = " > ".join(s.lower().strip() for s in s_path)
                 metadatas.append(meta)
 
-            # Upsert overwrites chunks with same ID if they are updated
             self._upsert_with_retry(
                 documents=documents,
                 metadatas=metadatas,
                 ids=ids
             )
-            logging.info(f"Added '{title}' to RAG DB ({len(chunks)} chunks)")
+            self._bm25.mark_dirty()
+            logging.info(f"Added document '{title}' ({doc_id[:8]}) to RAG DB ({len(chunks_data)} chunks)")
+
         except Exception as e:
             logging.error(f"Failed to add document '{title}' to RAG: {e}")
+            if strict:
+                raise e
 
-    def query_similar_notes(self, query_text: str, top_k: int = 3) -> list[str]:
-        """
-        Search for most relevant chunks.
-        Returns a list of markdown formatted strings.
+    def query_similar_notes(
+        self,
+        query_text: str,
+        top_k: int = 3,
+        tags: list[str] | None = None,
+        section_path: list[str] | None = None,
+        diversity: float = 0.0,
+        rerank: bool | None = None,
+        hybrid: bool | None = None,
+    ) -> list[str]:
+        """Search for most relevant chunks. Returns markdown formatted strings."""
+        try:
+            results = self.query_notes(
+                query_text, top_k=top_k, tags=tags,
+                section_path=section_path, diversity=diversity,
+                rerank=rerank, hybrid=hybrid,
+            )
+            context_pieces = []
+            for item in results:
+                meta = item["metadata"]
+                doc = item["text"]
+                source_title = meta.get('title', 'Unknown Source')
+                context_pieces.append(f"### [來自筆記: {source_title}]\n{doc}")
+            return context_pieces
+        except Exception as e:
+            logging.error(f"RAG query similar notes failed: {e}")
+            return []
+
+    def query_notes(
+        self,
+        query_text: str,
+        top_k: int = 3,
+        tags: list[str] | None = None,
+        section_path: list[str] | None = None,
+        diversity: float = 0.0,
+        rerank: bool | None = None,
+        hybrid: bool | None = None,
+    ) -> list[dict]:
+        """Query RAG returning structured dict lists.
+
+        Pipeline composes (in order): vector retrieve → (optional BM25
+        supplement + RRF) → (optional cross-encoder rerank) → (optional
+        MMR diversification). Each stage is independently togglable; the
+        ``None`` defaults respect the corresponding ``*_ENABLED`` env.
+
+        - ``diversity`` (0.0–1.0): MMR weight. 0 = relevance-only.
+        - ``rerank``: cross-encoder re-scoring. Best precision win.
+        - ``hybrid``: BM25 + vector fused via RRF. Catches proper nouns
+          and code identifiers that pure vector misses.
         """
         try:
-            results = self.collection.query(
-                query_texts=[query_text],
-                n_results=top_k
+            use_rerank = rerank if rerank is not None else RERANKER_ENABLED
+            reranker = self._get_reranker() if use_rerank else None
+            if use_rerank and reranker is None:
+                use_rerank = False
+            use_hybrid = hybrid if hybrid is not None else HYBRID_RETRIEVAL_ENABLED
+
+            where = self._build_where_clause(tags=tags, section_path=section_path)
+
+            pool_factor = max(
+                RERANKER_MULTIPLIER if use_rerank else 1,
+                BM25_MULTIPLIER if use_hybrid else 1,
+                3 if diversity > 0 else 1,
             )
-            
-            documents = results.get('documents', [[]])[0]
-            metadatas = results.get('metadatas', [[]])[0]
-            
-            context_pieces = []
-            for i, doc in enumerate(documents):
-                source_title = metadatas[i].get('title', 'Unknown Source') if metadatas and i < len(metadatas) else 'Unknown Source'
-                context_pieces.append(f"### [來自筆記: {source_title}]\n{doc}")
-                
-            return context_pieces
-            
+            if pool_factor > 1:
+                n_pool = max(top_k * pool_factor, top_k + 5)
+            else:
+                n_pool = top_k
+
+            need_embeddings = diversity > 0
+            include = ["documents", "metadatas", "distances"]
+            if need_embeddings:
+                include.append("embeddings")
+
+            vec_results = self.collection.query(
+                query_texts=[query_text],
+                n_results=n_pool,
+                where=where,
+                include=include,
+            )
+
+            vec_ids = vec_results.get('ids', [[]])[0]
+            documents = vec_results.get('documents', [[]])[0]
+            metadatas = vec_results.get('metadatas', [[]])[0]
+            distances = vec_results.get('distances', [[]])[0]
+            embeddings = vec_results.get('embeddings', [[]])[0] if need_embeddings else []
+
+            by_id: dict[str, dict] = {}
+            for i, cid in enumerate(vec_ids):
+                c = {
+                    "text": documents[i] if i < len(documents) else "",
+                    "metadata": metadatas[i] if i < len(metadatas) else {},
+                    "distance": distances[i] if i < len(distances) else 0.0,
+                    "id": cid,
+                }
+                if need_embeddings and i < len(embeddings):
+                    c["embedding"] = embeddings[i]
+                by_id[cid] = c
+
+            bm25_ids: list[str] = []
+            rrf_scores: dict[str, float] = {}
+            if use_hybrid:
+                bm25_hits = self._bm25.query(query_text, top_k * BM25_MULTIPLIER)
+                raw_ids = [cid for cid, _ in bm25_hits]
+                if where and raw_ids:
+                    try:
+                        filtered = self.collection.get(ids=raw_ids, where=where, include=[])
+                        allowed = set(filtered.get("ids", []) or [])
+                        bm25_ids = [cid for cid in raw_ids if cid in allowed]
+                    except Exception as e:
+                        logging.debug(f"BM25 where-filter failed, using unfiltered: {e}")
+                        bm25_ids = raw_ids
+                else:
+                    bm25_ids = raw_ids
+
+                missing = [cid for cid in bm25_ids if cid not in by_id]
+                if missing:
+                    miss_include = ["documents", "metadatas"]
+                    if need_embeddings:
+                        miss_include.append("embeddings")
+                    try:
+                        miss = self.collection.get(ids=missing, include=miss_include)
+                        m_ids = miss.get("ids", []) or []
+                        m_docs = miss.get("documents", []) or []
+                        m_metas = miss.get("metadatas", []) or []
+                        m_embs = miss.get("embeddings", []) or []
+                        for i, cid in enumerate(m_ids):
+                            new_c = {
+                                "text": m_docs[i] if i < len(m_docs) else "",
+                                "metadata": m_metas[i] if i < len(m_metas) else {},
+                                "distance": 0.0,
+                                "id": cid,
+                            }
+                            if need_embeddings and i < len(m_embs):
+                                new_c["embedding"] = m_embs[i]
+                            by_id[cid] = new_c
+                    except Exception as e:
+                        logging.debug(f"BM25 chunk fetch failed: {e}")
+
+                rrf_scores = rrf_merge([vec_ids, bm25_ids])
+                ordered_ids = sorted(by_id.keys(), key=lambda c: rrf_scores.get(c, 0.0), reverse=True)
+                candidates = [by_id[cid] for cid in ordered_ids]
+            else:
+                candidates = [by_id[cid] for cid in vec_ids if cid in by_id]
+
+            if use_rerank and candidates:
+                scores = reranker.score(query_text, [c["text"] for c in candidates])
+                for c, s in zip(candidates, scores):
+                    c["rerank_score"] = s
+                candidates.sort(key=lambda x: x.get("rerank_score", 0.0), reverse=True)
+
+            if diversity > 0 and candidates:
+                lambda_param = max(0.0, min(1.0, 1.0 - diversity))
+                if use_rerank:
+                    relevance = [c.get("rerank_score", 0.0) for c in candidates]
+                    candidates = self._mmr_select(
+                        candidates, top_k, lambda_param, relevance=relevance,
+                    )
+                elif use_hybrid:
+                    relevance = [rrf_scores.get(c["id"], 0.0) for c in candidates]
+                    candidates = self._mmr_select(
+                        candidates, top_k, lambda_param, relevance=relevance,
+                    )
+                else:
+                    query_emb = self.ef([query_text])[0]
+                    candidates = self._mmr_select(
+                        candidates, top_k, lambda_param, query_emb=query_emb,
+                    )
+
+            for c in candidates:
+                c.pop("embedding", None)
+
+            return candidates[:top_k]
         except Exception as e:
             logging.error(f"RAG query failed: {e}")
             return []
+
+    @staticmethod
+    def _mmr_select(
+        candidates: list[dict],
+        top_k: int,
+        lambda_param: float,
+        *,
+        query_emb=None,
+        relevance: list[float] | None = None,
+    ) -> list[dict]:
+        """Maximal Marginal Relevance over candidate embeddings.
+
+        Pass ``query_emb`` to derive relevance from cosine-to-query, OR
+        ``relevance`` to use a precomputed score (e.g. reranker output).
+        Cosine sim for the diversity term is computed on length-normalized
+        vectors so this works regardless of ChromaDB's hnsw:space setting.
+        """
+        import numpy as np
+
+        usable_with_idx = [
+            (i, c) for i, c in enumerate(candidates) if c.get("embedding") is not None
+        ]
+        if not usable_with_idx:
+            return candidates[:top_k]
+        usable = [c for _, c in usable_with_idx]
+
+        embs = np.asarray([c["embedding"] for c in usable], dtype=np.float32)
+        norms = np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9
+        embs_norm = embs / norms
+
+        if relevance is not None:
+            rel = np.asarray(
+                [relevance[i] for i, _ in usable_with_idx], dtype=np.float32,
+            )
+            if len(rel) > 1:
+                lo, hi = float(rel.min()), float(rel.max())
+                rel = (rel - lo) / (hi - lo) if hi > lo else np.zeros_like(rel)
+        elif query_emb is not None:
+            q = np.asarray(query_emb, dtype=np.float32)
+            q_norm = q / (np.linalg.norm(q) + 1e-9)
+            rel = embs_norm @ q_norm
+        else:
+            raise ValueError("_mmr_select requires either query_emb or relevance")
+
+        selected_idx: list[int] = []
+        remaining = list(range(len(usable)))
+
+        while remaining and len(selected_idx) < top_k:
+            if not selected_idx:
+                best = remaining[int(np.argmax(rel[remaining]))]
+            else:
+                sel = embs_norm[selected_idx]
+                cand = embs_norm[remaining]
+                sim_to_selected = (cand @ sel.T).max(axis=1)
+                mmr = lambda_param * rel[remaining] - (1 - lambda_param) * sim_to_selected
+                best = remaining[int(np.argmax(mmr))]
+            selected_idx.append(best)
+            remaining.remove(best)
+
+        return [usable[i] for i in selected_idx]
 
     @retry_on_db_lock()
     def _upsert_with_retry(self, **kwargs):
         self.collection.upsert(**kwargs)
 
     @retry_on_db_lock()
-    def delete_document(self, title: str):
-        """
-        Delete all chunks associated with a specific document title.
-        """
-        try:
-            self.collection.delete(where={"title": title})
-            logging.info(f"Deleted '{title}' from RAG DB")
-        except Exception as e:
-            if "not found" in str(e).lower(): # Handle case where title doesn't exist yet
-                return
-            logging.error(f"Failed to delete document '{title}' from RAG: {e}")
+    def delete_document(self, doc_id_or_title: str | Path):
+        """Delete all chunks associated with a specific document (by doc_id, path, or title)."""
+        doc_id = None
+        title = None
+        if isinstance(doc_id_or_title, Path):
+            doc_id = self._get_doc_id(doc_id_or_title)
+            title = doc_id_or_title.stem
+        elif "/" in str(doc_id_or_title) or "\\" in str(doc_id_or_title):
+            path_val = Path(doc_id_or_title)
+            doc_id = self._get_doc_id(path_val)
+            title = path_val.stem
+        else:
+            value = str(doc_id_or_title)
+            if len(value) == 64 and all(c in "0123456789abcdef" for c in value.lower()):
+                doc_id = value
+            else:
+                title = value
+
+        if doc_id:
+            try:
+                self.collection.delete(where={"doc_id": doc_id})
+                logging.info(f"Deleted document chunks with doc_id '{doc_id}' from RAG")
+            except Exception as e:
+                logging.debug(f"Failed to delete by doc_id '{doc_id}': {e}")
+
+        if title and title != doc_id:
+            try:
+                self.collection.delete(where={"title": title})
+                logging.info(f"Deleted document chunks with title '{title}' from RAG")
+            except Exception as e:
+                if "not found" not in str(e).lower():
+                    logging.error(f"Failed to delete document chunks with title '{title}': {e}")
+
+        self._bm25.mark_dirty()
 
     def get_all_indexed_titles(self) -> set:
-        """
-        Retrieves a set of all unique document titles currently in the database.
-        """
+        """Retrieves a set of all unique document titles currently in the database."""
         try:
             results = self.collection.get(include=['metadatas'])
             metadatas = results.get('metadatas', [])
@@ -192,9 +807,7 @@ class RAGManager:
             return set()
 
     def get_total_chunks_count(self) -> int:
-        """
-        Returns the total number of chunks in the collection.
-        """
+        """Returns the total number of chunks in the collection."""
         try:
             return self.collection.count()
         except Exception as e:
@@ -202,21 +815,37 @@ class RAGManager:
             return 0
 
     def wipe_collection(self):
-        """
-        Completely wipes the wiki_pages collection.
-        """
+        """Completely wipes the wiki_pages collection."""
         try:
             logging.warning("RAGManager: Wiping 'wiki_pages' collection...")
             self.client.delete_collection("wiki_pages")
-            self.collection = self.client.get_or_create_collection(
+
+            curr_provider = EMBEDDING_PROVIDER
+            curr_model = get_effective_model_name(curr_provider, EMBEDDING_MODEL)
+            try:
+                dummy_emb = self.ef(["test"])
+                curr_dim = len(dummy_emb[0])
+            except Exception as e:
+                logging.warning(f"Could not automatically detect embedding dimension: {e}")
+                curr_dim = 768 if curr_provider in ("ollama", "gemini") else 384
+
+            metadata = {
+                "embedding_provider": curr_provider,
+                "embedding_model": curr_model,
+                "embedding_dimension": curr_dim
+            }
+
+            self.collection = self.client.create_collection(
                 name="wiki_pages",
-                embedding_function=self.ef
+                embedding_function=self.ef,
+                metadata=metadata
             )
+            self._bm25.replace_collection(self.collection)
             logging.info("RAGManager: Collection wiped and recreated.")
         except Exception as e:
             logging.error(f"RAGManager: Failed to wipe collection: {e}")
 
+
 if __name__ == "__main__":
-    # Test initialization
     manager = RAGManager()
     print(f"RAG Manager initialized. Collection count: {manager.collection.count()}")

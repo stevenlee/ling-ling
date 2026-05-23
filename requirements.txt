@@ -5,3 +5,7 @@ pydantic
 python-dotenv
 chromadb
 PyYAML
+rank_bm25
+
+# Optional — install only when RERANKER_ENABLED=true:
+# sentence-transformers
