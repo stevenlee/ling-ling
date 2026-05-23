@@ -1,0 +1,90 @@
+{
+  "version": "2",
+  "doc_hash": "sha256:b364717581fee76e5c9e11eb32aad3c37ec3491cf2e1077b1ee5af888a4745b9",
+  "chunks": [
+    {
+      "index": 0,
+      "char_range": [
+        0,
+        1292
+      ],
+      "size": 1292,
+      "section_path": [
+        "On Learning Programming Languages As You Get Older"
+      ],
+      "boundary_type": "paragraph",
+      "atomic_kinds": [
+        "frontmatter"
+      ],
+      "overlap_chars": 0
+    },
+    {
+      "index": 1,
+      "char_range": [
+        1292,
+        3000
+      ],
+      "size": 1708,
+      "section_path": [
+        "On Learning Programming Languages As You Get Older"
+      ],
+      "boundary_type": "paragraph",
+      "atomic_kinds": [],
+      "overlap_chars": 125
+    },
+    {
+      "index": 2,
+      "char_range": [
+        3000,
+        4629
+      ],
+      "size": 1629,
+      "section_path": [
+        "On Learning Programming Languages As You Get Older"
+      ],
+      "boundary_type": "paragraph",
+      "atomic_kinds": [],
+      "overlap_chars": 169
+    },
+    {
+      "index": 3,
+      "char_range": [
+        4629,
+        6155
+      ],
+      "size": 1526,
+      "section_path": [
+        "On Learning Programming Languages As You Get Older"
+      ],
+      "boundary_type": "paragraph",
+      "atomic_kinds": [],
+      "overlap_chars": 113
+    },
+    {
+      "index": 4,
+      "char_range": [
+        6155,
+        7150
+      ],
+      "size": 995,
+      "section_path": [
+        "On Learning Programming Languages As You Get Older"
+      ],
+      "boundary_type": "paragraph",
+      "atomic_kinds": [],
+      "overlap_chars": 121
+    }
+  ],
+  "summary": {
+    "total_chunks": 5,
+    "size_distribution": {
+      "min": 995,
+      "median": 1526,
+      "max": 1708
+    },
+    "boundary_type_counts": {
+      "paragraph": 5
+    },
+    "overlap_total": 528
+  }
+}

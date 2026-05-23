@@ -14,7 +14,13 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from core.config import INDEX_FILE, PAGES_DIR
+from core.config import (
+    INDEX_FILE,
+    PAGES_DIR,
+    THOUGHTFUL_EMIT_SUMMARY,
+    THOUGHTFUL_USE_LLM_FOR_INGEST,
+    USE_THOUGHTFUL_SPLITTER,
+)
 from core.parser import (
     dump_markdown_with_metadata,
     parse_markdown_metadata,
@@ -37,7 +43,20 @@ class IngestionPipeline:
     def __init__(self, llm_client, rag_manager):
         self.llm = llm_client
         self.rag = rag_manager
-        self.splitter = TextSplitter()
+        # Splitter selection is deployment-time (env flag), not runtime.
+        # ThoughtfulSplitter's `split_text_with_spans` returns dicts with
+        # extra `section_path` / `boundary_type` fields; TextSplitter's
+        # returns the lean `{text, start, end}` shape. Both work with the
+        # downstream `chunk_spans[i].get(...)` reads below.
+        if USE_THOUGHTFUL_SPLITTER:
+            from services.thoughtful_splitter import ThoughtfulSplitter
+            self.splitter = ThoughtfulSplitter(
+                default_use_llm=THOUGHTFUL_USE_LLM_FOR_INGEST,
+                default_emit_summary=THOUGHTFUL_EMIT_SUMMARY,
+                llm=self.llm,  # Phase 4 topic-shift detector reaches the LLM through this
+            )
+        else:
+            self.splitter = TextSplitter()
 
     # ── Public entry points ──────────────────────────────────────────
 
@@ -96,7 +115,10 @@ class IngestionPipeline:
             page_path.write_text(wiki_markdown, encoding="utf-8")
 
             if not (part_info and part_info.get("defer_rag")):
-                self.rag.add_document(page_path, title, wiki_markdown, tags=tags)
+                self.rag.add_document(
+                    page_path, title, wiki_markdown, tags=tags,
+                    section_path=(part_info or {}).get("section_path") or None,
+                )
 
             # Long-doc parts pass `defer_index=True` so we only rebuild the
             # wiki index once at the end of the run, not per part.
@@ -155,6 +177,13 @@ class IngestionPipeline:
             meta["parts_count"] = part_info["total"]
             meta["digest_schema"] = "part-digest-v1"
             meta.update(part_info.get("source_span") or {})
+            # ThoughtfulSplitter metadata: only present when USE_THOUGHTFUL_SPLITTER=true.
+            section_path = part_info.get("section_path")
+            if section_path:
+                meta["section_path"] = list(section_path)
+            boundary_type = part_info.get("boundary_type")
+            if boundary_type:
+                meta["boundary_type"] = boundary_type
         if quality_fixes:
             meta["quality_fixes"] = quality_fixes
         return meta
@@ -171,7 +200,13 @@ class IngestionPipeline:
         # re-read it from disk.
         index_content = INDEX_FILE.read_text(encoding="utf-8") if INDEX_FILE.exists() else ""
 
-        part_state = self._process_parts(chunks, source_spans, source_filepath, base_title, index_content)
+        # `chunk_spans` carries section_path/boundary_type only when the
+        # ThoughtfulSplitter is in use; under the legacy splitter the extra
+        # keys simply aren't present and `_process_parts` falls back to "".
+        part_state = self._process_parts(
+            chunks, source_spans, source_filepath, base_title, index_content,
+            chunk_metas=chunk_spans,
+        )
 
         ui.set_status(f"Stitching: {base_title}...")
         stitched_path = self._write_stitched_article(
@@ -206,6 +241,7 @@ class IngestionPipeline:
         source_filepath: Path,
         base_title: str,
         index_content: str,
+        chunk_metas: list[dict] | None = None,
     ) -> dict:
         master_tags: list = []
         pending_concepts = ""
@@ -226,6 +262,7 @@ class IngestionPipeline:
             if i < total - 1:
                 context_hint += " Since more parts follow, PLEASE include a 'pending_concepts' field in your YAML."
 
+            chunk_meta = chunk_metas[i] if chunk_metas else {}
             part_info = {
                 "current": i + 1,
                 "total": total,
@@ -235,6 +272,9 @@ class IngestionPipeline:
                 "defer_index": True,
                 "source_span": source_spans[i],
                 "index_content": index_content,
+                # Optional metadata from ThoughtfulSplitter (empty under legacy splitter):
+                "section_path": chunk_meta.get("section_path") or [],
+                "boundary_type": chunk_meta.get("boundary_type") or "",
             }
             result = self.ingest_to_wiki(chunk, source_filepath, part_info=part_info)
             if not result:
@@ -250,7 +290,9 @@ class IngestionPipeline:
                 base_title, i + 1, total, chunk, part_content, pending_concepts,
             )
             part_digests.append(digest)
-            self._append_part_digest_to_note(result, digest)
+            self._append_part_digest_to_note(
+                result, digest, section_path=part_info.get("section_path"),
+            )
 
             nav_summary = digest_value_to_text(digest.get("thesis")) if isinstance(digest, dict) else ""
             if not nav_summary:
@@ -400,7 +442,7 @@ class IngestionPipeline:
         out.append("")
         return out
 
-    def _append_part_digest_to_note(self, ingest_result: dict, digest) -> None:
+    def _append_part_digest_to_note(self, ingest_result: dict, digest, section_path: list | None = None) -> None:
         page_path_value = ingest_result.get("_page_path") if isinstance(ingest_result, dict) else None
         if not page_path_value:
             return
@@ -422,7 +464,7 @@ class IngestionPipeline:
 
         title = ingest_result.get("_title") or page_path.stem
         tags = ingest_result.get("_tags") or ingest_result.get("tags", [])
-        self.rag.add_document(page_path, title, updated, tags=tags)
+        self.rag.add_document(page_path, title, updated, tags=tags, section_path=section_path or None)
 
     # ── Stitched article ────────────────────────────────────────────
 

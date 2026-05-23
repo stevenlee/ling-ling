@@ -1,0 +1,56 @@
+{
+  "version": "2",
+  "doc_hash": "sha256:b03874f6f1a38d1c82c7cef8a3be9cabea85cb0dfde4ced4e49694a6db818823",
+  "chunks": [
+    {
+      "index": 0,
+      "char_range": [
+        0,
+        1581
+      ],
+      "size": 1581,
+      "section_path": [
+        "Software Architecture Decision Record Template",
+        "Status Lifecycle"
+      ],
+      "boundary_type": "h2",
+      "atomic_kinds": [
+        "frontmatter",
+        "list_item",
+        "table"
+      ],
+      "overlap_chars": 0
+    },
+    {
+      "index": 1,
+      "char_range": [
+        1581,
+        2723
+      ],
+      "size": 1142,
+      "section_path": [
+        "Software Architecture Decision Record Template",
+        "Tools"
+      ],
+      "boundary_type": "paragraph",
+      "atomic_kinds": [
+        "list_item",
+        "table"
+      ],
+      "overlap_chars": 187
+    }
+  ],
+  "summary": {
+    "total_chunks": 2,
+    "size_distribution": {
+      "min": 1142,
+      "median": 1581,
+      "max": 1581
+    },
+    "boundary_type_counts": {
+      "h2": 1,
+      "paragraph": 1
+    },
+    "overlap_total": 187
+  }
+}

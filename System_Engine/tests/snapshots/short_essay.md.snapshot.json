@@ -1,0 +1,34 @@
+{
+  "version": "2",
+  "doc_hash": "sha256:d424b11eb12f6b5296f0450afc172710df2f07daebef1b958e4938821a50a778",
+  "chunks": [
+    {
+      "index": 0,
+      "char_range": [
+        0,
+        811
+      ],
+      "size": 811,
+      "section_path": [
+        "A Short Note on Diffusion Limits"
+      ],
+      "boundary_type": "paragraph",
+      "atomic_kinds": [
+        "frontmatter"
+      ],
+      "overlap_chars": 0
+    }
+  ],
+  "summary": {
+    "total_chunks": 1,
+    "size_distribution": {
+      "min": 811,
+      "median": 811,
+      "max": 811
+    },
+    "boundary_type_counts": {
+      "paragraph": 1
+    },
+    "overlap_total": 0
+  }
+}

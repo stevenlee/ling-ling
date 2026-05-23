@@ -1,0 +1,56 @@
+{
+  "version": "2",
+  "doc_hash": "sha256:56f8039698868046725fb759ada18ac081ca73e1e3ecb902a7c6aee73e861685",
+  "chunks": [
+    {
+      "index": 0,
+      "char_range": [
+        0,
+        1714
+      ],
+      "size": 1714,
+      "section_path": [
+        "Notes on Cache Coherence Protocols",
+        "MESI: The Baseline",
+        "A Worked Example"
+      ],
+      "boundary_type": "h2",
+      "atomic_kinds": [
+        "code_fence",
+        "frontmatter"
+      ],
+      "overlap_chars": 0
+    },
+    {
+      "index": 1,
+      "char_range": [
+        1714,
+        3836
+      ],
+      "size": 2122,
+      "section_path": [
+        "Notes on Cache Coherence Protocols",
+        "Closing Thought"
+      ],
+      "boundary_type": "paragraph",
+      "atomic_kinds": [
+        "code_fence",
+        "list_item"
+      ],
+      "overlap_chars": 89
+    }
+  ],
+  "summary": {
+    "total_chunks": 2,
+    "size_distribution": {
+      "min": 1714,
+      "median": 2122,
+      "max": 2122
+    },
+    "boundary_type_counts": {
+      "h2": 1,
+      "paragraph": 1
+    },
+    "overlap_total": 89
+  }
+}

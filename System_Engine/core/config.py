@@ -17,6 +17,17 @@ COMMAND_PREFIX = "@ling-"
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "5000"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "500"))
 
+# ─── Thoughtful Splitter (P4 wiring) ──────────────────────────────────
+# Feature flags are env-only because they're deployment-time decisions; the
+# tuning knobs (sizes, overlap) live in Scripture so creators can re-tune at
+# runtime. See DesignDoc/ThoughtfulSplitter_implementation_plan.md §9.1.
+
+USE_THOUGHTFUL_SPLITTER         = os.getenv("USE_THOUGHTFUL_SPLITTER", "false").lower() == "true"
+THOUGHTFUL_USE_LLM_FOR_INGEST   = os.getenv("THOUGHTFUL_USE_LLM_FOR_INGEST", "true").lower() == "true"
+THOUGHTFUL_USE_LLM_FOR_COUNTER  = os.getenv("THOUGHTFUL_USE_LLM_FOR_COUNTER", "false").lower() == "true"
+THOUGHTFUL_EMIT_SUMMARY         = os.getenv("THOUGHTFUL_EMIT_SUMMARY", "false").lower() == "true"
+THOUGHTFUL_CACHE_DIR            = os.getenv("THOUGHTFUL_CACHE_DIR") or None
+
 # ─── Paths ────────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
@@ -61,19 +72,23 @@ class DynamicSettings:
 
     # (yaml_key, attr_name, type_coercer)
     _BINDINGS: tuple[tuple[str, str, type], ...] = (
-        ("be_a",           "AGENT_ROLE",       str),
-        ("say",            "OUTPUT_LANGUAGE",  str),
-        ("use_template",   "USE_TEMPLATE",     str),
-        ("creativity",     "CREATIVITY",       float),
-        ("max_output",     "MAX_OUTPUT",       int),
-        ("memory_limit",   "MEMORY_LIMIT",     int),
-        ("search_depth",   "SEARCH_DEPTH",     int),
-        ("strict_mode",    "STRICT_MODE",      bool),
-        ("digest_limit",   "DIGEST_LIMIT",     int),
-        ("digest_overlap", "DIGEST_OVERLAP",   int),
-        ("dreaming_from",  "DREAMING_FROM",    int),
-        ("dreaming_to",    "DREAMING_TO",      int),
-        ("self_healing",   "SELF_HEALING",     bool),
+        ("be_a",               "AGENT_ROLE",         str),
+        ("say",                "OUTPUT_LANGUAGE",    str),
+        ("use_template",       "USE_TEMPLATE",       str),
+        ("creativity",         "CREATIVITY",         float),
+        ("max_output",         "MAX_OUTPUT",         int),
+        ("memory_limit",       "MEMORY_LIMIT",       int),
+        ("search_depth",       "SEARCH_DEPTH",       int),
+        ("strict_mode",        "STRICT_MODE",        bool),
+        ("digest_limit",       "DIGEST_LIMIT",       int),
+        ("digest_overlap",     "DIGEST_OVERLAP",     int),
+        # Thoughtful-splitter knobs (P2):
+        ("overlap_chars",      "OVERLAP_CHARS",      int),
+        ("digest_max_factor",  "DIGEST_MAX_FACTOR",  float),
+        ("digest_min_factor",  "DIGEST_MIN_FACTOR",  float),
+        ("dreaming_from",      "DREAMING_FROM",      int),
+        ("dreaming_to",        "DREAMING_TO",        int),
+        ("self_healing",       "SELF_HEALING",       bool),
     )
 
     def __init__(self):
@@ -82,6 +97,10 @@ class DynamicSettings:
         self.USE_TEMPLATE: str | None = None
         self.DIGEST_LIMIT = 5000
         self.DIGEST_OVERLAP = 500
+        # Thoughtful-splitter knobs:
+        self.OVERLAP_CHARS = 300            # Phase 3b structural overlap size
+        self.DIGEST_MAX_FACTOR = 1.5        # max_size = target * factor
+        self.DIGEST_MIN_FACTOR = 0.25       # min_size = target * factor
         self.DREAMING_FROM = 1
         self.DREAMING_TO = 5
         self.SELF_HEALING = True

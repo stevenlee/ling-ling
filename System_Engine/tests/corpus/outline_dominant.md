@@ -1,0 +1,99 @@
+---
+title: Personal Reading Backlog Outline
+tags: [personal, books, reading-list]
+---
+
+# Personal Reading Backlog Outline
+
+A categorised list of books and papers I want to read, with rough
+priority and one-line "why".
+
+- **Systems & Distributed Computing**
+    - _Designing Data-Intensive Applications_ — Martin Kleppmann
+        - Why: gold standard for distributed system fundamentals
+        - Priority: high
+        - Status: started chapter 3
+    - _Database Internals_ — Alex Petrov
+        - Why: bridges DDIA's height with hands-on detail
+        - Priority: medium
+    - _Systems Performance_ — Brendan Gregg
+        - Why: the methodology chapter alone is worth the price
+        - Priority: medium
+    - _Designing Distributed Systems_ — Brendan Burns
+        - Why: pattern catalogue for K8s era
+        - Priority: low
+- **Programming Languages**
+    - _Crafting Interpreters_ — Robert Nystrom
+        - Why: want to write a language someday; this is the canonical path
+        - Priority: high
+        - Status: lol I bought it three years ago
+    - _Types and Programming Languages_ — Pierce
+        - Why: rigorous type theory foundations
+        - Priority: medium
+        - Status: bounced off ch 4 twice
+    - _The Implementation of Functional Programming Languages_ — Peyton Jones
+        - Why: free PDF, classic, lazy evaluation internals
+        - Priority: low
+- **Software Engineering Practice**
+    - _A Philosophy of Software Design_ — Ousterhout
+        - Why: shortest book with the highest insight density
+        - Priority: high (re-read)
+    - _The Mythical Man-Month_ — Brooks
+        - Why: still mostly correct after 50 years
+        - Priority: low (already read; flag for re-read in 2027)
+    - _Refactoring_ (2nd ed) — Fowler
+        - Why: catalogue I keep half-remembering
+        - Priority: medium
+- **Mathematics**
+    - _Linear Algebra Done Right_ — Axler
+        - Why: better than the engineering-school approach I had
+        - Priority: medium
+    - _Probability Theory: The Logic of Science_ — Jaynes
+        - Why: Bayesian foundations explained right
+        - Priority: high
+        - Status: chapter 1, 2018
+        - Note: this is the one I keep failing to finish
+    - _Information Theory, Inference, and Learning Algorithms_ — MacKay
+        - Why: links information theory to ML
+        - Priority: medium
+- **Machine Learning**
+    - _Pattern Recognition and Machine Learning_ — Bishop
+        - Why: still the best graduate-level intro
+        - Priority: medium
+    - _Deep Learning_ — Goodfellow, Bengio, Courville
+        - Why: the textbook for the late 2010s
+        - Priority: low (somewhat dated now)
+    - _The Elements of Statistical Learning_ — Hastie, Tibshirani, Friedman
+        - Why: classical ML statistical view
+        - Priority: low
+- **Papers I keep meaning to read**
+    - "MapReduce: Simplified Data Processing on Large Clusters" — Dean & Ghemawat (2004)
+    - "The Google File System" — Ghemawat, Gobioff, Leung (2003)
+    - "Bigtable: A Distributed Storage System for Structured Data" — Chang et al. (2006)
+    - "Dynamo: Amazon's Highly Available Key-value Store" — DeCandia et al. (2007)
+    - "Spanner: Google's Globally-Distributed Database" — Corbett et al. (2012)
+    - "ZooKeeper: Wait-free Coordination for Internet-scale Systems" — Hunt et al. (2010)
+    - "Raft: In Search of an Understandable Consensus Algorithm" — Ongaro & Ousterhout (2014)
+    - "The Chubby Lock Service for Loosely-Coupled Distributed Systems" — Burrows (2006)
+    - "Borg, Omega, and Kubernetes" — Burns et al. (2016)
+    - "Out of the Tar Pit" — Moseley & Marks (2006)
+    - "No Silver Bullet" — Brooks (1987)
+    - "On Designing and Deploying Internet-Scale Services" — Hamilton (2007)
+- **Long-form essays / blog series**
+    - Aphyr's "Jepsen" series — distributed-system testing case studies
+    - "Hints for Computer System Design" — Butler Lampson
+    - Joel on Software back catalogue (selective)
+    - Dan Luu's archive (selective)
+- **Personal / non-technical**
+    - _The Death of Ivan Ilyich_ — Tolstoy
+        - Why: I have heard "if you only read one Tolstoy" three times this year
+        - Priority: medium
+    - _Stoner_ — John Williams
+        - Why: friends I trust recommend it independently
+        - Priority: medium
+    - _A Pattern Language_ — Christopher Alexander
+        - Why: software people keep citing it
+        - Priority: low
+    - _Working in Public_ — Nadia Eghbal
+        - Why: open-source ecosystem framing
+        - Priority: low

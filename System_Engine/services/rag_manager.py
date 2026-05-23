@@ -76,16 +76,28 @@ class RAGManager:
             
         return chunks
 
-    def add_document(self, filepath: Path, title: str, text: str, tags: list[str] = None):
+    def add_document(
+        self,
+        filepath: Path,
+        title: str,
+        text: str,
+        tags: list[str] = None,
+        section_path: list[str] | None = None,
+    ):
         """
         Chunk and add a markdown document to the ChromaDB.
+
+        `section_path` (ThoughtfulSplitter P4) is the heading hierarchy this
+        document/part lives under, e.g. ["Chapter 1", "Background"]. It's
+        encoded into chunk metadata as `>chapter 1>background>` so RAG
+        queries can structurally filter by section.
         """
         import time
         from datetime import datetime
         try:
             # 1. Clean up stale chunks for this title first (Zombie Prevention)
             self.delete_document(title)
-            
+
             timestamp = datetime.now().isoformat()
             chunks = self._chunk_text(text)
             if not chunks:
@@ -94,16 +106,23 @@ class RAGManager:
             ids = []
             documents = []
             metadatas = []
+            # Lowercase + `>...>` so ChromaDB `where` clauses can use
+            # `$contains: ">background>"` to find content in that section.
+            section_marker = (
+                ">" + ">".join(s.lower().strip() for s in section_path) + ">"
+                if section_path else ""
+            )
 
             for i, chunk in enumerate(chunks):
                 ids.append(f"{title}_chunk_{i}")
                 documents.append(chunk)
                 meta = {
-                    "source": filepath.name, 
-                    "title": title, 
+                    "source": filepath.name,
+                    "title": title,
                     "chunk_index": i,
                     "timestamp": timestamp,
-                    "tags": f",{','.join(tags)}," if tags else ""
+                    "tags": f",{','.join(tags)}," if tags else "",
+                    "section_path": section_marker,
                 }
                 metadatas.append(meta)
 

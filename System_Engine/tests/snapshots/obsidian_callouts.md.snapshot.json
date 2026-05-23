@@ -1,0 +1,54 @@
+{
+  "version": "2",
+  "doc_hash": "sha256:189d9b03f8df455520bf0bd55d217246258181801f567aab59d9569c279c2a53",
+  "chunks": [
+    {
+      "index": 0,
+      "char_range": [
+        0,
+        1591
+      ],
+      "size": 1591,
+      "section_path": [
+        "Reading Notes — The Pragmatic Programmer",
+        "The Broken Windows Theory of Software"
+      ],
+      "boundary_type": "h2",
+      "atomic_kinds": [
+        "callout",
+        "frontmatter"
+      ],
+      "overlap_chars": 0
+    },
+    {
+      "index": 1,
+      "char_range": [
+        1591,
+        3202
+      ],
+      "size": 1611,
+      "section_path": [
+        "Reading Notes — The Pragmatic Programmer",
+        "Lasting Heuristics"
+      ],
+      "boundary_type": "paragraph",
+      "atomic_kinds": [
+        "callout"
+      ],
+      "overlap_chars": 197
+    }
+  ],
+  "summary": {
+    "total_chunks": 2,
+    "size_distribution": {
+      "min": 1591,
+      "median": 1611,
+      "max": 1611
+    },
+    "boundary_type_counts": {
+      "h2": 1,
+      "paragraph": 1
+    },
+    "overlap_total": 197
+  }
+}

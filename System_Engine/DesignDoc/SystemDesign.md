@@ -89,4 +89,44 @@
 - **Frontend**: Obsidian (Markdown + Mermaid + Excalidraw)。
 
 ---
-*文件更新日期: 2026-04-14*
+
+## ✂️ 7. 文本切割 (Text Splitting)
+
+系統提供兩個切割器,透過 `USE_THOUGHTFUL_SPLITTER` 環境旗標切換:
+
+### `TextSplitter` (預設)
+位於 `services/text_splitter.py`。字數驅動,含 fence/table 保護與 paragraph/sentence
+fallback。歷史悠久、行為穩定。每篇 corpus 0.24ms。
+
+### `ThoughtfulSplitter` (新,opt-in)
+位於 `services/thoughtful_splitter.py`。結構感知 + LLM 細修的兩階段切割。
+詳細設計見 [`ThoughtfulSplitter_implementation_plan.md`](ThoughtfulSplitter_implementation_plan.md)。
+
+**核心特性**:
+- **結構優先**:`md_block_scanner.py` 解出 markdown block AST(12 種 BlockKind),
+  切割器按權重邊界(H1>H2>HR>H3>LLM_TOPIC_SHIFT>H4>LIST_END>...>SENTENCE>FORCED)挑點。
+- **原子保護**:code fence、table、list-item、callout、blockquote、math、frontmatter
+  絕不被切開;`recursive_fallback` 含 Step 0 atomic-intersect guard。
+- **段落感知**:長散文用 LLM (`find_topic_shifts`) 找主題切換點。LLM 答段落 index,
+  程式轉成 source offset,防 LLM 字元 offset 幻覺。
+- **富中繼資料**:每個 chunk 含 `section_path`、`boundary_type`、`atomic_kinds`、
+  `overlap_chars`、`preceding_summary`,皆 JSON-safe(`Chunk.to_dict()` 顯式轉 enum)。
+- **結構性 overlap**:預設 300 字 prev-chunk-tail 作為 RAG 連續性保險;
+  `emit_summary=True` 啟用時自動關閉,改用 LLM-生成的精準摘要。
+- **`section_path` 滲透到 ChromaDB metadata**(編碼為 `>chapter>section>`),
+  讓 RAG 可結構性過濾「找 X 章節下的內容」。
+- **Content-hash cache**:LLM 細修與 summary 結果都用 sha256(content) 鍵索快取,
+  記憶體預設、磁碟 opt-in(`THOUGHTFUL_CACHE_DIR`),修改文字一定 miss(零陳舊風險)。
+
+**Env 控制**:
+- `USE_THOUGHTFUL_SPLITTER=true` — 啟用新切割器
+- `THOUGHTFUL_USE_LLM_FOR_INGEST=true` — IngestionPipeline 啟用 LLM 主題切換(預設 true)
+- `THOUGHTFUL_USE_LLM_FOR_COUNTER=false` — CounterAgent 不需要(預設 false)
+- `THOUGHTFUL_EMIT_SUMMARY=true` — 啟用 LLM 生成 preceding_summary
+- `THOUGHTFUL_CACHE_DIR=/path` — 啟用磁碟快取
+
+**Scripture 可調**(`OVERLAP_CHARS`、`DIGEST_MAX_FACTOR`、`DIGEST_MIN_FACTOR`):
+runtime 可改,不需重啟。
+
+---
+*文件更新日期: 2026-05-23 (Thoughtful Splitter P0–P6 完成)*

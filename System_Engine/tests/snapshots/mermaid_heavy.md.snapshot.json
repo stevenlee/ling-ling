@@ -1,0 +1,54 @@
+{
+  "version": "2",
+  "doc_hash": "sha256:912a2928e690335a23df9c3163efe7219e48d8b5069da1c9f515c9a1aa77a3a4",
+  "chunks": [
+    {
+      "index": 0,
+      "char_range": [
+        0,
+        1682
+      ],
+      "size": 1682,
+      "section_path": [
+        "System Diagrams — Order Processing Pipeline",
+        "State Machine of an Order"
+      ],
+      "boundary_type": "h2",
+      "atomic_kinds": [
+        "code_fence",
+        "frontmatter"
+      ],
+      "overlap_chars": 0
+    },
+    {
+      "index": 1,
+      "char_range": [
+        1682,
+        3954
+      ],
+      "size": 2272,
+      "section_path": [
+        "System Diagrams — Order Processing Pipeline",
+        "Notes"
+      ],
+      "boundary_type": "paragraph",
+      "atomic_kinds": [
+        "code_fence"
+      ],
+      "overlap_chars": 143
+    }
+  ],
+  "summary": {
+    "total_chunks": 2,
+    "size_distribution": {
+      "min": 1682,
+      "median": 2272,
+      "max": 2272
+    },
+    "boundary_type_counts": {
+      "h2": 1,
+      "paragraph": 1
+    },
+    "overlap_total": 143
+  }
+}

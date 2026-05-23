@@ -1,0 +1,68 @@
+{
+  "version": "2",
+  "doc_hash": "sha256:f7f0027825f1c6509a8b084daa917271d5c47e7148835f8b4f1be0b3142ca318",
+  "chunks": [
+    {
+      "index": 0,
+      "char_range": [
+        0,
+        1385
+      ],
+      "size": 1385,
+      "section_path": [
+        "Personal Reading Backlog Outline"
+      ],
+      "boundary_type": "list_item_end",
+      "atomic_kinds": [
+        "frontmatter",
+        "list_item"
+      ],
+      "overlap_chars": 0
+    },
+    {
+      "index": 1,
+      "char_range": [
+        1385,
+        2814
+      ],
+      "size": 1429,
+      "section_path": [
+        "Personal Reading Backlog Outline"
+      ],
+      "boundary_type": "list_item_end",
+      "atomic_kinds": [
+        "list_item"
+      ],
+      "overlap_chars": 94
+    },
+    {
+      "index": 2,
+      "char_range": [
+        2814,
+        4539
+      ],
+      "size": 1725,
+      "section_path": [
+        "Personal Reading Backlog Outline"
+      ],
+      "boundary_type": "paragraph",
+      "atomic_kinds": [
+        "list_item"
+      ],
+      "overlap_chars": 199
+    }
+  ],
+  "summary": {
+    "total_chunks": 3,
+    "size_distribution": {
+      "min": 1385,
+      "median": 1429,
+      "max": 1725
+    },
+    "boundary_type_counts": {
+      "list_item_end": 2,
+      "paragraph": 1
+    },
+    "overlap_total": 293
+  }
+}

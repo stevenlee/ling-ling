@@ -58,3 +58,12 @@ lings-desktop/Notes/
 
 # Local backups
 Backups/
+
+# Developer cache and scratch
+System_Engine/.cache/
+System_Engine/scratch/
+
+# Vault temporary / runtime contents
+lings-desktop/2026-05-15.md
+lings-desktop/Clippings/
+lings-desktop/Insights/

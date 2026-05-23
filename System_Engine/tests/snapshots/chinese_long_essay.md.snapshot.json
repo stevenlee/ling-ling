@@ -1,0 +1,36 @@
+{
+  "version": "2",
+  "doc_hash": "sha256:eda2454bd375dc47f062f18197ebd0e095666fbb3aaaa5b64dfa563cd29b072f",
+  "chunks": [
+    {
+      "index": 0,
+      "char_range": [
+        0,
+        2096
+      ],
+      "size": 2096,
+      "section_path": [
+        "為什麼分散式系統的時間總是說謊",
+        "結語"
+      ],
+      "boundary_type": "paragraph",
+      "atomic_kinds": [
+        "code_fence",
+        "frontmatter"
+      ],
+      "overlap_chars": 0
+    }
+  ],
+  "summary": {
+    "total_chunks": 1,
+    "size_distribution": {
+      "min": 2096,
+      "median": 2096,
+      "max": 2096
+    },
+    "boundary_type_counts": {
+      "paragraph": 1
+    },
+    "overlap_total": 0
+  }
+}

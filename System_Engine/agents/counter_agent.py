@@ -34,7 +34,23 @@ class CounterAgent(BaseAgent):
 
     def __init__(self, llm, rag=None):
         super().__init__(llm, rag)
-        self.splitter = TextSplitter()
+        from core.config import THOUGHTFUL_USE_LLM_FOR_COUNTER, USE_THOUGHTFUL_SPLITTER
+        # LingLens scans for concept instances per-chunk; the chunk's
+        # "self-containedness" is not the quality metric we care about,
+        # and adding extra boundaries can slightly hurt recall around
+        # cuts. So P5 LLM refinement defaults OFF for this agent even
+        # when it's ON for ingestion.
+        if USE_THOUGHTFUL_SPLITTER:
+            from services.thoughtful_splitter import ThoughtfulSplitter
+            self.splitter = ThoughtfulSplitter(
+                default_use_llm=THOUGHTFUL_USE_LLM_FOR_COUNTER,
+                # Pass llm regardless — counter's `default_use_llm=False` is
+                # what actually skips P5, but the LLM is available if a
+                # caller bumps `use_llm=True` explicitly.
+                llm=self.llm,
+            )
+        else:
+            self.splitter = TextSplitter()
 
     # ── Public entry point ─────────────────────────────────────────────
 
