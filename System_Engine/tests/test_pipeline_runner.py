@@ -16,10 +16,15 @@ from services.pipeline_runner import (
     PipelineSpec,
     PipelineStep,
     load_pipeline,
+    load_pipeline_from_dict,
     _eval_when,
     _resolve_value,
     _resolve_path,
     _MISSING,
+)
+from services.builtin_adapters import (
+    builtin_adapter_names,
+    register_builtin_adapters,
 )
 
 
@@ -190,7 +195,7 @@ class TestLoadPipeline:
             steps:
               - id: a
                 capability: synthesize
-                adapter: fixture.synthesize
+                adapter: llm.synthesize
         """)
         spec = load_pipeline(f)
         assert spec.id == "demo"
@@ -203,7 +208,7 @@ class TestLoadPipeline:
             steps:
               - id: a
                 capability: synthesize
-                adapter: fixture.synthesize
+                adapter: llm.synthesize
         """)
         spec = load_pipeline(f)
         assert spec.id == "p"  # filename stem
@@ -215,12 +220,12 @@ class TestLoadPipeline:
             steps:
               - id: a
                 capability: synthesize
-                adapter: fixture.synthesize
+                adapter: llm.synthesize
                 inputs:
                   title: "${context.title}"
               - id: b
                 capability: critique
-                adapter: fixture.critique
+                adapter: llm.critique
                 when:
                   var: steps.a.output
                   op: nonempty
@@ -299,11 +304,11 @@ def _make_demo_spec() -> PipelineSpec:
         description="t",
         steps=(
             PipelineStep(
-                id="synth", capability="synthesize", adapter="fixture.synthesize",
+                id="synth", capability="synthesize", adapter="llm.synthesize",
                 inputs={"title": "${context.title}"},
             ),
             PipelineStep(
-                id="critique", capability="critique", adapter="fixture.critique",
+                id="critique", capability="critique", adapter="llm.critique",
                 inputs={"candidate": "${steps.synth.output}"},
                 when={"var": "steps.synth.output", "op": "nonempty"},
             ),
@@ -314,9 +319,9 @@ def _make_demo_spec() -> PipelineSpec:
 class TestPipelineRunnerEndToEnd:
     def test_happy_path_both_steps_run(self):
         registry = AdapterRegistry()
-        registry.register("fixture.synthesize",
+        registry.register("llm.synthesize",
                           lambda inp: {"output": f"SYN[{inp['title']}]"})
-        registry.register("fixture.critique",
+        registry.register("llm.critique",
                           lambda inp: {"output": f"CRT[{inp['candidate']}]"})
         trace = _FakeTraceStore()
         runner = PipelineRunner(
@@ -334,8 +339,8 @@ class TestPipelineRunnerEndToEnd:
 
     def test_when_false_skips_dependent_step(self):
         registry = AdapterRegistry()
-        registry.register("fixture.synthesize", lambda inp: {"output": ""})
-        registry.register("fixture.critique", lambda inp: {"output": "should not run"})
+        registry.register("llm.synthesize", lambda inp: {"output": ""})
+        registry.register("llm.critique", lambda inp: {"output": "should not run"})
         runner = PipelineRunner(
             capability_manager=_FakeCapMgr({"synthesize", "critique"}),
             adapter_registry=registry,
@@ -348,8 +353,8 @@ class TestPipelineRunnerEndToEnd:
 
     def test_unknown_capability_fails_before_any_step(self):
         registry = AdapterRegistry()
-        registry.register("fixture.synthesize", lambda inp: {"output": "x"})
-        registry.register("fixture.critique", lambda inp: {"output": "y"})
+        registry.register("llm.synthesize", lambda inp: {"output": "x"})
+        registry.register("llm.critique", lambda inp: {"output": "y"})
         runner = PipelineRunner(
             capability_manager=_FakeCapMgr({"synthesize"}),  # critique missing
             adapter_registry=registry,
@@ -359,8 +364,8 @@ class TestPipelineRunnerEndToEnd:
 
     def test_unregistered_adapter_fails_before_any_step(self):
         registry = AdapterRegistry()
-        registry.register("fixture.synthesize", lambda inp: {"output": "x"})
-        # fixture.critique NOT registered
+        registry.register("llm.synthesize", lambda inp: {"output": "x"})
+        # llm.critique NOT registered
         runner = PipelineRunner(
             capability_manager=_FakeCapMgr({"synthesize", "critique"}),
             adapter_registry=registry,
@@ -370,9 +375,9 @@ class TestPipelineRunnerEndToEnd:
 
     def test_adapter_exception_aborts_pipeline(self):
         registry = AdapterRegistry()
-        registry.register("fixture.synthesize",
+        registry.register("llm.synthesize",
                           lambda inp: (_ for _ in ()).throw(RuntimeError("boom")))
-        registry.register("fixture.critique", lambda inp: {"output": "should not run"})
+        registry.register("llm.critique", lambda inp: {"output": "should not run"})
         runner = PipelineRunner(
             capability_manager=_FakeCapMgr({"synthesize", "critique"}),
             adapter_registry=registry,
@@ -386,8 +391,8 @@ class TestPipelineRunnerEndToEnd:
 
     def test_input_resolution_missing_path_fails_step(self):
         registry = AdapterRegistry()
-        registry.register("fixture.synthesize", lambda inp: {"output": "x"})
-        registry.register("fixture.critique", lambda inp: {"output": "y"})
+        registry.register("llm.synthesize", lambda inp: {"output": "x"})
+        registry.register("llm.critique", lambda inp: {"output": "y"})
         runner = PipelineRunner(
             capability_manager=_FakeCapMgr({"synthesize", "critique"}),
             adapter_registry=registry,
@@ -405,8 +410,8 @@ class TestPipelineRunnerEndToEnd:
 class TestTraceIntegration:
     def test_run_id_propagates(self):
         registry = AdapterRegistry()
-        registry.register("fixture.synthesize", lambda inp: {"output": "syn"})
-        registry.register("fixture.critique", lambda inp: {"output": "crt"})
+        registry.register("llm.synthesize", lambda inp: {"output": "syn"})
+        registry.register("llm.critique", lambda inp: {"output": "crt"})
         trace = _FakeTraceStore()
         runner = PipelineRunner(
             capability_manager=_FakeCapMgr({"synthesize", "critique"}),
@@ -421,8 +426,8 @@ class TestTraceIntegration:
 
     def test_each_step_records_an_artifact(self):
         registry = AdapterRegistry()
-        registry.register("fixture.synthesize", lambda inp: {"output": "syn"})
-        registry.register("fixture.critique", lambda inp: {"output": "crt"})
+        registry.register("llm.synthesize", lambda inp: {"output": "syn"})
+        registry.register("llm.critique", lambda inp: {"output": "crt"})
         trace = _FakeTraceStore()
         runner = PipelineRunner(
             capability_manager=_FakeCapMgr({"synthesize", "critique"}),
@@ -436,12 +441,12 @@ class TestTraceIntegration:
         assert first["title"] == "synth"
         assert first["quality_verdict"] == "succeeded"
         assert first["metadata"]["capability"] == "synthesize"
-        assert first["metadata"]["adapter"] == "fixture.synthesize"
+        assert first["metadata"]["adapter"] == "llm.synthesize"
 
     def test_skipped_step_records_artifact_with_skipped_verdict(self):
         registry = AdapterRegistry()
-        registry.register("fixture.synthesize", lambda inp: {"output": ""})
-        registry.register("fixture.critique", lambda inp: {"output": "crt"})
+        registry.register("llm.synthesize", lambda inp: {"output": ""})
+        registry.register("llm.critique", lambda inp: {"output": "crt"})
         trace = _FakeTraceStore()
         runner = PipelineRunner(
             capability_manager=_FakeCapMgr({"synthesize", "critique"}),
@@ -471,14 +476,205 @@ class TestShippedDemoPipeline:
         # Real CapabilityManager: synthesize + critique exist as Operations.
         cap_mgr = CapabilityManager(OPERATIONS_DIR, SKILLS_DIR)
         registry = AdapterRegistry()
-        registry.register("fixture.synthesize", lambda i: {"output": "syn"})
-        registry.register("fixture.critique", lambda i: {"output": "crt"})
+        registry.register("llm.synthesize", lambda i: {"output": "syn"})
+        registry.register("llm.critique", lambda i: {"output": "crt"})
         runner = PipelineRunner(
             capability_manager=cap_mgr,
             adapter_registry=registry,
         )
         # Validation must pass with the production registry.
         runner.validate(spec)
+
+
+# ── load_pipeline_from_dict (Phase 5A: lets Planner feed JSON) ──────
+
+
+class TestLoadPipelineFromDict:
+    def test_minimal_valid_dict(self):
+        spec = load_pipeline_from_dict({
+            "id": "in_memory",
+            "steps": [
+                {"id": "a", "capability": "synthesize", "adapter": "llm.synthesize"},
+            ],
+        })
+        assert spec.id == "in_memory"
+        assert spec.source_path is None
+        assert len(spec.steps) == 1
+
+    def test_default_id_used_when_missing(self):
+        spec = load_pipeline_from_dict(
+            {"steps": [
+                {"id": "a", "capability": "c", "adapter": "ad"},
+            ]},
+            default_id="from_default",
+        )
+        assert spec.id == "from_default"
+
+    def test_no_id_no_default_raises(self):
+        with pytest.raises(PipelineError, match="missing 'id'"):
+            load_pipeline_from_dict({
+                "steps": [{"id": "a", "capability": "c", "adapter": "ad"}],
+            })
+
+    def test_json_compatible_dict_works(self):
+        # JSON-style dict (no YAML-only features) — same loader, no parsing.
+        json_like = {
+            "id": "from_json",
+            "description": "produced by Planner",
+            "steps": [
+                {
+                    "id": "synth",
+                    "capability": "synthesize",
+                    "adapter": "llm.synthesize",
+                    "inputs": {"title": "${context.title}"},
+                },
+                {
+                    "id": "crit",
+                    "capability": "critique",
+                    "adapter": "llm.critique",
+                    "when": {"var": "steps.synth.output", "op": "nonempty"},
+                    "inputs": {"candidate": "${steps.synth.output}"},
+                },
+            ],
+        }
+        spec = load_pipeline_from_dict(json_like)
+        assert len(spec.steps) == 2
+        assert spec.steps[1].when == {"var": "steps.synth.output", "op": "nonempty"}
+
+    def test_load_pipeline_delegates_to_from_dict(self, tmp_path):
+        # File loader and dict loader produce equivalent specs (except source_path).
+        f = _write_pipeline(tmp_path, """
+            id: demo
+            steps:
+              - id: a
+                capability: synthesize
+                adapter: llm.synthesize
+        """)
+        from_file = load_pipeline(f)
+        from_dict = load_pipeline_from_dict(
+            {"id": "demo", "steps": [
+                {"id": "a", "capability": "synthesize", "adapter": "llm.synthesize"},
+            ]},
+        )
+        assert from_file.id == from_dict.id
+        assert from_file.steps == from_dict.steps
+
+
+# ── builtin_adapters (Phase 5A: real LLM adapters) ──────────────────
+
+
+class _FakeLLM:
+    """Records calls without hitting any provider."""
+
+    def __init__(self):
+        self.synthesis_calls: list[dict] = []
+        self.critique_calls: list[dict] = []
+
+    def generate_synthesis(self, *, title, part_digests, final_concepts, template=None):
+        self.synthesis_calls.append({
+            "title": title,
+            "part_digests": part_digests,
+            "final_concepts": final_concepts,
+            "template": template,
+        })
+        return f"SYNTH({title}|{len(part_digests)} parts)"
+
+    def critique_text(self, *, candidate, sources, focus=None):
+        self.critique_calls.append({
+            "candidate": candidate,
+            "sources": sources,
+            "focus": focus,
+        })
+        return f"CRIT({len(candidate)} chars)"
+
+
+class TestBuiltinAdapters:
+    def test_names_are_stable(self):
+        assert builtin_adapter_names() == ["llm.critique", "llm.synthesize"]
+
+    def test_register_populates_registry(self):
+        registry = AdapterRegistry()
+        registered = register_builtin_adapters(registry, _FakeLLM())
+        assert set(registered) == {"llm.synthesize", "llm.critique"}
+        assert registry.has("llm.synthesize")
+        assert registry.has("llm.critique")
+
+    def test_synthesize_adapter_wires_arguments(self):
+        registry = AdapterRegistry()
+        llm = _FakeLLM()
+        register_builtin_adapters(registry, llm)
+        synth = registry.get("llm.synthesize")
+
+        out = synth({
+            "title": "Hamlet",
+            "part_digests": [{"part": 1}, {"part": 2}],
+            "final_concepts": "carry over",
+            "template": "wiki-note",
+        })
+        assert out == {"output": "SYNTH(Hamlet|2 parts)"}
+        assert llm.synthesis_calls == [{
+            "title": "Hamlet",
+            "part_digests": [{"part": 1}, {"part": 2}],
+            "final_concepts": "carry over",
+            "template": "wiki-note",
+        }]
+
+    def test_critique_adapter_wires_arguments(self):
+        registry = AdapterRegistry()
+        llm = _FakeLLM()
+        register_builtin_adapters(registry, llm)
+        crit = registry.get("llm.critique")
+
+        out = crit({"candidate": "ABCDEF", "sources": "src", "focus": "tone"})
+        assert out == {"output": "CRIT(6 chars)"}
+        assert llm.critique_calls == [{
+            "candidate": "ABCDEF", "sources": "src", "focus": "tone",
+        }]
+
+    def test_synthesize_adapter_supplies_defaults_for_missing_inputs(self):
+        registry = AdapterRegistry()
+        llm = _FakeLLM()
+        register_builtin_adapters(registry, llm)
+        synth = registry.get("llm.synthesize")
+        # Pipeline DSL may legitimately omit optional inputs; adapter must
+        # not KeyError out.
+        synth({"title": "X"})
+        call = llm.synthesis_calls[0]
+        assert call["part_digests"] == []
+        assert call["final_concepts"] == ""
+        assert call["template"] is None
+
+    def test_demo_pipeline_runs_with_real_adapter_names(self):
+        """The shipped demo YAML uses llm.* names. Registering builtin
+        adapters against a fake LLM should let the pipeline execute end
+        to end, exercising variable resolution + when clause + trace."""
+        from core.config import WIKI_VAULT_DIR, OPERATIONS_DIR, SKILLS_DIR
+        from services.capability_manager import CapabilityManager
+
+        demo_path = (
+            WIKI_VAULT_DIR / "Templates" / "Pipelines"
+            / "synthesize_critique_demo.yml"
+        )
+        spec = load_pipeline(demo_path)
+        cap_mgr = CapabilityManager(OPERATIONS_DIR, SKILLS_DIR)
+        registry = AdapterRegistry()
+        llm = _FakeLLM()
+        register_builtin_adapters(registry, llm)
+
+        runner = PipelineRunner(
+            capability_manager=cap_mgr,
+            adapter_registry=registry,
+            trace_store=_FakeTraceStore(),
+        )
+        result = runner.run(spec, context={
+            "title": "Hamlet",
+            "part_digests": [{"part": 1, "thesis": "x"}],
+            "part_digests_text": "(part 1 thesis: x)",
+        })
+        assert result.status == "succeeded"
+        # synthesize fired once, critique fired once (synth output nonempty)
+        assert len(llm.synthesis_calls) == 1
+        assert len(llm.critique_calls) == 1
 
 
 if __name__ == "__main__":

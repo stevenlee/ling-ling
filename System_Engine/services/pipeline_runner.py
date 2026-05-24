@@ -101,66 +101,70 @@ _VALID_WHEN_OPS = frozenset({"exists", "missing", "nonempty", "empty",
                               "equals", "not_equals"})
 
 
-def load_pipeline(path: Path | str) -> PipelineSpec:
-    """Parse a pipeline YAML file into a PipelineSpec. Never executes."""
-    path = Path(path)
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as e:
-        raise PipelineError(f"cannot read pipeline file {path}: {e}") from e
+def load_pipeline_from_dict(
+    data: dict,
+    *,
+    source_path: Path | None = None,
+    default_id: str | None = None,
+) -> PipelineSpec:
+    """Build a PipelineSpec from already-parsed pipeline data.
 
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as e:
-        raise PipelineError(f"pipeline {path.name}: malformed YAML: {e}") from e
+    Used by `load_pipeline()` after reading a YAML file, and directly by
+    the future Planner agent when it produces a pipeline spec as JSON.
+    `default_id` is used when the data omits `id:` (typically the source
+    file stem); for in-memory plans Planner should always supply `id:`.
+    """
+    label = (source_path.name if source_path else "<in-memory>")
 
     if not isinstance(data, dict):
-        raise PipelineError(f"pipeline {path.name}: top-level must be a mapping")
+        raise PipelineError(f"pipeline {label}: top-level must be a mapping")
 
-    pipeline_id = data.get("id") or path.stem
+    pipeline_id = data.get("id") or default_id
+    if not pipeline_id:
+        raise PipelineError(f"pipeline {label}: missing 'id'")
     description = data.get("description") or ""
     raw_steps = data.get("steps")
     if not isinstance(raw_steps, list) or not raw_steps:
-        raise PipelineError(f"pipeline {path.name}: 'steps' must be a non-empty list")
+        raise PipelineError(f"pipeline {label}: 'steps' must be a non-empty list")
 
     seen_ids: set[str] = set()
     steps: list[PipelineStep] = []
     for idx, raw in enumerate(raw_steps):
         if not isinstance(raw, dict):
             raise PipelineError(
-                f"pipeline {path.name}: step #{idx} is not a mapping"
+                f"pipeline {label}: step #{idx} is not a mapping"
             )
         step_id = raw.get("id")
         if not isinstance(step_id, str) or not step_id:
             raise PipelineError(
-                f"pipeline {path.name}: step #{idx} missing string 'id'"
+                f"pipeline {label}: step #{idx} missing string 'id'"
             )
         if step_id in seen_ids:
             raise PipelineError(
-                f"pipeline {path.name}: duplicate step id {step_id!r}"
+                f"pipeline {label}: duplicate step id {step_id!r}"
             )
         seen_ids.add(step_id)
 
         capability = raw.get("capability")
         if not isinstance(capability, str) or not capability:
             raise PipelineError(
-                f"pipeline {path.name}: step {step_id!r} missing 'capability'"
+                f"pipeline {label}: step {step_id!r} missing 'capability'"
             )
         adapter = raw.get("adapter")
         if not isinstance(adapter, str) or not adapter:
             raise PipelineError(
-                f"pipeline {path.name}: step {step_id!r} missing 'adapter'"
+                f"pipeline {label}: step {step_id!r} missing 'adapter'"
             )
 
         inputs = raw.get("inputs") or {}
         if not isinstance(inputs, dict):
             raise PipelineError(
-                f"pipeline {path.name}: step {step_id!r} 'inputs' must be a mapping"
+                f"pipeline {label}: step {step_id!r} 'inputs' must be a mapping"
             )
 
         when = raw.get("when")
         if when is not None:
-            _validate_when(when, path.name, step_id)
+            _validate_when(when, label, step_id)
 
         steps.append(PipelineStep(
             id=step_id,
@@ -174,7 +178,32 @@ def load_pipeline(path: Path | str) -> PipelineSpec:
         id=pipeline_id,
         description=description,
         steps=tuple(steps),
+        source_path=source_path,
+    )
+
+
+def load_pipeline(path: Path | str) -> PipelineSpec:
+    """Parse a pipeline YAML (or JSON, since JSON is YAML) file into a spec.
+
+    Never executes. Delegates structural validation to
+    `load_pipeline_from_dict` so the Planner can reuse the same loader for
+    in-memory JSON plans.
+    """
+    path = Path(path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise PipelineError(f"cannot read pipeline file {path}: {e}") from e
+
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise PipelineError(f"pipeline {path.name}: malformed YAML: {e}") from e
+
+    return load_pipeline_from_dict(
+        data,
         source_path=path,
+        default_id=path.stem,
     )
 
 
