@@ -746,6 +746,8 @@ class InsightAgent(BaseAgent):
             temperature=self.TEMP_SYNTHESIZE,
             forced_template=resolved_template,
             default_template="insight-rpt",
+            persona="none",
+            operation="synthesize",
         )
 
     # ── Cross-Strategy Synthesis ────────────────────────────────────
@@ -802,6 +804,8 @@ class InsightAgent(BaseAgent):
             wiki_context="",
             custom_instruction=synthesis_prompt,
             temperature=self.TEMP_SYNTHESIZE,
+            persona="none",
+            operation="synthesize",
         )
 
     # ── Context Retrieval ────────────────────────────────────────────

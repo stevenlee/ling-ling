@@ -241,5 +241,110 @@ class TestFormatSourceRange:
         assert IngestionPipeline._format_source_range({}) == ""
 
 
+# ── Critique post-step ────────────────────────────────────────────
+
+
+class _StubLLM:
+    """Minimal stub matching the LLMClient surface _run_synthesis_critique uses."""
+
+    def __init__(self, critique_response="", raise_exc=None):
+        self.critique_response = critique_response
+        self.raise_exc = raise_exc
+        self.last_call = None
+
+    @staticmethod
+    def _format_part_digest_for_prompt(digest):
+        return f"DIGEST::{digest}"
+
+    def critique_text(self, candidate, sources, focus=None):
+        self.last_call = {"candidate": candidate, "sources": sources, "focus": focus}
+        if self.raise_exc:
+            raise self.raise_exc
+        return self.critique_response
+
+
+class TestParseVerdict:
+    def test_english_revise(self):
+        assert IngestionPipeline._parse_verdict(
+            "* [major] foo\n\n**Overall Verdict**: revise. Some reason."
+        ) == "revise"
+
+    def test_english_keep_no_emphasis(self):
+        assert IngestionPipeline._parse_verdict("Overall Verdict: keep") == "keep"
+
+    def test_zh_revise(self):
+        assert IngestionPipeline._parse_verdict(
+            "**Overall Verdict**：修訂。需要補充某些細節。"
+        ) == "revise"
+
+    def test_zh_keep(self):
+        assert IngestionPipeline._parse_verdict("Overall Verdict: 保留") == "keep"
+
+    def test_reject(self):
+        assert IngestionPipeline._parse_verdict("**Overall Verdict**: reject — fundamentally off.") == "reject"
+
+    def test_unparseable_returns_none(self):
+        assert IngestionPipeline._parse_verdict("No verdict line here.") is None
+
+
+class TestRunSynthesisCritique:
+    def test_disabled_returns_empty(self, monkeypatch):
+        monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", False)
+        pipe = IngestionPipeline.__new__(IngestionPipeline)
+        pipe.llm = _StubLLM(critique_response="* [critical] foo\n**Overall Verdict**: revise")
+        section, verdict = pipe._run_synthesis_critique("X", "candidate text", ["d1"])
+        assert section == ""
+        assert verdict is None
+        assert pipe.llm.last_call is None  # never called
+
+    def test_empty_digests_skips(self, monkeypatch):
+        monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+        pipe = IngestionPipeline.__new__(IngestionPipeline)
+        pipe.llm = _StubLLM(critique_response="ignored")
+        section, verdict = pipe._run_synthesis_critique("X", "candidate", [])
+        assert (section, verdict) == ("", None)
+        assert pipe.llm.last_call is None
+
+    def test_empty_candidate_skips(self, monkeypatch):
+        monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+        pipe = IngestionPipeline.__new__(IngestionPipeline)
+        pipe.llm = _StubLLM(critique_response="ignored")
+        section, verdict = pipe._run_synthesis_critique("X", "   ", ["d1"])
+        assert (section, verdict) == ("", None)
+
+    def test_success_path(self, monkeypatch):
+        monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+        pipe = IngestionPipeline.__new__(IngestionPipeline)
+        critique = (
+            "* [major] core concepts → flattens performance into paralysis\n"
+            "* [minor] mermaid → subgraph mis-closed\n\n"
+            "**Overall Verdict**: revise. The synthesis erased two distinctions present in the digests."
+        )
+        pipe.llm = _StubLLM(critique_response=critique)
+        section, verdict = pipe._run_synthesis_critique("Hamlet", "synth body", ["d1", "d2"])
+        assert verdict == "revise"
+        assert section.startswith("## 🔍 Quality Critique")
+        assert "Overall Verdict" in section
+        # Sources should have been pre-formatted via the stub's formatter.
+        assert "DIGEST::d1" in pipe.llm.last_call["sources"]
+        assert "DIGEST::d2" in pipe.llm.last_call["sources"]
+        assert pipe.llm.last_call["candidate"] == "synth body"
+
+    def test_llm_exception_is_swallowed(self, monkeypatch):
+        monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+        pipe = IngestionPipeline.__new__(IngestionPipeline)
+        pipe.llm = _StubLLM(raise_exc=RuntimeError("network down"))
+        section, verdict = pipe._run_synthesis_critique("X", "candidate", ["d1"])
+        assert (section, verdict) == ("", None)
+
+    def test_failure_marker_response_is_skipped(self, monkeypatch):
+        """LLMClient.critique_text returns 'Critique failed: ...' on error — treat as no critique."""
+        monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+        pipe = IngestionPipeline.__new__(IngestionPipeline)
+        pipe.llm = _StubLLM(critique_response="Critique failed: bad gateway")
+        section, verdict = pipe._run_synthesis_critique("X", "candidate", ["d1"])
+        assert (section, verdict) == ("", None)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

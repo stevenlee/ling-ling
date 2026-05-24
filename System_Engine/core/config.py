@@ -28,6 +28,11 @@ THOUGHTFUL_USE_LLM_FOR_COUNTER  = os.getenv("THOUGHTFUL_USE_LLM_FOR_COUNTER", "f
 THOUGHTFUL_EMIT_SUMMARY         = os.getenv("THOUGHTFUL_EMIT_SUMMARY", "false").lower() == "true"
 THOUGHTFUL_CACHE_DIR            = os.getenv("THOUGHTFUL_CACHE_DIR") or None
 
+# Long-doc synthesis runs a Critique pass against the part digests to surface
+# source-grounding defects and a keep/revise/reject verdict. Adds one LLM call
+# per long-doc ingestion; flip to "false" to disable on cost-constrained runs.
+SYNTHESIS_CRITIQUE_ENABLED      = os.getenv("SYNTHESIS_CRITIQUE_ENABLED", "true").lower() == "true"
+
 # ─── Embedding Configuration ──────────────────────────────────────────
 EMBEDDING_PROVIDER              = os.getenv("EMBEDDING_PROVIDER", "local").lower()
 EMBEDDING_MODEL                 = os.getenv("EMBEDDING_MODEL") or None
@@ -57,6 +62,7 @@ PERSONAS_DIR = SCRIPTURE_DIR / "Personas"
 GUIDELINES_DIR = SCRIPTURE_DIR / "Guidelines"
 TEMPLATES_DIR = WIKI_VAULT_DIR / "Templates"
 PROMPTS_DIR = TEMPLATES_DIR / "Prompts"
+OPERATIONS_DIR = TEMPLATES_DIR / "Operations"
 PAGES_DIR = WIKI_VAULT_DIR / "pages"
 NOTES_DIR = WIKI_VAULT_DIR / "Notes"
 TAG_MAP_FILE = PAGES_DIR / "_tagScrapbook.md"
@@ -167,7 +173,7 @@ _MANAGED_DIRECTORIES = (
     CLIPPINGS_DIR, CONSOLIDATE_DIR, TO_LLM_DIR, FROM_LLM_DIR, PAGES_DIR, NOTES_DIR,
     EXCALIDRAW_DIR, ASSETS_DIR, RAW_CONSOLIDATE_DIR, RAW_PROMPTS_DIR,
     RAW_ASSETS_DIR, RAW_MERGED_DIR, SCRIPTURE_DIR, PERSONAS_DIR, GUIDELINES_DIR,
-    SKILLS_DIR, BACKUPS_DIR, TEMPLATES_DIR, PROMPTS_DIR,
+    SKILLS_DIR, BACKUPS_DIR, TEMPLATES_DIR, PROMPTS_DIR, OPERATIONS_DIR,
 )
 
 

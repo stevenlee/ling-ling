@@ -8,6 +8,7 @@ Public API (used across agents/, services/, watchers/, maintenance/):
         .translate_tags(tags) -> dict
         .generate_part_digest(title, part_number, total_parts, raw_chunk, ...) -> dict
         .generate_synthesis(title, part_digests, final_concepts) -> str
+        .critique_text(candidate, sources, focus=None) -> str
         .score_text_quality(text, prompt_version="v1") -> dict   # P0 (thoughtful splitter)
 
 This module is the single seam between the agent layer and the upstream LLM
@@ -30,6 +31,7 @@ import yaml
 from core.config import (
     GUIDELINES_DIR,
     LLM_PROVIDER,
+    OPERATIONS_DIR,
     PERSONAS_DIR,
     PROJECT_ROOT,
     TEMPLATES_DIR,
@@ -270,8 +272,23 @@ class LLMClient:
         forced_template: str | None = None,
         default_template: str | None = None,
         require_yaml_header: bool = True,
+        persona: str | None = None,
+        operation: str | None = None,
     ) -> str:
-        role_instructions = self._load_localized_content(PERSONAS_DIR / f"{settings.AGENT_ROLE}.md")
+        # Persona axis: None → settings.AGENT_ROLE (legacy), "none" → no persona,
+        # any other string → load that persona file. Lets fixed-methodology
+        # operations (Stitch / Synthesize) opt out of the global AGENT_ROLE.
+        if persona == "none":
+            role_instructions = ""
+        else:
+            persona_name = persona or settings.AGENT_ROLE
+            role_instructions = self._load_localized_content(PERSONAS_DIR / f"{persona_name}.md")
+
+        # Operation axis: a persona-agnostic methodology prompt (Synthesize,
+        # Critique, ...). Orthogonal to Template (which controls output shape).
+        operation_instructions = ""
+        if operation and operation != "none":
+            operation_instructions = self._load_localized_content(OPERATIONS_DIR / f"{operation}.md")
 
         if forced_template == "none":
             template_instructions = ""
@@ -300,7 +317,9 @@ class LLMClient:
             f"\n## Output Language\nPlease output everything in {lang_hint}.{strict_hint}\n\n"
             f"## Task\n{instruction_type}\n\n{viz_instructions}\n\n{yaml_rule}"
         )
-        return f"{role_instructions}\n\n{template_instructions}\n\n{common_rules}"
+        sections = [s for s in (role_instructions, operation_instructions, template_instructions) if s]
+        sections.append(common_rules)
+        return "\n\n".join(sections)
 
     # ─── Output cleanup ─────────────────────────────────────────────────
 
@@ -397,6 +416,8 @@ class LLMClient:
         temperature: float | None = None,
         forced_template: str | None = None,
         default_template: str | None = None,
+        persona: str | None = None,
+        operation: str | None = None,
     ) -> str:
         if custom_instruction:
             system_prompt = self._build_system_prompt(
@@ -404,6 +425,8 @@ class LLMClient:
                 forced_template=forced_template,
                 default_template=default_template,
                 require_yaml_header=False,
+                persona=persona,
+                operation=operation,
             )
             user_msg = query_content
         else:
@@ -577,8 +600,19 @@ class LLMClient:
             f"{digest_value_to_text(digest.get('handoff', '')) or '(none)'}\n"
         )
 
-    def generate_synthesis(self, title: str, part_digests: list, final_concepts: str) -> str:
-        """Synthesize a long document from per-part digests."""
+    def generate_synthesis(
+        self,
+        title: str,
+        part_digests: list,
+        final_concepts: str,
+        template: str | None = None,
+    ) -> str:
+        """Synthesize a long document from per-part digests.
+
+        Synthesis is a fixed methodology, not a persona — so we hard-wire
+        `persona='none'` and `operation='synthesize'` here. `template`
+        controls only the output format and is caller-provided.
+        """
         lang_hint = self._get_lang_hint()
         digest_text = "\n\n".join(self._format_part_digest_for_prompt(d) for d in part_digests)
         prompt = (
@@ -589,8 +623,10 @@ class LLMClient:
         )
         system_prompt = self._build_system_prompt(
             "Create a source-grounded synthesis from structured part digests.",
-            forced_template=settings.USE_TEMPLATE or "wiki-note",
+            forced_template=template or settings.USE_TEMPLATE or "wiki-note",
             require_yaml_header=False,
+            persona="none",
+            operation="synthesize",
         )
 
         try:
@@ -600,6 +636,40 @@ class LLMClient:
         except Exception as e:
             logging.error(f"Synthesis failed for {title}: {e}")
             return f"Synthesis failed: {e}"
+
+    def critique_text(
+        self,
+        candidate: str,
+        sources: str,
+        focus: str | None = None,
+    ) -> str:
+        """Evaluate a candidate text against its supporting sources.
+
+        Critique is a fixed methodology — persona='none', operation='critique'.
+        Output is freeform findings (severity-tagged bullets + verdict), so
+        no Markdown template is forced.
+        """
+        lang_hint = self._get_lang_hint()
+        prompt = (
+            f"## Sources\n{sources}\n\n"
+            f"## Candidate\n{candidate}\n\n"
+            f"## Focus\n{focus or '(general)'}\n\n"
+            f"Task:\nProduce the critique in {lang_hint} following the operating rules.\n"
+        )
+        system_prompt = self._build_system_prompt(
+            "Evaluate the candidate text against the provided sources and surface defects.",
+            forced_template="none",
+            require_yaml_header=False,
+            persona="none",
+            operation="critique",
+        )
+        try:
+            return self._strip_accidental_frontmatter(
+                self._complete_text(system_prompt, prompt, temperature=0.1, max_tokens=settings.MAX_OUTPUT)
+            )
+        except Exception as e:
+            logging.error(f"Critique failed: {e}")
+            return f"Critique failed: {e}"
 
     # ─── Quality scoring (P0) ───────────────────────────────────────────
 

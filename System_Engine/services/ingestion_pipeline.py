@@ -17,6 +17,7 @@ from pathlib import Path
 from core.config import (
     INDEX_FILE,
     PAGES_DIR,
+    SYNTHESIS_CRITIQUE_ENABLED,
     THOUGHTFUL_EMIT_SUMMARY,
     THOUGHTFUL_USE_LLM_FOR_INGEST,
     USE_THOUGHTFUL_SPLITTER,
@@ -35,6 +36,18 @@ from services.text_splitter import TextSplitter
 _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
 _FRONTMATTER_RE = re.compile(r'^---\s*\n.*?\n---\s*\n?', re.DOTALL)
 _PART_DIGEST_HEADER = "## 🧩 Part Digest Appendix"
+_CRITIQUE_HEADER = "## 🔍 Quality Critique"
+# Verdicts come from Operations/critique.md ("keep, revise, or reject").
+# The model is allowed to use either English or zh-translated equivalents, so
+# match generously on the trailing keyword of the Overall Verdict line.
+_VERDICT_RE = re.compile(
+    r'(?im)^\**\s*Overall\s+Verdict\**\s*[:：]\s*[*_`]*\s*(keep|revise|reject|保留|修訂|修正|重做|拒絕)',
+)
+_VERDICT_NORMALISE = {
+    "keep": "keep", "保留": "keep",
+    "revise": "revise", "修訂": "revise", "修正": "revise",
+    "reject": "reject", "重做": "reject", "拒絕": "reject",
+}
 
 
 class IngestionPipeline:
@@ -330,6 +343,11 @@ class IngestionPipeline:
         synthesis_text, synthesis_fixes = run_markdown_quality_checks(synthesis_text, strip_frontmatter=True)
 
         digest_appendix = self.format_digest_appendix(part_state["part_digests"])
+        # Critique runs against the same digests the synthesis was generated
+        # from — so any drift away from the sources gets surfaced.
+        critique_section, critique_verdict = self._run_synthesis_critique(
+            base_title, synthesis_text, part_state["part_digests"]
+        )
         master_tags = part_state["master_tags"]
         nav_block = "\n".join(part_state["navigation_items"])
         syn_nav = (
@@ -345,6 +363,7 @@ class IngestionPipeline:
             f"## 📝 Executive Summary\n{synthesis_text}\n\n"
             f"## 📂 Navigation\n{nav_block}{syn_nav}\n\n"
             f"{digest_appendix}\n\n"
+            f"{critique_section}"
             f"## 🗺️ Knowledge Map\n(Tags: {tag_line})\n\n"
             f"## 📊 System Metadata\n"
             f"- **Original Content Size**: {len(content)} chars\n"
@@ -373,6 +392,8 @@ class IngestionPipeline:
         combined_fixes = sorted(set((synthesis_fixes or []) + (final_fixes or [])))
         if combined_fixes:
             final_meta["quality_fixes"] = combined_fixes
+        if critique_verdict:
+            final_meta["quality_verdict"] = critique_verdict
 
         entity_dir = PAGES_DIR / base_title
         entity_dir.mkdir(parents=True, exist_ok=True)
@@ -381,6 +402,53 @@ class IngestionPipeline:
 
         self.rag.add_document(synthesis_file, base_title, final_content, tags=final_meta["tags"])
         return synthesis_file
+
+    # ── Critique post-step ───────────────────────────────────────────
+
+    def _run_synthesis_critique(
+        self,
+        base_title: str,
+        synthesis_text: str,
+        part_digests: list,
+    ) -> tuple[str, str | None]:
+        """Critique the synthesis against its part digests. Fail-soft.
+
+        Returns (body_section, verdict). `body_section` is the empty string
+        when critique is disabled or fails, so the caller can splice it in
+        unconditionally. `verdict` is one of "keep" / "revise" / "reject"
+        if parseable, else None.
+        """
+        if not SYNTHESIS_CRITIQUE_ENABLED:
+            return "", None
+        if not part_digests or not synthesis_text.strip():
+            return "", None
+
+        sources = "\n\n".join(
+            self.llm._format_part_digest_for_prompt(d) for d in part_digests
+        )
+        try:
+            critique = self.llm.critique_text(
+                candidate=synthesis_text,
+                sources=sources,
+                focus="Source-grounding, specificity preservation, and contradiction surfacing.",
+            )
+        except Exception as e:
+            logging.warning(f"Critique failed for {base_title}: {e}")
+            return "", None
+
+        if not critique or not critique.strip() or critique.startswith("Critique failed"):
+            return "", None
+
+        verdict = self._parse_verdict(critique)
+        section = f"{_CRITIQUE_HEADER}\n\n{critique.strip()}\n\n"
+        return section, verdict
+
+    @staticmethod
+    def _parse_verdict(critique: str) -> str | None:
+        m = _VERDICT_RE.search(critique)
+        if not m:
+            return None
+        return _VERDICT_NORMALISE.get(m.group(1).strip().lower())
 
     # ── Digest formatting ────────────────────────────────────────────
 
