@@ -27,7 +27,7 @@ Independent of the main arc; can land anytime.
 | A1 | ~~Rename `Skills/montecario.md` → `montecarlo.md`~~ ✅ | S | Done — typo warning removed |
 | A2 | ~~Fix `Templates/translation-rpt.md` YAML-example leak~~ ✅ | S | Done — fenced YAML examples + explicit "do not reproduce in body" across all 12 templates |
 | A3 | Upgrade `quality_fixes` from type-list to `{type, before, after, line}` | S–M | Better trace readability |
-| A4 | Verify Scripture hot-reload actually exists (README claims it; audit didn't find it) | S | Reconcile docs vs code |
+| A4 | ~~Verify Scripture hot-reload actually exists~~ ✅ | S | Done — hot-reload IS wired (`config.DynamicSettings.reload()` + `vault_watcher`); the earlier audit was wrong. Added regression tests. |
 
 ## Bucket B — PipelineRunner (Phase 4.5 / 4.6 / 4.7)
 
