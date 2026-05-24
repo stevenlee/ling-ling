@@ -14,7 +14,7 @@ from services.rag_manager import RAGManager
 from watchers.clipping_watcher import ClippingWatcher
 from watchers.prompt_watcher import PromptWatcher
 from watchers.vault_watcher import VaultWatcher
-from watchers.insight_scheduler import InsightScheduler
+from watchers.maintenance_scheduler import MaintenanceScheduler
 
 from core.version import VERSION
 from core.ui import ui, setup_rich_logging
@@ -79,8 +79,8 @@ def main():
     finally:
         global_busy_state.set_busy(False, fire_callbacks=False)
     
-    # 5. Start Background Schedulers
-    scheduler = InsightScheduler(PROJECT_ROOT, llm_client, rag_manager)
+    # 5. Start Background Maintenance Scheduler
+    scheduler = MaintenanceScheduler(PROJECT_ROOT, llm_client, rag_manager)
     scheduler.start()
     
     ui.info(f"Provider: [bold cyan]{LLM_PROVIDER}[/bold cyan] | Model: [bold green]{llm_client.model}[/bold green] | Role: [bold yellow]{settings.AGENT_ROLE}[/bold yellow]")

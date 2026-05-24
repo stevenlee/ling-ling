@@ -18,6 +18,7 @@ import pytest
 
 from core.utils import MtimeCache
 from services.llm_client import LLMClient
+from services.trace_store import TraceStore
 
 
 # ── MtimeCache ──────────────────────────────────────────────────────
@@ -166,6 +167,85 @@ class TestPartDigest:
     def test_format_none_safe(self):
         assert "(empty digest)" in LLMClient._format_part_digest_for_prompt(None)
         assert "(empty digest)" not in LLMClient._format_part_digest_for_prompt("x")
+
+
+# ── LLM tracing ─────────────────────────────────────────────────────
+
+class _FakeUsage:
+    prompt_tokens = 3
+    completion_tokens = 5
+    total_tokens = 8
+
+
+class _FakeMessage:
+    content = "traced response"
+
+
+class _FakeChoice:
+    message = _FakeMessage()
+
+
+class _FakeCompletion:
+    choices = [_FakeChoice()]
+    usage = _FakeUsage()
+
+
+class _FakeCompletions:
+    def create(self, **kwargs):
+        self.last_kwargs = kwargs
+        return _FakeCompletion()
+
+
+class _FakeChat:
+    def __init__(self):
+        self.completions = _FakeCompletions()
+
+
+class _FakeOpenAIClient:
+    def __init__(self):
+        self.chat = _FakeChat()
+
+
+class TestLLMTrace:
+    def test_complete_text_records_call_inside_run(self, tmp_path):
+        client = LLMClient.__new__(LLMClient)
+        client.provider = "vllm"
+        client.model = "fake-model"
+        client.client = _FakeOpenAIClient()
+        client.trace_store = TraceStore(tmp_path / "trace.sqlite")
+
+        with client.trace_run(intent="test", agent="TestAgent") as run_id:
+            text = client._complete_text(
+                "system",
+                "user",
+                temperature=0.2,
+                max_tokens=32,
+                trace_context={"stage": "unit_stage", "operation": "critique"},
+            )
+            trace_ids = client.current_trace_ids()
+
+        assert text == "traced response"
+        assert len(trace_ids) == 1
+
+        conn = client.trace_store._connect()
+        try:
+            call = conn.execute(
+                "SELECT run_id, stage, operation, prompt_tokens, completion_tokens, total_tokens, status "
+                "FROM llm_calls WHERE trace_id = ?",
+                (trace_ids[0],),
+            ).fetchone()
+            run = conn.execute("SELECT status FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+        finally:
+            conn.close()
+
+        assert call["run_id"] == run_id
+        assert call["stage"] == "unit_stage"
+        assert call["operation"] == "critique"
+        assert call["prompt_tokens"] == 3
+        assert call["completion_tokens"] == 5
+        assert call["total_tokens"] == 8
+        assert call["status"] == "succeeded"
+        assert run["status"] == "succeeded"
 
 
 if __name__ == "__main__":

@@ -1,0 +1,391 @@
+"""SQLite-backed trace/event store for LLM-driven runs.
+
+The schema is intentionally a little broader than the first writer needs:
+critique loops, retrieval explain events, planner decisions, and maintenance
+jobs should all be able to read the same run/call/artifact spine later.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import contextvars
+import hashlib
+import json
+import logging
+import sqlite3
+import time
+import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, Iterator
+
+from core.config import DATABASE_DIR
+
+
+_CURRENT_RUN_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "lingling_trace_run_id", default=None
+)
+_CURRENT_TRACE_IDS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar(
+    "lingling_trace_ids", default=()
+)
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _hash_text(value: Any) -> str:
+    if isinstance(value, str):
+        payload = value
+    else:
+        try:
+            payload = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except TypeError:
+            payload = str(value)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+class TraceStore:
+    """Append-only-ish trace store with a context-local current run."""
+
+    def __init__(self, db_path: Path | None = None, retention_days: int = 30):
+        self.db_path = db_path or (DATABASE_DIR / "llm_trace.sqlite")
+        self.retention_days = retention_days
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_schema()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.db_path), timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def _init_schema(self) -> None:
+        with self._connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS runs (
+                    run_id TEXT PRIMARY KEY,
+                    source_event_id TEXT,
+                    command_id TEXT,
+                    intent TEXT,
+                    agent TEXT,
+                    trigger_type TEXT,
+                    status TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    error TEXT,
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
+                );
+
+                CREATE TABLE IF NOT EXISTS llm_calls (
+                    trace_id TEXT PRIMARY KEY,
+                    run_id TEXT,
+                    parent_trace_id TEXT,
+                    ts TEXT NOT NULL,
+                    stage TEXT,
+                    persona TEXT,
+                    operation TEXT,
+                    template TEXT,
+                    provider TEXT,
+                    model TEXT,
+                    prompt_hash TEXT NOT NULL,
+                    response_hash TEXT,
+                    prompt_text TEXT NOT NULL,
+                    user_msg_json TEXT NOT NULL,
+                    response_text TEXT,
+                    prompt_tokens INTEGER,
+                    completion_tokens INTEGER,
+                    total_tokens INTEGER,
+                    latency_ms INTEGER,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY(run_id) REFERENCES runs(run_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS artifacts (
+                    artifact_id TEXT PRIMARY KEY,
+                    run_id TEXT,
+                    trace_id TEXT,
+                    ts TEXT NOT NULL,
+                    path TEXT,
+                    artifact_type TEXT,
+                    title TEXT,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    quality_verdict TEXT,
+                    quality_score REAL,
+                    FOREIGN KEY(run_id) REFERENCES runs(run_id),
+                    FOREIGN KEY(trace_id) REFERENCES llm_calls(trace_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS retrieval_events (
+                    retrieval_id TEXT PRIMARY KEY,
+                    run_id TEXT,
+                    trace_id TEXT,
+                    ts TEXT NOT NULL,
+                    query_hash TEXT NOT NULL,
+                    query_text TEXT,
+                    top_k INTEGER,
+                    options_json TEXT NOT NULL DEFAULT '{}',
+                    results_json TEXT NOT NULL DEFAULT '[]',
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    FOREIGN KEY(run_id) REFERENCES runs(run_id),
+                    FOREIGN KEY(trace_id) REFERENCES llm_calls(trace_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_llm_calls_run_id ON llm_calls(run_id);
+                CREATE INDEX IF NOT EXISTS idx_llm_calls_stage ON llm_calls(stage);
+                CREATE INDEX IF NOT EXISTS idx_llm_calls_operation ON llm_calls(operation);
+                CREATE INDEX IF NOT EXISTS idx_artifacts_run_id ON artifacts(run_id);
+                CREATE INDEX IF NOT EXISTS idx_retrieval_events_run_id ON retrieval_events(run_id);
+                """
+            )
+
+    @contextlib.contextmanager
+    def run(
+        self,
+        *,
+        intent: str | None = None,
+        agent: str | None = None,
+        trigger_type: str | None = None,
+        command_id: str | None = None,
+        source_event_id: str | None = None,
+        metadata: dict | None = None,
+    ) -> Iterator[str]:
+        run_id = f"run_{uuid.uuid4().hex}"
+        started_at = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO runs (
+                    run_id, source_event_id, command_id, intent, agent,
+                    trigger_type, status, started_at, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    source_event_id,
+                    command_id,
+                    intent,
+                    agent,
+                    trigger_type,
+                    "running",
+                    started_at,
+                    _json_dumps(metadata or {}),
+                ),
+            )
+
+        run_token = _CURRENT_RUN_ID.set(run_id)
+        trace_token = _CURRENT_TRACE_IDS.set(())
+        status = "succeeded"
+        error = None
+        try:
+            yield run_id
+        except Exception as e:
+            status = "failed"
+            error = str(e)
+            raise
+        finally:
+            _CURRENT_TRACE_IDS.reset(trace_token)
+            _CURRENT_RUN_ID.reset(run_token)
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE runs SET status = ?, ended_at = ?, error = ? WHERE run_id = ?",
+                    (status, _utc_now(), error, run_id),
+                )
+            self.prune_old()
+
+    def current_run_id(self) -> str | None:
+        return _CURRENT_RUN_ID.get()
+
+    def current_trace_ids(self) -> list[str]:
+        return list(_CURRENT_TRACE_IDS.get())
+
+    def record_llm_call(
+        self,
+        *,
+        system_prompt: str,
+        user_msg: Any,
+        response_text: str | None,
+        provider: str,
+        model: str,
+        stage: str | None = None,
+        persona: str | None = None,
+        operation: str | None = None,
+        template: str | None = None,
+        parent_trace_id: str | None = None,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        total_tokens: int | None = None,
+        latency_ms: int | None = None,
+        status: str = "succeeded",
+        error: str | None = None,
+        metadata: dict | None = None,
+    ) -> str:
+        trace_id = f"llm_{uuid.uuid4().hex}"
+        run_id = self.current_run_id()
+        user_msg_json = _json_dumps(user_msg)
+        prompt_hash = _hash_text({"system": system_prompt, "user": user_msg})
+        response_hash = _hash_text(response_text or "") if response_text is not None else None
+
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO llm_calls (
+                    trace_id, run_id, parent_trace_id, ts, stage, persona,
+                    operation, template, provider, model, prompt_hash,
+                    response_hash, prompt_text, user_msg_json, response_text,
+                    prompt_tokens, completion_tokens, total_tokens, latency_ms,
+                    status, error, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trace_id,
+                    run_id,
+                    parent_trace_id,
+                    _utc_now(),
+                    stage,
+                    persona,
+                    operation,
+                    template,
+                    provider,
+                    model,
+                    prompt_hash,
+                    response_hash,
+                    system_prompt,
+                    user_msg_json,
+                    response_text,
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                    latency_ms,
+                    status,
+                    error,
+                    _json_dumps(metadata or {}),
+                ),
+            )
+
+        if run_id:
+            current = _CURRENT_TRACE_IDS.get()
+            _CURRENT_TRACE_IDS.set(current + (trace_id,))
+        return trace_id
+
+    def record_artifact(
+        self,
+        *,
+        path: str | Path | None,
+        artifact_type: str,
+        title: str | None = None,
+        trace_id: str | None = None,
+        metadata: dict | None = None,
+        quality_verdict: str | None = None,
+        quality_score: float | None = None,
+    ) -> str:
+        artifact_id = f"artifact_{uuid.uuid4().hex}"
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO artifacts (
+                    artifact_id, run_id, trace_id, ts, path, artifact_type,
+                    title, metadata_json, quality_verdict, quality_score
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    artifact_id,
+                    self.current_run_id(),
+                    trace_id,
+                    _utc_now(),
+                    str(path) if path is not None else None,
+                    artifact_type,
+                    title,
+                    _json_dumps(metadata or {}),
+                    quality_verdict,
+                    quality_score,
+                ),
+            )
+        return artifact_id
+
+    def record_retrieval_event(
+        self,
+        *,
+        query_text: str,
+        top_k: int,
+        options: dict,
+        results: list[dict],
+        trace_id: str | None = None,
+        status: str = "succeeded",
+        error: str | None = None,
+    ) -> str:
+        retrieval_id = f"retrieval_{uuid.uuid4().hex}"
+        query_hash = _hash_text(query_text)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO retrieval_events (
+                    retrieval_id, run_id, trace_id, ts, query_hash,
+                    query_text, top_k, options_json, results_json, status, error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    retrieval_id,
+                    self.current_run_id(),
+                    trace_id,
+                    _utc_now(),
+                    query_hash,
+                    query_text,
+                    top_k,
+                    _json_dumps(options),
+                    _json_dumps(results),
+                    status,
+                    error,
+                ),
+            )
+        return retrieval_id
+
+    def get_retrieval_events_by_run(self, run_id: str) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM retrieval_events WHERE run_id = ? ORDER BY ts ASC",
+                (run_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+
+
+    def prune_old(self) -> None:
+        if self.retention_days <= 0:
+            return
+        cutoff = (datetime.now(UTC) - timedelta(days=self.retention_days)).isoformat(
+            timespec="milliseconds"
+        ).replace("+00:00", "Z")
+        try:
+            with self._connect() as conn:
+                conn.execute("DELETE FROM retrieval_events WHERE ts < ?", (cutoff,))
+                conn.execute("DELETE FROM artifacts WHERE ts < ?", (cutoff,))
+                conn.execute("DELETE FROM llm_calls WHERE ts < ?", (cutoff,))
+                conn.execute("DELETE FROM runs WHERE started_at < ?", (cutoff,))
+        except Exception as e:
+            logging.debug(f"TraceStore prune skipped: {e}")
+
+
+def usage_to_counts(usage: Any) -> tuple[int | None, int | None, int | None]:
+    if usage is None:
+        return None, None, None
+    prompt = getattr(usage, "prompt_tokens", None)
+    completion = getattr(usage, "completion_tokens", None)
+    total = getattr(usage, "total_tokens", None)
+    if isinstance(usage, dict):
+        prompt = usage.get("prompt_tokens", prompt)
+        completion = usage.get("completion_tokens", completion)
+        total = usage.get("total_tokens", total)
+    return prompt, completion, total
+
+
+def elapsed_ms(start: float) -> int:
+    return int(round((time.perf_counter() - start) * 1000))

@@ -340,3 +340,116 @@ class TestMigration002:
         # Cleanup
         import shutil
         shutil.rmtree(db_path, ignore_errors=True)
+
+
+class TestRAGExplainMode:
+    def test_query_notes_records_retrieval_breakdown_and_event(self, tmpdir):
+        db_path = Path(tmpdir) / "test_explain_db"
+        from services.trace_store import TraceStore
+        trace_db = db_path / "trace.sqlite"
+        trace_store = TraceStore(db_path=trace_db)
+
+        # Patch EMBEDDING_CACHE_ENABLED and other provider settings
+        with patch("services.rag_manager.EMBEDDING_PROVIDER", "local"), \
+             patch("services.rag_manager.EMBEDDING_MODEL", None), \
+             patch("services.rag_manager.EMBEDDING_CACHE_ENABLED", False):
+            manager = RAGManager(db_path=str(db_path))
+            manager.trace_store = trace_store
+
+            # Add document
+            manager.collection.add(
+                ids=["chunk_1"],
+                documents=["test explain mode content"],
+                metadatas=[{"title": "test_doc", "doc_id": "abc"}]
+            )
+
+            # Query with trace
+            with trace_store.run(intent="test_rag_explain", agent="TestAgent") as run_id:
+                results = manager.query_notes("explain mode", top_k=1)
+                trace_ids = trace_store.current_trace_ids()
+
+            assert len(results) == 1
+            res = results[0]
+            assert "retrieval_breakdown" in res
+            breakdown = res["retrieval_breakdown"]
+            assert breakdown["vector_rank"] == 1
+            assert "vector_distance" in breakdown
+            assert "vector" in breakdown["passed_layers"]
+            assert breakdown["mmr_selected"] is False
+            assert "mmr" not in breakdown["passed_layers"]
+
+            # Verify SQLite event
+            conn = sqlite3_connect = trace_store._connect()
+            try:
+                event = conn.execute("SELECT * FROM retrieval_events WHERE run_id = ?", (run_id,)).fetchone()
+            finally:
+                conn.close()
+
+            assert event is not None
+            assert event["query_text"] == "explain mode"
+            assert event["top_k"] == 1
+            assert "hybrid" in event["options_json"]
+            import json
+            results_json = json.loads(event["results_json"])
+            assert len(results_json) == 1
+            assert results_json[0]["id"] == "chunk_1"
+            assert results_json[0]["retrieval_breakdown"]["vector_rank"] == 1
+            assert results_json[0]["retrieval_breakdown"]["mmr_selected"] is False
+
+        # Cleanup
+        import shutil
+        shutil.rmtree(db_path, ignore_errors=True)
+
+    def test_base_agent_builds_rag_explain_appendix(self, tmpdir):
+        from agents.base_agent import BaseAgent
+        from services.trace_store import TraceStore
+
+        db_path = Path(tmpdir) / "test_explain_agent_db"
+        trace_db = db_path / "trace.sqlite"
+        trace_store = TraceStore(db_path=trace_db)
+
+        # Mock LLM and trace store
+        mock_llm = MagicMock()
+        mock_llm.trace_store = trace_store
+        
+        agent = BaseAgent(mock_llm)
+        
+        # Insert raw retrieval event
+        with trace_store.run(intent="test", agent="TestAgent") as run_id:
+            trace_store.record_retrieval_event(
+                query_text="agent query",
+                top_k=2,
+                options={"hybrid": True, "rerank": False, "diversity": 0.0},
+                results=[
+                    {
+                        "id": "c1",
+                        "title": "Doc Title",
+                        "source": "Doc.md",
+                        "retrieval_breakdown": {
+                            "passed_layers": ["vector", "bm25"],
+                            "vector_distance": 0.1234,
+                            "vector_rank": 1,
+                            "bm25_score": 12.5,
+                            "bm25_rank": 2,
+                            "rrf_score": 0.016,
+                            "rerank_score": None,
+                            "rerank_rank": None,
+                            "mmr_selected": True
+                        }
+                    }
+                ]
+            )
+
+        appendix = agent._build_rag_explain_appendix(run_id)
+        assert "RAG Retrieval Explanation Appendix" in appendix
+        assert "### Query 1: `agent query`" in appendix
+        assert "Doc Title" in appendix
+        assert "Vector Dist: 0.1234" in appendix
+        assert "BM25 Score: 12.50" in appendix
+        assert "RRF: 0.0160" in appendix
+        assert "MMR Selected" in appendix
+
+        # Cleanup
+        import shutil
+        shutil.rmtree(db_path, ignore_errors=True)
+

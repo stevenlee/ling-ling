@@ -32,6 +32,11 @@ THOUGHTFUL_CACHE_DIR            = os.getenv("THOUGHTFUL_CACHE_DIR") or None
 # source-grounding defects and a keep/revise/reject verdict. Adds one LLM call
 # per long-doc ingestion; flip to "false" to disable on cost-constrained runs.
 SYNTHESIS_CRITIQUE_ENABLED      = os.getenv("SYNTHESIS_CRITIQUE_ENABLED", "true").lower() == "true"
+RAG_EXPLAIN_ENABLED             = os.getenv("RAG_EXPLAIN_ENABLED", "false").lower() == "true"
+MAINTENANCE_SCHEDULER_ENABLED   = os.getenv("MAINTENANCE_SCHEDULER_ENABLED", "true").lower() == "true"
+MAINTENANCE_POLL_SECONDS        = int(os.getenv("MAINTENANCE_POLL_SECONDS", "300"))
+RETRIEVAL_BENCH_MIN_PASS_RATE   = float(os.getenv("RETRIEVAL_BENCH_MIN_PASS_RATE", "0.8"))
+
 
 # ─── Embedding Configuration ──────────────────────────────────────────
 EMBEDDING_PROVIDER              = os.getenv("EMBEDDING_PROVIDER", "local").lower()
@@ -51,11 +56,13 @@ BM25_MULTIPLIER                 = int(os.getenv("BM25_MULTIPLIER", "3"))
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
 SYSTEM_ENGINE_DIR = PROJECT_ROOT / "System_Engine"
+SCRATCH_DIR = SYSTEM_ENGINE_DIR / "scratch"
 PID_FILE = SYSTEM_ENGINE_DIR / "daemon.pid"
 
 WIKI_VAULT_DIR = PROJECT_ROOT / "lings-desktop"
 INDEX_FILE = WIKI_VAULT_DIR / "index.md"
 LOG_FILE = WIKI_VAULT_DIR / "log.md"
+MAINTENANCE_LOG_FILE = WIKI_VAULT_DIR / "maintenance.log.md"
 SCRIPTURE_DIR = WIKI_VAULT_DIR / "Scripture"
 SCRIPTURE_FILE = SCRIPTURE_DIR / "Scripture.md"
 PERSONAS_DIR = SCRIPTURE_DIR / "Personas"
@@ -77,6 +84,8 @@ SKILLS_DIR = WIKI_VAULT_DIR / "Skills"
 BACKUPS_DIR = PROJECT_ROOT / "Backups"
 
 DATABASE_DIR = WIKI_VAULT_DIR / "Database"
+MAINTENANCE_STATE_FILE = DATABASE_DIR / "maintenance_state.json"
+RETRIEVAL_BENCH_FILE = SCRATCH_DIR / "retrieval_bench.yml"
 RAW_DIR = WIKI_VAULT_DIR / "raw"
 RAW_CONSOLIDATE_DIR = RAW_DIR / "consolidate"
 RAW_PROMPTS_DIR = RAW_DIR / "prompts"
@@ -173,7 +182,7 @@ _MANAGED_DIRECTORIES = (
     CLIPPINGS_DIR, CONSOLIDATE_DIR, TO_LLM_DIR, FROM_LLM_DIR, PAGES_DIR, NOTES_DIR,
     EXCALIDRAW_DIR, ASSETS_DIR, RAW_CONSOLIDATE_DIR, RAW_PROMPTS_DIR,
     RAW_ASSETS_DIR, RAW_MERGED_DIR, SCRIPTURE_DIR, PERSONAS_DIR, GUIDELINES_DIR,
-    SKILLS_DIR, BACKUPS_DIR, TEMPLATES_DIR, PROMPTS_DIR, OPERATIONS_DIR,
+    SKILLS_DIR, BACKUPS_DIR, TEMPLATES_DIR, PROMPTS_DIR, OPERATIONS_DIR, SCRATCH_DIR,
 )
 
 

@@ -116,6 +116,10 @@ class RAGManager:
         
         # Initialize persistent client
         self.client = chromadb.PersistentClient(path=str(self.db_dir))
+
+        # Initialize trace store
+        from services.trace_store import TraceStore
+        self.trace_store = TraceStore()
         
         # Initialize embedding function based on configuration
         if EMBEDDING_PROVIDER == "gemini":
@@ -605,6 +609,9 @@ class RAGManager:
             distances = vec_results.get('distances', [[]])[0]
             embeddings = vec_results.get('embeddings', [[]])[0] if need_embeddings else []
 
+            # Trace candidate info
+            candidate_info: dict[str, dict] = {}
+
             by_id: dict[str, dict] = {}
             for i, cid in enumerate(vec_ids):
                 c = {
@@ -617,10 +624,23 @@ class RAGManager:
                     c["embedding"] = embeddings[i]
                 by_id[cid] = c
 
+                candidate_info[cid] = {
+                    "vector_distance": distances[i] if i < len(distances) else 0.0,
+                    "vector_rank": i + 1,
+                    "bm25_score": None,
+                    "bm25_rank": None,
+                    "rrf_score": None,
+                    "rerank_score": None,
+                    "rerank_rank": None,
+                    "mmr_selected": False,
+                    "passed_layers": ["vector"]
+                }
+
             bm25_ids: list[str] = []
             rrf_scores: dict[str, float] = {}
             if use_hybrid:
                 bm25_hits = self._bm25.query(query_text, top_k * BM25_MULTIPLIER)
+                bm25_score_map = {cid: score for cid, score in bm25_hits}
                 raw_ids = [cid for cid, _ in bm25_hits]
                 if where and raw_ids:
                     try:
@@ -657,7 +677,29 @@ class RAGManager:
                     except Exception as e:
                         logging.debug(f"BM25 chunk fetch failed: {e}")
 
+                for i, cid in enumerate(bm25_ids):
+                    if cid not in candidate_info:
+                        candidate_info[cid] = {
+                            "vector_distance": None,
+                            "vector_rank": None,
+                            "bm25_score": bm25_score_map.get(cid),
+                            "bm25_rank": i + 1,
+                            "rrf_score": None,
+                            "rerank_score": None,
+                            "rerank_rank": None,
+                            "mmr_selected": False,
+                            "passed_layers": ["bm25"]
+                        }
+                    else:
+                        candidate_info[cid]["bm25_score"] = bm25_score_map.get(cid)
+                        candidate_info[cid]["bm25_rank"] = i + 1
+                        candidate_info[cid]["passed_layers"].append("bm25")
+
                 rrf_scores = rrf_merge([vec_ids, bm25_ids])
+                for cid, rrf_s in rrf_scores.items():
+                    if cid in candidate_info:
+                        candidate_info[cid]["rrf_score"] = rrf_s
+
                 ordered_ids = sorted(by_id.keys(), key=lambda c: rrf_scores.get(c, 0.0), reverse=True)
                 candidates = [by_id[cid] for cid in ordered_ids]
             else:
@@ -667,10 +709,25 @@ class RAGManager:
                 scores = reranker.score(query_text, [c["text"] for c in candidates])
                 for c, s in zip(candidates, scores):
                     c["rerank_score"] = s
+                    cid = c["id"]
+                    if cid in candidate_info:
+                        candidate_info[cid]["rerank_score"] = s
+                        candidate_info[cid]["passed_layers"].append("rerank")
                 candidates.sort(key=lambda x: x.get("rerank_score", 0.0), reverse=True)
+                for idx, c in enumerate(candidates):
+                    cid = c["id"]
+                    if cid in candidate_info:
+                        candidate_info[cid]["rerank_rank"] = idx + 1
 
+            mmr_ran = False
             if diversity > 0 and candidates:
+                for c in candidates:
+                    cid = c["id"]
+                    if cid in candidate_info:
+                        candidate_info[cid]["passed_layers"].append("mmr")
+
                 lambda_param = max(0.0, min(1.0, 1.0 - diversity))
+                mmr_ran = True
                 if use_rerank:
                     relevance = [c.get("rerank_score", 0.0) for c in candidates]
                     candidates = self._mmr_select(
@@ -687,13 +744,83 @@ class RAGManager:
                         candidates, top_k, lambda_param, query_emb=query_emb,
                     )
 
-            for c in candidates:
-                c.pop("embedding", None)
+            final_returned = candidates[:top_k]
+            if mmr_ran:
+                for c in final_returned:
+                    cid = c["id"]
+                    if cid in candidate_info:
+                        candidate_info[cid]["mmr_selected"] = True
 
-            return candidates[:top_k]
+            for c in final_returned:
+                c.pop("embedding", None)
+                cid = c["id"]
+                if cid in candidate_info:
+                    c["retrieval_breakdown"] = candidate_info[cid]
+
+            # Record event in trace store
+            options = {
+                "tags": tags,
+                "section_path": section_path,
+                "diversity": diversity,
+                "rerank": use_rerank,
+                "hybrid": use_hybrid,
+            }
+            recorded_results = []
+            for c in final_returned:
+                recorded_results.append({
+                    "id": c["id"],
+                    "title": c["metadata"].get("title"),
+                    "source": c["metadata"].get("source"),
+                    "retrieval_breakdown": c.get("retrieval_breakdown"),
+                })
+            
+            try:
+                trace_id = None
+                if hasattr(self.trace_store, "current_trace_ids"):
+                    trace_ids = self.trace_store.current_trace_ids()
+                    if trace_ids:
+                        trace_id = trace_ids[-1]
+                
+                self.trace_store.record_retrieval_event(
+                    query_text=query_text,
+                    top_k=top_k,
+                    options=options,
+                    results=recorded_results,
+                    trace_id=trace_id,
+                    status="succeeded",
+                )
+            except Exception as e:
+                logging.debug(f"Failed to record retrieval event: {e}")
+
+            return final_returned
         except Exception as e:
             logging.error(f"RAG query failed: {e}")
+            try:
+                options = {
+                    "tags": tags,
+                    "section_path": section_path,
+                    "diversity": diversity,
+                    "rerank": rerank,
+                    "hybrid": hybrid,
+                }
+                trace_id = None
+                if hasattr(self.trace_store, "current_trace_ids"):
+                    trace_ids = self.trace_store.current_trace_ids()
+                    if trace_ids:
+                        trace_id = trace_ids[-1]
+                self.trace_store.record_retrieval_event(
+                    query_text=query_text,
+                    top_k=top_k,
+                    options=options,
+                    results=[],
+                    trace_id=trace_id,
+                    status="failed",
+                    error=str(e),
+                )
+            except Exception as trace_error:
+                logging.debug(f"Failed to record failed retrieval event: {trace_error}")
             return []
+
 
     @staticmethod
     def _mmr_select(

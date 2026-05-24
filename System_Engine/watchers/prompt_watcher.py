@@ -4,6 +4,7 @@ import threading
 import logging
 import os
 import shutil
+import contextlib
 from pathlib import Path
 from datetime import datetime
 import watchdog.events
@@ -155,65 +156,98 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                     self._processed_files.add(intent_key)
                 threading.Timer(60.0, self._remove_from_processed, args=[intent_key]).start()
             
-            # Execution
-            output_path = None
-            
-            # Special case for non-agent maintenance (keep for now or migrate to agents later)
-            if intent_key in ["kb_zip", "kb_unzip", "kb_reset"]:
-                from maintenance.kb_manager import KBManager
-                manager = KBManager(self.rag)
-                if intent_key == "kb_zip": res = f"✅ Backup successful: {manager.zip_kb().name}"
-                elif intent_key == "kb_reset": res = manager.reset_kb()
-                else: res = manager.unzip_kb(target_entities[0] if target_entities else None)
+            run_context = (
+                self.llm.trace_run(
+                    intent=intent_key or "chat",
+                    agent=intent_key,
+                    trigger_type="prompt_file",
+                    command_id=filepath.name,
+                    source_event_id=str(filepath),
+                    metadata={"target_titles": target_entities},
+                )
+                if hasattr(self.llm, "trace_run")
+                else contextlib.nullcontext()
+            )
+            with run_context:
+                # Execution
+                output_path = None
                 
-                output_path = FROM_LLM_DIR / f"✅admin-rpt-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
-                output_path.write_text(f"---\ntitle: \"管理報告\"\ntype: report_admin\n---\n\n{res}", encoding='utf-8')
-
-            elif intent_key == "repair_tags":
-                from maintenance.repair_tags import repair_tags_interactively
-                repair_tags_interactively(filepath)
-
-            elif intent_key:
-                agent = self.registry.get_agent(intent_key)
-                if agent:
-                    # Prepare context
-                    context = {
-                        "target_titles": [t.split('|')[0].strip() for t in target_entities],
-                        "user_directive": query_content,
-                        "strategy_id": "recency",
-                        "is_full_report": "/full" in lower_query
-                    }
+                # Special case for non-agent maintenance (keep for now or migrate to agents later)
+                if intent_key in ["kb_zip", "kb_unzip", "kb_reset"]:
+                    from maintenance.kb_manager import KBManager
+                    manager = KBManager(self.rag)
+                    if intent_key == "kb_zip": res = f"✅ Backup successful: {manager.zip_kb().name}"
+                    elif intent_key == "kb_reset": res = manager.reset_kb()
+                    else: res = manager.unzip_kb(target_entities[0] if target_entities else None)
                     
-                    template_match = re.search(r'/template[:\s]+([\w-]+)', lower_query)
-                    if template_match:
-                        context["forced_template"] = template_match.group(1)
+                    output_path = FROM_LLM_DIR / f"✅admin-rpt-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+                    output_path.write_text(f"---\ntitle: \"管理報告\"\ntype: report_admin\n---\n\n{res}", encoding='utf-8')
+
+                elif intent_key == "repair_tags":
+                    from maintenance.repair_tags import repair_tags_interactively
+                    repair_tags_interactively(filepath)
+
+                elif intent_key:
+                    agent = self.registry.get_agent(intent_key)
+                    if agent:
+                        # Prepare context
+                        context = {
+                            "target_titles": [t.split('|')[0].strip() for t in target_entities],
+                            "user_directive": query_content,
+                            "strategy_id": "recency",
+                            "is_full_report": "/full" in lower_query
+                        }
                         
-                    # Specialized context for InsightAgent
-                    if intent_key == "insight":
-                        for s_id in getattr(agent, 'strategies', {}).keys():
-                            if f"/{s_id}" in lower_query or (s_id == "tags" and "/tag" in lower_query):
-                                context["strategy_id"] = s_id
-                                break
-                    # Specialized context for LingLens/CounterAgent
-                    elif intent_key == "lens":
-                        confidence = "medium"
-                        conf_match = re.search(r'(?:confidence|信心)\s*[:：]\s*(high|medium|low)', lower_query)
-                        if conf_match:
-                            confidence = conf_match.group(1)
-                        context["confidence"] = confidence
-                    
-                    agent.execute(context)
-                else:
-                    logging.warning(f"No agent found for intent: {intent_key}")
-            
-            else:
-                # Default Chat/Q&A
-                relevant = self.rag.query_similar_notes(query_content, top_k=settings.SEARCH_DEPTH)
-                context = "\n---\n".join(relevant) if relevant else (INDEX_FILE.read_text('utf-8') if INDEX_FILE.exists() else "")
-                res = self.llm.answer_query(query_content, context)
+                        template_match = re.search(r'/template[:\s]+([\w-]+)', lower_query)
+                        if template_match:
+                            context["forced_template"] = template_match.group(1)
+                            
+                        # Specialized context for InsightAgent
+                        if intent_key == "insight":
+                            for s_id in getattr(agent, 'strategies', {}).keys():
+                                if f"/{s_id}" in lower_query or (s_id == "tags" and "/tag" in lower_query):
+                                    context["strategy_id"] = s_id
+                                    break
+                        # Specialized context for LingLens/CounterAgent
+                        elif intent_key == "lens":
+                            confidence = "medium"
+                            conf_match = re.search(r'(?:confidence|信心)\s*[:：]\s*(high|medium|low)', lower_query)
+                            if conf_match:
+                                confidence = conf_match.group(1)
+                            context["confidence"] = confidence
+                        
+                        agent.execute(context)
+                    else:
+                        logging.warning(f"No agent found for intent: {intent_key}")
                 
-                output_path = FROM_LLM_DIR / f"💌re-{filepath.stem}.md"
-                output_path.write_text(f"---\ntitle: \"re: {filepath.stem}\"\ntype: chat\n---\n\n> {query_content.strip()}\n\n{res}\n", encoding='utf-8')
+                else:
+                    # Default Chat/Q&A
+                    relevant = self.rag.query_similar_notes(query_content, top_k=settings.SEARCH_DEPTH)
+                    context = "\n---\n".join(relevant) if relevant else (INDEX_FILE.read_text('utf-8') if INDEX_FILE.exists() else "")
+                    res = self.llm.answer_query(query_content, context)
+                    
+                    trace_ids = self.llm.current_trace_ids() if hasattr(self.llm, "current_trace_ids") else []
+                    run_id = self.llm.current_run_id() if hasattr(self.llm, "current_run_id") else None
+                    trace_meta = ""
+                    if run_id or trace_ids:
+                        trace_meta = (
+                            f"run_id: {run_id or ''}\n"
+                            f"trace_ids: {trace_ids}\n"
+                        )
+                    output_path = FROM_LLM_DIR / f"💌re-{filepath.stem}.md"
+                    output_path.write_text(
+                        f"---\ntitle: \"re: {filepath.stem}\"\ntype: chat\n{trace_meta}---\n\n"
+                        f"> {query_content.strip()}\n\n{res}\n",
+                        encoding='utf-8',
+                    )
+                    if hasattr(self.llm, "trace_store"):
+                        self.llm.trace_store.record_artifact(
+                            path=output_path,
+                            artifact_type="chat",
+                            title=f"re: {filepath.stem}",
+                            trace_id=trace_ids[-1] if trace_ids else None,
+                            metadata={"run_id": run_id, "trace_ids": trace_ids},
+                        )
 
             self._archive_raw(filepath)
             

@@ -163,6 +163,27 @@ class BaseAgent:
         body = self._self_correct(body)
 
         metadata = dict(metadata or {})
+        trace_ids = []
+        run_id = None
+        if hasattr(self.llm, "current_trace_ids"):
+            candidate_trace_ids = self.llm.current_trace_ids()
+            if isinstance(candidate_trace_ids, list) and all(isinstance(t, str) for t in candidate_trace_ids):
+                trace_ids = candidate_trace_ids
+        if hasattr(self.llm, "current_run_id"):
+            candidate_run_id = self.llm.current_run_id()
+            if isinstance(candidate_run_id, str):
+                run_id = candidate_run_id
+        if trace_ids:
+            metadata.setdefault("trace_ids", trace_ids)
+        if run_id:
+            metadata.setdefault("run_id", run_id)
+
+        from core.config import RAG_EXPLAIN_ENABLED
+        if RAG_EXPLAIN_ENABLED and run_id:
+            appendix = self._build_rag_explain_appendix(run_id)
+            if appendix:
+                body += appendix
+
         metadata.update({
             "title": title,
             "type": report_type,
@@ -178,8 +199,95 @@ class BaseAgent:
         filename = f"✅{report_type}-{safe_title}-{timestamp}.md"
         output_path = FROM_LLM_DIR / filename
         output_path.write_text(full_markdown, encoding="utf-8")
+        if hasattr(self.llm, "trace_store"):
+            try:
+                self.llm.trace_store.record_artifact(
+                    path=output_path,
+                    artifact_type=report_type,
+                    title=title,
+                    trace_id=trace_ids[-1] if trace_ids else None,
+                    metadata=metadata,
+                    quality_verdict=metadata.get("quality_verdict"),
+                    quality_score=metadata.get("quality_score"),
+                )
+            except Exception as e:
+                logging.debug(f"Artifact trace write failed: {e}")
         logging.info(f"Report generated: {output_path.name} ({len(body)} chars)")
         return output_path, full_markdown
+
+    def _build_rag_explain_appendix(self, run_id: str) -> str:
+        if not hasattr(self.llm, "trace_store"):
+            return ""
+        try:
+            events = self.llm.trace_store.get_retrieval_events_by_run(run_id)
+        except Exception:
+            return ""
+        if not events:
+            return ""
+
+        import json
+        lines = [
+            "",
+            "---",
+            "## 🔍 RAG Retrieval Explanation Appendix",
+            "",
+            "> [!NOTE]",
+            "> This appendix explains the retrieval process and score breakdown for all queries executed in this run.",
+            ""
+        ]
+        
+        for idx, event in enumerate(events, 1):
+            query = event.get("query_text", "")
+            top_k = event.get("top_k", 3)
+            options_raw = event.get("options_json", "{}")
+            results_raw = event.get("results_json", "[]")
+            
+            try:
+                options = json.loads(options_raw)
+            except Exception:
+                options = {}
+            try:
+                results = json.loads(results_raw)
+            except Exception:
+                results = []
+                
+            lines.append(f"### Query {idx}: `{query}`")
+            lines.append(f"- **Top K**: {top_k}")
+            lines.append(f"- **Filters & Options**: Hybrid={options.get('hybrid', False)}, Rerank={options.get('rerank', False)}, Diversity={options.get('diversity', 0.0)}")
+            lines.append("")
+            
+            if not results:
+                lines.append("> No documents retrieved.")
+                lines.append("")
+                continue
+                
+            lines.append("| Rank | Title | Source | Passed Layers | Breakdown Scores |")
+            lines.append("|:---:|:---|:---|:---|:---|")
+            
+            for r_idx, r in enumerate(results, start=1):
+                title = r.get("title", "Unknown")
+                source = r.get("source", "Unknown")
+                breakdown = r.get("retrieval_breakdown") or {}
+                
+                passed = ", ".join(breakdown.get("passed_layers", []))
+                
+                scores_list = []
+                if breakdown.get("vector_distance") is not None:
+                    scores_list.append(f"Vector Dist: {breakdown['vector_distance']:.4f} (#Rank {breakdown.get('vector_rank', '?')})")
+                if breakdown.get("bm25_score") is not None:
+                    scores_list.append(f"BM25 Score: {breakdown['bm25_score']:.2f} (#Rank {breakdown.get('bm25_rank', '?')})")
+                if breakdown.get("rrf_score") is not None:
+                    scores_list.append(f"RRF: {breakdown['rrf_score']:.4f}")
+                if breakdown.get("rerank_score") is not None:
+                    scores_list.append(f"Rerank: {breakdown['rerank_score']:.4f} (#Rank {breakdown.get('rerank_rank', '?')})")
+                if breakdown.get("mmr_selected"):
+                    scores_list.append("MMR Selected")
+                    
+                scores_str = "<br>".join(scores_list)
+                lines.append(f"| {r_idx} | [[{title}]] | `{source}` | `{passed}` | {scores_str} |")
+            lines.append("")
+            
+        return "\n".join(lines)
 
     def execute(self, task_context: dict):
         raise NotImplementedError("Subclasses must implement execute()")

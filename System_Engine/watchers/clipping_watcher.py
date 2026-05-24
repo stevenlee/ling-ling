@@ -1,6 +1,7 @@
 import time
 import logging
 import shutil
+import contextlib
 from pathlib import Path
 from datetime import datetime
 import watchdog.events
@@ -85,11 +86,24 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
         return processed
         
     def process_file(self, filepath: Path):
-        ext = filepath.suffix.lower()
-        if ext == '.md':
-            self._handle_markdown(filepath)
-        elif ext in ['.png', '.jpg', '.jpeg']:
-            self._handle_image(filepath)
+        run_context = (
+            self.llm.trace_run(
+                intent="ingest",
+                agent="IngestionPipeline",
+                trigger_type="clipping_file",
+                command_id=filepath.name,
+                source_event_id=str(filepath),
+                metadata={"suffix": filepath.suffix.lower()},
+            )
+            if hasattr(self.llm, "trace_run")
+            else contextlib.nullcontext()
+        )
+        with run_context:
+            ext = filepath.suffix.lower()
+            if ext == '.md':
+                self._handle_markdown(filepath)
+            elif ext in ['.png', '.jpg', '.jpeg']:
+                self._handle_image(filepath)
 
     def _handle_markdown(self, filepath: Path):
         try:

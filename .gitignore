@@ -61,7 +61,8 @@ Backups/
 
 # Developer cache and scratch
 System_Engine/.cache/
-System_Engine/scratch/
+System_Engine/scratch/*
+!System_Engine/scratch/retrieval_bench.yml
 
 # Vault temporary / runtime contents
 lings-desktop/2026-05-15.md

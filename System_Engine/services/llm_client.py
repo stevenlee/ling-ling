@@ -23,6 +23,7 @@ import logging
 import mimetypes
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,7 @@ from core.config import (
 )
 from core.parser import extract_json_object, strip_body_frontmatter
 from core.utils import MtimeCache, digest_value_to_text
+from services.trace_store import TraceStore, elapsed_ms, usage_to_counts
 
 
 # ─── Constants ────────────────────────────────────────────────────────
@@ -161,6 +163,7 @@ class LLMClient:
     def __init__(self):
         self.provider = LLM_PROVIDER
         self._file_cache = MtimeCache()
+        self.trace_store = TraceStore()
 
         if self.provider == "vllm":
             self.client, self.model = self._build_openai_client(
@@ -199,26 +202,87 @@ class LLMClient:
         user_msg: Any,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        trace_context: dict | None = None,
     ) -> str:
         temperature = settings.CREATIVITY if temperature is None else temperature
         max_tokens = settings.MAX_OUTPUT if max_tokens is None else max_tokens
+        trace_context = dict(trace_context or {})
+        started = time.perf_counter()
 
-        if self.provider == "gemini":
-            genai = _genai()
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=user_msg if isinstance(user_msg, list) else [str(user_msg)],
-                config=genai.types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=temperature,
-                    max_output_tokens=max_tokens,
-                ),
-            )
-            return response.text or ""
+        try:
+            if self.provider == "gemini":
+                genai = _genai()
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=user_msg if isinstance(user_msg, list) else [str(user_msg)],
+                    config=genai.types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        temperature=temperature,
+                        max_output_tokens=max_tokens,
+                    ),
+                )
+                text = response.text or ""
+                prompt_tokens, completion_tokens, total_tokens = self._gemini_usage_counts(response)
+            else:
+                text, usage = self._openai_chat(system_prompt, user_msg, temperature, max_tokens)
+                prompt_tokens, completion_tokens, total_tokens = usage_to_counts(usage)
 
-        return self._openai_chat(system_prompt, user_msg, temperature, max_tokens)
+            try:
+                metadata = {
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    **trace_context.pop("metadata", {}),
+                }
+                self.trace_store.record_llm_call(
+                    system_prompt=system_prompt,
+                    user_msg=user_msg,
+                    response_text=text,
+                    provider=self.provider,
+                    model=self.model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    latency_ms=elapsed_ms(started),
+                    status="succeeded",
+                    metadata=metadata,
+                    **trace_context,
+                )
+            except Exception as trace_error:
+                logging.debug(f"LLM trace write failed: {trace_error}")
+            return text
+        except Exception as e:
+            try:
+                self.trace_store.record_llm_call(
+                    system_prompt=system_prompt,
+                    user_msg=user_msg,
+                    response_text=None,
+                    provider=self.provider,
+                    model=self.model,
+                    latency_ms=elapsed_ms(started),
+                    status="failed",
+                    error=str(e),
+                    metadata={
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        **trace_context.pop("metadata", {}),
+                    },
+                    **trace_context,
+                )
+            except Exception as trace_error:
+                logging.debug(f"LLM trace write failed: {trace_error}")
+            raise
 
-    def _openai_chat(self, system_prompt: str, user_msg: Any, temperature: float, max_tokens: int) -> str:
+    @staticmethod
+    def _gemini_usage_counts(response: Any) -> tuple[int | None, int | None, int | None]:
+        usage = getattr(response, "usage_metadata", None)
+        if usage is None:
+            return None, None, None
+        prompt = getattr(usage, "prompt_token_count", None)
+        completion = getattr(usage, "candidates_token_count", None)
+        total = getattr(usage, "total_token_count", None)
+        return prompt, completion, total
+
+    def _openai_chat(self, system_prompt: str, user_msg: Any, temperature: float, max_tokens: int) -> tuple[str, Any]:
         extra_body = {"num_ctx": settings.MEMORY_LIMIT} if self.provider == "ollama" else {}
         response = self.client.chat.completions.create(
             model=self.model,
@@ -230,7 +294,16 @@ class LLMClient:
             max_tokens=max_tokens,
             extra_body=extra_body,
         )
-        return response.choices[0].message.content or ""
+        return response.choices[0].message.content or "", getattr(response, "usage", None)
+
+    def trace_run(self, **kwargs):
+        return self.trace_store.run(**kwargs)
+
+    def current_trace_ids(self) -> list[str]:
+        return self.trace_store.current_trace_ids()
+
+    def current_run_id(self) -> str | None:
+        return self.trace_store.current_run_id()
 
     # ─── Localized prompt loading ───────────────────────────────────────
 
@@ -380,13 +453,27 @@ class LLMClient:
         try:
             if image_path:
                 user_msg = self._build_multimodal_user_msg(image_path, filename, labels)
-                response = self._complete_text(system_prompt, user_msg)
+                response = self._complete_text(
+                    system_prompt,
+                    user_msg,
+                    trace_context={
+                        "stage": "generate_entity_page",
+                        "metadata": {"filename": filename, "input_kind": "image"},
+                    },
+                )
             else:
                 user_text = f"{labels['file']}: {filename}\n\n"
                 if context_hint:
                     user_text += f"[Context]: {context_hint}\n\n"
                 user_text += f"{labels['content']}:\n{markdown_content}"
-                response = self._complete_text(system_prompt, user_text)
+                response = self._complete_text(
+                    system_prompt,
+                    user_text,
+                    trace_context={
+                        "stage": "generate_entity_page",
+                        "metadata": {"filename": filename, "input_kind": "markdown"},
+                    },
+                )
             return self._hybrid_parse(response)
         except Exception as e:
             logging.error(f"LLM Error in generate_entity_page: {e}")
@@ -450,7 +537,18 @@ class LLMClient:
             )
 
         try:
-            return self._complete_text(system_prompt, user_msg, temperature=temperature)
+            return self._complete_text(
+                system_prompt,
+                user_msg,
+                temperature=temperature,
+                trace_context={
+                    "stage": "answer_query",
+                    "persona": persona,
+                    "operation": operation,
+                    "template": forced_template or default_template,
+                    "metadata": {"custom_instruction": bool(custom_instruction)},
+                },
+            )
         except Exception as e:
             logging.error(f"LLM Error in answer_query: {e}")
             return f"Error: {e}"
@@ -458,6 +556,8 @@ class LLMClient:
     def translate_tags(self, tags: list[str]) -> dict:
         system_prompt = "Return a JSON mapping of {original_tag: english_equivalent} for these tags."
         user_msg = f"Tags: {tags}"
+        started = time.perf_counter()
+        raw = ""
         try:
             if self.provider == "gemini":
                 genai = _genai()
@@ -471,6 +571,7 @@ class LLMClient:
                     ),
                 )
                 raw = response.text or ""
+                prompt_tokens, completion_tokens, total_tokens = self._gemini_usage_counts(response)
             else:
                 response = self.client.chat.completions.create(
                     model=self.model,
@@ -482,7 +583,42 @@ class LLMClient:
                     temperature=0.1,
                 )
                 raw = response.choices[0].message.content or ""
+                prompt_tokens, completion_tokens, total_tokens = usage_to_counts(
+                    getattr(response, "usage", None)
+                )
+            try:
+                self.trace_store.record_llm_call(
+                    system_prompt=system_prompt,
+                    user_msg=user_msg,
+                    response_text=raw,
+                    provider=self.provider,
+                    model=self.model,
+                    stage="translate_tags",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    latency_ms=elapsed_ms(started),
+                    status="succeeded",
+                    metadata={"tag_count": len(tags), "temperature": 0.1},
+                )
+            except Exception as trace_error:
+                logging.debug(f"LLM trace write failed: {trace_error}")
         except Exception as e:
+            try:
+                self.trace_store.record_llm_call(
+                    system_prompt=system_prompt,
+                    user_msg=user_msg,
+                    response_text=raw or None,
+                    provider=self.provider,
+                    model=self.model,
+                    stage="translate_tags",
+                    latency_ms=elapsed_ms(started),
+                    status="failed",
+                    error=str(e),
+                    metadata={"tag_count": len(tags), "temperature": 0.1},
+                )
+            except Exception as trace_error:
+                logging.debug(f"LLM trace write failed: {trace_error}")
             logging.warning(f"Tag translation failed: {e}")
             return {}
 
@@ -533,7 +669,20 @@ class LLMClient:
         )
 
         try:
-            raw = self._complete_text(system_prompt, prompt, temperature=0.2, max_tokens=1800)
+            raw = self._complete_text(
+                system_prompt,
+                prompt,
+                temperature=0.2,
+                max_tokens=1800,
+                trace_context={
+                    "stage": "generate_part_digest",
+                    "metadata": {
+                        "title": title,
+                        "part_number": part_number,
+                        "total_parts": total_parts,
+                    },
+                },
+            )
             parsed = extract_json_object(raw)
             if parsed:
                 return self._apply_part_digest_defaults(parsed, part_number)
@@ -631,7 +780,19 @@ class LLMClient:
 
         try:
             return self._strip_accidental_frontmatter(
-                self._complete_text(system_prompt, prompt, temperature=0.25, max_tokens=settings.MAX_OUTPUT)
+                self._complete_text(
+                    system_prompt,
+                    prompt,
+                    temperature=0.25,
+                    max_tokens=settings.MAX_OUTPUT,
+                    trace_context={
+                        "stage": "generate_synthesis",
+                        "persona": "none",
+                        "operation": "synthesize",
+                        "template": template or settings.USE_TEMPLATE or "wiki-note",
+                        "metadata": {"title": title, "part_count": len(part_digests)},
+                    },
+                )
             )
         except Exception as e:
             logging.error(f"Synthesis failed for {title}: {e}")
@@ -665,7 +826,19 @@ class LLMClient:
         )
         try:
             return self._strip_accidental_frontmatter(
-                self._complete_text(system_prompt, prompt, temperature=0.1, max_tokens=settings.MAX_OUTPUT)
+                self._complete_text(
+                    system_prompt,
+                    prompt,
+                    temperature=0.1,
+                    max_tokens=settings.MAX_OUTPUT,
+                    trace_context={
+                        "stage": "critique_text",
+                        "persona": "none",
+                        "operation": "critique",
+                        "template": "none",
+                        "metadata": {"focus": focus},
+                    },
+                )
             )
         except Exception as e:
             logging.error(f"Critique failed: {e}")
@@ -703,6 +876,10 @@ class LLMClient:
                 user_msg=user_msg,
                 temperature=0.0,
                 max_tokens=200,
+                trace_context={
+                    "stage": "score_text_quality",
+                    "metadata": {"prompt_version": prompt_version},
+                },
             )
         except Exception as e:
             logging.warning(f"score_text_quality LLM call failed: {e}")
@@ -766,6 +943,13 @@ class LLMClient:
                 user_msg=user_msg,
                 temperature=0.0,
                 max_tokens=200,
+                trace_context={
+                    "stage": "find_topic_shifts",
+                    "metadata": {
+                        "prompt_version": prompt_version,
+                        "paragraph_count": len(paragraphs),
+                    },
+                },
             )
         except Exception as e:
             logging.warning(f"find_topic_shifts LLM call failed: {e}")
@@ -807,6 +991,10 @@ class LLMClient:
                 user_msg=text,
                 temperature=0.0,
                 max_tokens=200,
+                trace_context={
+                    "stage": "summarize_for_context",
+                    "metadata": {"prompt_version": prompt_version, "max_chars": max_chars},
+                },
             )
         except Exception as e:
             logging.warning(f"summarize_for_context LLM call failed: {e}")

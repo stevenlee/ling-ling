@@ -120,12 +120,14 @@ class IngestionPipeline:
             body += self._build_navigation(base_title, part_info)
 
             wiki_meta = self._build_part_metadata(title, page_type, tags, part_info, quality_fixes)
+            self._attach_trace_metadata(wiki_meta)
             wiki_markdown = dump_markdown_with_metadata(wiki_meta, body)
 
             page_folder = PAGES_DIR / base_title
             page_folder.mkdir(parents=True, exist_ok=True)
             page_path = page_folder / f"{title}.md"
             page_path.write_text(wiki_markdown, encoding="utf-8")
+            self._record_artifact(page_path, page_type, title, wiki_meta)
 
             if not (part_info and part_info.get("defer_rag")):
                 self.rag.add_document(
@@ -394,11 +396,19 @@ class IngestionPipeline:
             final_meta["quality_fixes"] = combined_fixes
         if critique_verdict:
             final_meta["quality_verdict"] = critique_verdict
+        self._attach_trace_metadata(final_meta)
 
         entity_dir = PAGES_DIR / base_title
         entity_dir.mkdir(parents=True, exist_ok=True)
         synthesis_file = entity_dir / f"{base_title} (Synthesis).md"
         synthesis_file.write_text(dump_markdown_with_metadata(final_meta, final_content), encoding="utf-8")
+        self._record_artifact(
+            synthesis_file,
+            "synthesis",
+            f"{base_title} (Synthesis)",
+            final_meta,
+            quality_verdict=critique_verdict,
+        )
 
         self.rag.add_document(synthesis_file, base_title, final_content, tags=final_meta["tags"])
         return synthesis_file
@@ -598,11 +608,13 @@ class IngestionPipeline:
         body, quality_fixes = run_markdown_quality_checks(body)
         if quality_fixes:
             metadata["quality_fixes"] = quality_fixes
+        self._attach_trace_metadata(metadata)
 
         stitched_file = PAGES_DIR / base_title / f"{base_title} (Stitched).md"
         stitched_file.parent.mkdir(parents=True, exist_ok=True)
         stitched_markdown = dump_markdown_with_metadata(metadata, body)
         stitched_file.write_text(stitched_markdown, encoding="utf-8")
+        self._record_artifact(stitched_file, "stitched_article", metadata["title"], metadata)
 
         self.rag.add_document(stitched_file, f"{base_title} (Stitched)", stitched_markdown, tags=metadata["tags"])
         return stitched_file
@@ -653,6 +665,44 @@ class IngestionPipeline:
         content = self._demote_headings(content, levels=2)
         content, _ = run_markdown_quality_checks(content)
         return content.strip()
+
+    def _attach_trace_metadata(self, metadata: dict) -> None:
+        if hasattr(self.llm, "current_trace_ids"):
+            trace_ids = self.llm.current_trace_ids()
+            if not (isinstance(trace_ids, list) and all(isinstance(t, str) for t in trace_ids)):
+                trace_ids = []
+            if trace_ids:
+                metadata.setdefault("trace_ids", trace_ids)
+        if hasattr(self.llm, "current_run_id"):
+            run_id = self.llm.current_run_id()
+            if not isinstance(run_id, str):
+                run_id = None
+            if run_id:
+                metadata.setdefault("run_id", run_id)
+
+    def _record_artifact(
+        self,
+        path: Path,
+        artifact_type: str,
+        title: str,
+        metadata: dict,
+        quality_verdict: str | None = None,
+    ) -> None:
+        if not hasattr(self.llm, "trace_store"):
+            return
+        trace_ids = metadata.get("trace_ids") or []
+        try:
+            self.llm.trace_store.record_artifact(
+                path=path,
+                artifact_type=artifact_type,
+                title=title,
+                trace_id=trace_ids[-1] if trace_ids else None,
+                metadata=metadata,
+                quality_verdict=quality_verdict or metadata.get("quality_verdict"),
+                quality_score=metadata.get("quality_score"),
+            )
+        except Exception as e:
+            logging.debug(f"Artifact trace write failed: {e}")
 
     @staticmethod
     def _demote_headings(markdown: str, levels: int = 1) -> str:
