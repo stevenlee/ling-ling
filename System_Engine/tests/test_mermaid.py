@@ -33,12 +33,12 @@ class TestLabelQuoting:
     def test_quotes_rectangle(self):
         result, fixes = self._quote("graph TD\nA[Hello world] --> B")
         assert 'A["Hello world"]' in result
-        assert "quoted_mermaid_labels" in fixes
+        assert any(f["type"] == "quoted_mermaid_labels" for f in fixes)
 
     def test_quotes_round(self):
         result, fixes = self._quote("graph TD\nA(Click here) --> B")
         assert 'A("Click here")' in result
-        assert "quoted_mermaid_labels" in fixes
+        assert any(f["type"] == "quoted_mermaid_labels" for f in fixes)
 
     def test_quotes_circle(self):
         result, fixes = self._quote("graph TD\nA((Start)) --> B")
@@ -165,13 +165,13 @@ class TestFenceRepair:
         text = "Intro\n\nmermaid\ngraph TD\n  A --> B\n\nOutro"
         result, fixes = repair_mermaid_fences(text)
         assert "```mermaid" in result
-        assert "wrapped_bare_mermaid" in fixes
+        assert any(f["type"] == "wrapped_bare_mermaid" for f in fixes)
 
     def test_closes_unterminated(self):
         text = "```mermaid\ngraph TD\n  A --> B"
         result, fixes = repair_mermaid_fences(text)
         assert result.endswith("```")
-        assert "closed_unterminated_mermaid" in fixes
+        assert any(f["type"] == "closed_unterminated_mermaid" for f in fixes)
 
 
 # ── Block substitution doesn't collide on duplicates ──────────────

@@ -5,13 +5,18 @@ The public surface (callers across agents/, services/, watchers/, maintenance/):
     parse_markdown_metadata(content)        -> dict
     dump_markdown_with_metadata(meta, body) -> str
     clean_llm_response(text)                -> str
-    run_markdown_quality_checks(text, ...)  -> (str, list[str])
-    repair_mermaid_fences(text)             -> (str, list[str])
-    repair_mermaid_label_quotes(text)       -> (str, list[str])
-    repair_latex_carriage_returns(text)     -> (str, list[str])
-    strip_body_frontmatter(text)            -> (str, list[str])
+    run_markdown_quality_checks(text, ...)  -> (str, list[dict])
+    repair_mermaid_fences(text)             -> (str, list[dict])
+    repair_mermaid_label_quotes(text)       -> (str, list[dict])
+    repair_latex_carriage_returns(text)     -> (str, list[dict])
+    strip_body_frontmatter(text)            -> (str, list[dict])
     extract_json_array(text)                -> list[dict]
     extract_json_object(text)               -> dict
+
+Quality-fix records are structured `{type, line?, before?, after?}` so
+note frontmatter retains a recoverable diff of what changed. Only `type`
+is guaranteed; other fields are omitted when they wouldn't carry
+information.
 
 Every repair function is idempotent: running it twice yields the same output
 as running it once, and the fix-list will be empty on the second pass. This
@@ -151,14 +156,70 @@ _MERMAID_NODE_HEAD_RE = re.compile(r'[\w一-鿿][\w\-一-鿿]*')
 LATEX_CR_COMMAND_RE = re.compile(r'\r(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b')
 
 
-def repair_latex_carriage_returns(text: str) -> tuple[str, list[str]]:
+# ─── quality_fix record helpers ───────────────────────────────────────
+#
+# Each repair function returns a list of structured records
+# `{type, line, before, after}`. Only `type` is required; the other fields
+# are omitted when they wouldn't carry information (e.g. a structural fix
+# with no meaningful before/after snippet). Snippets are truncated to
+# `_FIX_SNIPPET_LEN` characters so a chatty pipeline doesn't bloat the
+# frontmatter of generated notes.
+
+_FIX_SNIPPET_LEN = 80
+
+
+def _truncate_snippet(s: str) -> str:
+    if s is None:
+        return ""
+    if len(s) <= _FIX_SNIPPET_LEN:
+        return s
+    return s[: _FIX_SNIPPET_LEN - 1] + "…"
+
+
+def _make_fix(
+    type_: str,
+    *,
+    line: int | None = None,
+    before: str = "",
+    after: str = "",
+) -> dict:
+    """Build a quality_fix record. Omits empty/None fields for compactness."""
+    fix: dict = {"type": type_}
+    if line is not None:
+        fix["line"] = line
+    before = _truncate_snippet(before)
+    after = _truncate_snippet(after)
+    if before:
+        fix["before"] = before
+    if after:
+        fix["after"] = after
+    return fix
+
+
+def repair_latex_carriage_returns(text: str) -> tuple[str, list[dict]]:
     """Repair `\r` that should have been a literal `\\r` (LaTeX command)."""
     if not text:
         return "", []
-    repaired = LATEX_CR_COMMAND_RE.sub(r'\\r\1', text)
-    if repaired != text:
-        return repaired, ["repaired_latex_carriage_return"]
-    return text, []
+    fixes: list[dict] = []
+    parts: list[str] = []
+    last_end = 0
+    for match in LATEX_CR_COMMAND_RE.finditer(text):
+        parts.append(text[last_end:match.start()])
+        before = match.group(0)
+        after = "\\r" + match.group(1)
+        parts.append(after)
+        line_no = text.count("\n", 0, match.start()) + 1
+        fixes.append(_make_fix(
+            "repaired_latex_carriage_return",
+            line=line_no,
+            before=before,
+            after=after,
+        ))
+        last_end = match.end()
+    if not fixes:
+        return text, []
+    parts.append(text[last_end:])
+    return "".join(parts), fixes
 
 
 # ─── Mermaid: label quoting ────────────────────────────────────────────
@@ -265,17 +326,17 @@ def _quote_labels_in_line(line: str) -> tuple[str, bool]:
     return "".join(out) + comment_part, changed
 
 
-def repair_mermaid_label_quotes(text: str) -> tuple[str, list[str]]:
+def repair_mermaid_label_quotes(text: str) -> tuple[str, list[dict]]:
     """Quote bare labels inside mermaid node shapes within fenced blocks."""
     if not text:
         return "", []
 
     lines = text.splitlines()
     out: list[str] = []
+    fixes: list[dict] = []
     in_mermaid = False
-    any_changed = False
 
-    for line in lines:
+    for idx, line in enumerate(lines):
         stripped = line.strip().lower()
         if not in_mermaid and stripped == "```mermaid":
             in_mermaid = True
@@ -288,12 +349,18 @@ def repair_mermaid_label_quotes(text: str) -> tuple[str, list[str]]:
 
         if in_mermaid:
             new_line, changed = _quote_labels_in_line(line)
-            any_changed = any_changed or changed
+            if changed:
+                fixes.append(_make_fix(
+                    "quoted_mermaid_labels",
+                    line=idx + 1,
+                    before=line,
+                    after=new_line,
+                ))
             out.append(new_line)
         else:
             out.append(line)
 
-    return "\n".join(out), (["quoted_mermaid_labels"] if any_changed else [])
+    return "\n".join(out), fixes
 
 
 # ─── Mermaid: fence repair ────────────────────────────────────────────
@@ -317,7 +384,7 @@ def _build_next_nonempty(lines: list[str]) -> list[int]:
     return nxt
 
 
-def repair_mermaid_fences(text: str) -> tuple[str, list[str]]:
+def repair_mermaid_fences(text: str) -> tuple[str, list[dict]]:
     """Fix common LLM mistakes around mermaid code fences."""
     if not text:
         return "", []
@@ -325,7 +392,7 @@ def repair_mermaid_fences(text: str) -> tuple[str, list[str]]:
     lines = text.splitlines()
     nxt = _build_next_nonempty(lines)
     out: list[str] = []
-    fixes: list[str] = []
+    fixes: list[dict] = []
     in_fence = False
     fence_lang = ""
     i = 0
@@ -349,7 +416,11 @@ def repair_mermaid_fences(text: str) -> tuple[str, list[str]]:
                     and not MARKDOWN_BOUNDARY_RE.match(following)
                     and _is_mermaid_continuation(following)
                 ):
-                    fixes.append("ignored_premature_mermaid_close")
+                    fixes.append(_make_fix(
+                        "ignored_premature_mermaid_close",
+                        line=i + 1,
+                        before=line,
+                    ))
                     i += 1
                     continue
 
@@ -365,7 +436,12 @@ def repair_mermaid_fences(text: str) -> tuple[str, list[str]]:
             and stripped.lower() == "mermaid"
             and MERMAID_START_RE.match(peek_next_nonempty(i + 1))
         ):
-            fixes.append("wrapped_bare_mermaid")
+            fixes.append(_make_fix(
+                "wrapped_bare_mermaid",
+                line=i + 1,
+                before=line,
+                after="```mermaid",
+            ))
             out.append("```mermaid")
             i += 1
 
@@ -403,7 +479,11 @@ def repair_mermaid_fences(text: str) -> tuple[str, list[str]]:
         i += 1
 
     if in_fence and fence_lang == "mermaid":
-        fixes.append("closed_unterminated_mermaid")
+        fixes.append(_make_fix(
+            "closed_unterminated_mermaid",
+            line=n,
+            after="```",
+        ))
         out.append("```")
 
     return "\n".join(out), fixes
@@ -411,7 +491,7 @@ def repair_mermaid_fences(text: str) -> tuple[str, list[str]]:
 
 # ─── Misc cleanup ──────────────────────────────────────────────────────
 
-def strip_body_frontmatter(text: str) -> tuple[str, list[str]]:
+def strip_body_frontmatter(text: str) -> tuple[str, list[dict]]:
     """Remove accidental YAML frontmatter from an LLM-generated body.
 
     Only strips the leading `---...---` block when it parses as a YAML
@@ -437,16 +517,26 @@ def strip_body_frontmatter(text: str) -> tuple[str, list[str]]:
         return text, []
     if not isinstance(parsed, dict):
         return text, []
+    full_block = text_stripped[: match.end()]
     cleaned = text_stripped[match.end():].lstrip()
-    return cleaned, ["removed_body_frontmatter"]
+    return cleaned, [_make_fix(
+        "removed_body_frontmatter",
+        line=1,
+        before=full_block,
+    )]
 
 
-def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> tuple[str, list[str]]:
-    """Run deterministic cleanup passes. Idempotent."""
+def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> tuple[str, list[dict]]:
+    """Run deterministic cleanup passes. Idempotent.
+
+    Returns `(cleaned_text, fixes)`. Each fix is a structured dict:
+    `{type, line?, before?, after?}`. The `type` field is always present;
+    the other fields are omitted when they wouldn't carry information.
+    """
     if not text:
         return "", []
 
-    fixes: list[str] = []
+    fixes: list[dict] = []
     cleaned = text
 
     pipeline: list = []
@@ -462,16 +552,24 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
         cleaned, applied = step(cleaned)
         fixes.extend(applied)
 
-    # Line-level trailing whitespace.
-    stripped = "\n".join(line.rstrip() for line in cleaned.split("\n"))
-    if stripped != cleaned:
-        fixes.append("trailing_whitespace")
+    # Line-level trailing whitespace: count affected lines for traceability.
+    affected_lines = [
+        i + 1 for i, line in enumerate(cleaned.split("\n"))
+        if line != line.rstrip()
+    ]
+    if affected_lines:
+        stripped = "\n".join(line.rstrip() for line in cleaned.split("\n"))
+        fixes.append(_make_fix(
+            "trailing_whitespace",
+            line=affected_lines[0],
+            before=f"{len(affected_lines)} line(s) affected",
+        ))
         cleaned = stripped
 
     # Collapse 3+ blank lines down to 2.
     collapsed = re.sub(r'\n{3,}', '\n\n', cleaned)
     if collapsed != cleaned:
-        fixes.append("excessive_blank_lines")
+        fixes.append(_make_fix("excessive_blank_lines"))
         cleaned = collapsed
 
     return cleaned.strip(), fixes

@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import pytest
+import yaml
 from core.parser import (
     extract_json_array,
     extract_json_object,
@@ -106,13 +107,13 @@ class TestMarkdownQualityChecks:
         text = "line one   \nline two  "
         result, fixes = run_markdown_quality_checks(text)
         assert "   " not in result
-        assert "trailing_whitespace" in fixes
+        assert any(f["type"] == "trailing_whitespace" for f in fixes)
 
     def test_removes_excessive_blank_lines(self):
         text = "line one\n\n\n\n\nline two"
         result, fixes = run_markdown_quality_checks(text)
         assert "\n\n\n" not in result
-        assert "excessive_blank_lines" in fixes
+        assert any(f["type"] == "excessive_blank_lines" for f in fixes)
 
     def test_repairs_latex_carriage_returns(self):
         """run_markdown_quality_checks repairs LaTeX CR commands like \\rightarrow."""
@@ -148,7 +149,11 @@ class TestStripBodyFrontmatter:
         text = "---\ntitle: foo\ntags: [a, b]\n---\n# Body"
         cleaned, fixes = strip_body_frontmatter(text)
         assert cleaned == "# Body"
-        assert fixes == ["removed_body_frontmatter"]
+        assert len(fixes) == 1
+        assert fixes[0]["type"] == "removed_body_frontmatter"
+        assert fixes[0]["line"] == 1
+        # before captures the YAML block that got removed
+        assert "title: foo" in fixes[0]["before"]
 
     def test_preserves_text_without_frontmatter(self):
         text = "Just prose, no frontmatter.\n"
@@ -204,7 +209,70 @@ class TestStripBodyFrontmatter:
         text = "\n\n---\ntitle: foo\n---\nBody"
         cleaned, fixes = strip_body_frontmatter(text)
         assert cleaned == "Body"
-        assert fixes == ["removed_body_frontmatter"]
+        assert len(fixes) == 1
+        assert fixes[0]["type"] == "removed_body_frontmatter"
+
+
+# ── Structured quality_fix records (A3 upgrade) ──────────────────────
+
+class TestStructuredFixRecords:
+    """Each repair function emits {type, line?, before?, after?} dicts."""
+
+    def test_latex_carriage_return_records_line_and_diff(self):
+        text = "para one\npara two with \rightarrow arrow\npara three"
+        cleaned, fixes = run_markdown_quality_checks(text)
+        cr_fixes = [f for f in fixes if f["type"] == "repaired_latex_carriage_return"]
+        assert len(cr_fixes) == 1
+        fix = cr_fixes[0]
+        assert fix["line"] == 2  # arrow is on line 2
+        assert fix["before"] == "\rightarrow"
+        assert fix["after"] == "\\rightarrow"
+
+    def test_multiple_latex_carriage_returns_one_record_each(self):
+        text = "\rightarrow first\n\rangle second\n\rceil third"
+        _, fixes = run_markdown_quality_checks(text)
+        cr_fixes = [f for f in fixes if f["type"] == "repaired_latex_carriage_return"]
+        assert len(cr_fixes) == 3
+        assert [f["line"] for f in cr_fixes] == [1, 2, 3]
+
+    def test_mermaid_label_fix_carries_line_before_after(self):
+        text = "```mermaid\ngraph TD\nA[Hello] --> B\n```"
+        _, fixes = run_markdown_quality_checks(text)
+        label_fixes = [f for f in fixes if f["type"] == "quoted_mermaid_labels"]
+        assert len(label_fixes) == 1
+        fix = label_fixes[0]
+        assert fix["line"] == 3
+        assert "A[Hello]" in fix["before"]
+        assert 'A["Hello"]' in fix["after"]
+
+    def test_frontmatter_strip_records_block_before(self):
+        text = "---\ntitle: foo\ntags: [a]\n---\n# Body"
+        _, fixes = run_markdown_quality_checks(text, strip_frontmatter=True)
+        fm_fixes = [f for f in fixes if f["type"] == "removed_body_frontmatter"]
+        assert len(fm_fixes) == 1
+        assert fm_fixes[0]["line"] == 1
+        assert "title: foo" in fm_fixes[0]["before"]
+
+    def test_fix_records_are_yaml_serializable(self):
+        # Sanity: the records survive YAML round-trip (this is what gets
+        # written into note frontmatter).
+        text = (
+            "---\ntitle: foo\n---\n"
+            "para with \rightarrow\n"
+            "```mermaid\ngraph TD\nA[Bare] --> B\n```\n"
+            "trailing whitespace   "
+        )
+        _, fixes = run_markdown_quality_checks(text, strip_frontmatter=True)
+        dumped = yaml.safe_dump({"quality_fixes": fixes}, allow_unicode=True)
+        reloaded = yaml.safe_load(dumped)
+        assert reloaded["quality_fixes"] == fixes
+
+    def test_long_before_after_get_truncated(self):
+        # Construct a fix with a very long YAML block; before must truncate.
+        long_value = "x" * 500
+        text = f"---\ntitle: {long_value}\n---\nbody"
+        _, fixes = strip_body_frontmatter(text)
+        assert len(fixes[0]["before"]) <= 80
 
 
 if __name__ == "__main__":
