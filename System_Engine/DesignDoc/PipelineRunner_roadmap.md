@@ -21,31 +21,44 @@ Explicitly **not** `System_Engine/scratch/pipelines/` — `scratch/` is the expe
 - YAML, one pipeline per file.
 - Filename stem = canonical pipeline id (matches the capability convention from Phase 4).
 
+### Capability + adapter binding (no private-method spelunking)
+
+PipelineRunner does NOT call private methods or guess where a capability
+lives. Each step declares two bindings:
+
+- `capability:` — the registered Operation/Skill (CapabilityManager registry)
+- `adapter:` — the named callable that actually fulfills it
+
+Adapters are registered in a small in-process table (`runner.register_adapter(name, callable)`)
+and looked up at execution time. This is the **only** place capability
+metadata maps to executable Python — pipelines never touch
+`IngestionPipeline._write_synthesis` or similar production private flows.
+
 ### DSL Shape (draft)
 
 ```yaml
-name: "Synthesize with self-critique"
-description: "Run synthesis, then critique its output; abort if synthesis is empty."
+id: synthesize_critique_demo
+description: PipelineRunner smoke test. Fixture input, named adapters.
 
 steps:
-  - name: synthesize_doc
+  - id: synthesize
     capability: synthesize
+    adapter: llm.generate_synthesis_from_text
     inputs:
       part_digests: "${context.part_digests}"
       title:        "${context.title}"
     outputs:
-      synthesis_text: result
+      output: result
 
-  - name: critique_synth
+  - id: critique
     capability: critique
-    when:
-      var: synthesis_text
-      op: nonempty
+    adapter: llm.critique_text
+    condition: "steps.synthesize.output != ''"
     inputs:
-      candidate: "${synthesis_text}"
+      candidate: "${steps.synthesize.output}"
       sources:   "${context.part_digests_text}"
     outputs:
-      critique_findings: result
+      output: result
 ```
 
 ### Variable Resolution
@@ -69,11 +82,21 @@ Extending the op vocabulary as new needs surface is cheaper, safer, and easier t
 
 ### Trigger Surface
 
-Three entry points in priority order:
+No direct user-facing `@ling-pipeline` command is planned. The user's
+flow into the runner goes through the planner instead:
 
-1. **Primary**: `@ling-pipeline <name>` command, registered in [PromptWatcher](../watchers/prompt_watcher.py)'s intent routing table.
-2. **Secondary**: programmatic invocation from agents or `MaintenanceScheduler` tasks.
-3. **Tertiary (Phase 5)**: planner-generated pipelines passed in-memory to the runner.
+1. **Phase 4.5–4.6**: programmatic invocation only (fixtures, then real
+   adapters). Runs are kicked off from tests / scratch scripts to verify
+   semantics.
+2. **Phase 5** (`@ling-plan`): planner produces a plan but does not
+   execute it. User reviews.
+3. **Phase 5.5** (`@ling-do <plan_id>`): user-approved plans are passed
+   to the runner. Requires PipelineRunner rollback + reporting first.
+4. **Phase 6**: `@ling-insight` planner-mode (feature-flagged opt-in) is
+   the eventual fold-in path for the highest-frequency entry point.
+
+See [Roadmap_Phase4.5_onwards](Roadmap_Phase4.5_onwards.md) for the full
+phasing and the mandatory checkpoint tests between sub-phases.
 
 ### LLMTrace Integration
 
@@ -116,12 +139,23 @@ No further dependencies. Phase 4 unblocks the runner.
 
 | Phase | Scope | Shippable? |
 |---|---|---|
-| 4.5 | Runner skeleton: parse YAML → invoke capabilities sequentially → no conditions, no variables | Yes |
-| 4.6 | `${...}` variable resolver + structured `when:` conditions | Yes |
-| 4.7 | `@ling-pipeline` intent in PromptWatcher + `list` / `run` subcommands | Yes |
-| 5 | Planner agent emits pipelines into the runner | Yes |
+| 4.5 | Dry-run runner: parse YAML, validate capabilities, resolve `${...}` variables, evaluate structured conditions, invoke **fixture adapters only**, write per-step trace under `pipeline_run_id`. | Yes |
+| 4.6 | Register real adapters (`llm.answer_query`, `llm.critique_text`, `llm.generate_synthesis_from_text`). Pipelines do real LLM work. Controlled execution; no autonomous planner. | Yes |
+| 4.7 | Define the plan schema that Phase 5 planner will emit. No execution. | Yes |
+| 5   | `@ling-plan`: planner produces plan, does not execute. | Yes |
+| 5.5 | `@ling-do <plan_id>`: planner-driven execution. Requires rollback / failure / reporting. | Yes |
+| 6   | `@ling-insight planner-mode` opt-in. | Yes |
 
-Each step is independently useful, so we don't have to commit to the whole arc up front.
+**Mandatory checkpoint between 4.5 and 4.6**: run retrieval bench, LingLens,
+and one long-doc synthesis-critique; confirm trace DB + report metadata
+are queryable.
+
+**Mandatory checkpoint between 4.6 and 4.7**: run synthesize → critique
+on real data via the runner; verify artifacts, trace propagation, and
+failure modes.
+
+Do not push 4.5 / 4.6 / 4.7 back-to-back. See
+[Roadmap_Phase4.5_onwards](Roadmap_Phase4.5_onwards.md) for the rationale.
 
 ## Non-Goals
 
