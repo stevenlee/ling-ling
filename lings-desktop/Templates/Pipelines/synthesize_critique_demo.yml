@@ -1,0 +1,28 @@
+id: synthesize_critique_demo
+description: |
+  Phase 4.5 PipelineRunner smoke test. Fixture-only — neither adapter
+  actually calls an LLM. Real adapters (llm.generate_synthesis_from_text,
+  llm.critique_text) land in Phase 4.6; the same YAML shape is reused
+  there.
+
+  Demonstrates: variable resolution from `${context.X}` and
+  `${steps.<id>.<key>}`, structured `when:` skipping a step when its
+  upstream produces nothing, and TraceStore artifact propagation.
+
+steps:
+  - id: synthesize
+    capability: synthesize
+    adapter: fixture.synthesize
+    inputs:
+      part_digests: "${context.part_digests}"
+      title:        "${context.title}"
+
+  - id: critique
+    capability: critique
+    adapter: fixture.critique
+    when:
+      var: steps.synthesize.output
+      op: nonempty
+    inputs:
+      candidate: "${steps.synthesize.output}"
+      sources:   "${context.part_digests_text}"
