@@ -203,17 +203,27 @@ class TestTableCell:
 # ── Lens dual-link (Phase 4) ──────────────────────────────────────
 
 class TestDualLink:
-    def test_file_url_with_line_range(self):
-        url = CounterAgent._file_url_with_range("/tmp/foo.md", 10, 25)
-        assert url == "file:///tmp/foo.md#L10-L25"
+    def test_file_url_with_line_range(self, tmp_path):
+        target = tmp_path / "foo.md"
+        target.write_text("body", encoding="utf-8")
+        url = CounterAgent._file_url_with_range(target, 10, 25)
+        assert url.startswith("file:///")
+        assert url.endswith("/foo.md#L10-L25")
 
-    def test_file_url_with_single_line(self):
-        url = CounterAgent._file_url_with_range("/tmp/foo.md", 42)
-        assert url == "file:///tmp/foo.md#L42"
+    def test_file_url_with_single_line(self, tmp_path):
+        target = tmp_path / "foo.md"
+        target.write_text("body", encoding="utf-8")
+        url = CounterAgent._file_url_with_range(target, 42)
+        assert url.startswith("file:///")
+        assert url.endswith("/foo.md#L42")
 
-    def test_file_url_without_range(self):
-        url = CounterAgent._file_url_with_range("/tmp/foo.md")
-        assert url == "file:///tmp/foo.md"
+    def test_file_url_without_range(self, tmp_path):
+        target = tmp_path / "foo.md"
+        target.write_text("body", encoding="utf-8")
+        url = CounterAgent._file_url_with_range(target)
+        assert url.startswith("file:///")
+        assert url.endswith("/foo.md")
+        assert "#" not in url
 
     def test_file_url_none_path(self):
         assert CounterAgent._file_url_with_range(None, 1, 2) == ""
@@ -246,6 +256,83 @@ class TestDualLink:
         link = CounterAgent._physical_source_link("MyArticle", {})
         assert "file://" in link
         assert "L" not in link.split("](")[-1]  # no #L fragment in URL
+
+    def test_file_url_percent_encodes_spaces_and_parens(self, tmp_path):
+        # Real Ling-Ling filenames look like
+        # "Partial Differential Equations (Part 51).md".
+        # Spaces and parens must be percent-encoded for Markdown parsers.
+        target = tmp_path / "Partial Differential Equations (Part 51).md"
+        target.write_text("body", encoding="utf-8")
+        url = CounterAgent._file_url_with_range(target, 10, 25)
+        assert "%20" in url  # spaces encoded
+        assert "%28" in url and "%29" in url  # parens encoded
+        assert " " not in url
+        assert "(" not in url
+        assert url.endswith("#L10-L25")
+
+    def test_file_url_percent_encodes_cjk(self, tmp_path):
+        target = tmp_path / "妙法蓮華經.md"
+        target.write_text("body", encoding="utf-8")
+        url = CounterAgent._file_url_with_range(target)
+        # CJK chars must be %-encoded (3 bytes each in UTF-8 → 9 hex chars).
+        assert "妙" not in url
+        assert "%E5%A6%99" in url  # "妙" → UTF-8 → percent-encoded
+
+    def test_dual_link_renders_for_direct_source(self, tmp_path, monkeypatch):
+        """P2 regression: direct-source analyses (original == reference)
+        should still include the physical file:/// link, not just the
+        Obsidian wikilink."""
+        import agents.counter_agent as ca
+        fake_file = tmp_path / "DirectArticle.md"
+        fake_file.write_text("body", encoding="utf-8")
+        monkeypatch.setattr(ca, "PAGES_DIR", tmp_path)
+        monkeypatch.setattr(ca, "RAW_CONSOLIDATE_DIR", tmp_path)
+
+        agent = CounterAgent.__new__(CounterAgent)
+        inst = {
+            "id": 1,
+            "confidence": "high",
+            "quote": "snippet",
+            "reasoning": "",
+            "original_source_range": {"start_line": 5, "end_line": 9},
+        }
+        # original_title == reference_title (direct-source case)
+        cell = agent._reference_cell(
+            article_title="DirectArticle",
+            reference_title="DirectArticle",
+            resolved_path=str(fake_file),
+            heading="",
+            inst=inst,
+        )
+        assert "[[DirectArticle" in cell  # Obsidian wikilink half
+        assert "file://" in cell           # Physical link half — was missing before P2 fix
+        assert "#L5-L9" in cell
+
+    def test_format_instance_dual_link_for_direct_source(self, tmp_path, monkeypatch):
+        import agents.counter_agent as ca
+        fake_file = tmp_path / "DirectArticle.md"
+        fake_file.write_text("body", encoding="utf-8")
+        monkeypatch.setattr(ca, "PAGES_DIR", tmp_path)
+        monkeypatch.setattr(ca, "RAW_CONSOLIDATE_DIR", tmp_path)
+
+        agent = CounterAgent.__new__(CounterAgent)
+        inst = {
+            "id": 1,
+            "confidence": "medium",
+            "quote": "snippet",
+            "reasoning": "",
+            "original_source_range": {"start_line": 1, "end_line": 3},
+        }
+        lines = agent._format_instance(
+            inst,
+            reference_title="DirectArticle",
+            original_title="DirectArticle",
+            resolved_path=str(fake_file),
+        )
+        rendered = "\n".join(lines)
+        assert "Open in editor" in rendered
+        assert "file://" in rendered
+        assert "#L1-L3" in rendered
 
 
 if __name__ == "__main__":

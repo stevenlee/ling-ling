@@ -591,13 +591,13 @@ class CounterAgent(BaseAgent):
             alias = "🔗 查看分析來源" if self._is_stitched_path(resolved_path) else "🔗 查看原文"
             lines.append(f"**Analysis Reference**: {self._source_link(reference_title, '', alias)}")
 
+        physical_link = self._physical_source_link(original_title, inst)
         if original_title != reference_title:
             range_text = self._original_range_text(inst)
             suffix = f" ({range_text})" if range_text else ""
-            physical_link = self._physical_source_link(original_title, inst)
             lines.append(f"**Original Reference**: {original_link}{suffix}")
-            if physical_link:
-                lines.append(f"**Open in editor**: {physical_link}")
+        if physical_link:
+            lines.append(f"**Open in editor**: {physical_link}")
         lines.append("")
         return lines
 
@@ -625,14 +625,16 @@ class CounterAgent(BaseAgent):
 
         original_title = self._original_source_title(article_title)
         range_text = self._original_range_text(inst)
-        if original_title == reference_title:
-            return f"{analysis_link}<br>{range_text}" if range_text else analysis_link
-
-        original_link = self._source_link(original_title, "", "🔗原始檔")
-        if range_text:
-            original_link = f"{original_link} ({range_text})"
         physical_link = self._physical_source_link(original_title, inst)
-        parts = [analysis_link, original_link]
+
+        parts = [analysis_link]
+        if original_title != reference_title:
+            original_link = self._source_link(original_title, "", "🔗原始檔")
+            if range_text:
+                original_link = f"{original_link} ({range_text})"
+            parts.append(original_link)
+        elif range_text:
+            parts.append(range_text)
         if physical_link:
             parts.append(physical_link)
         return "<br>".join(parts)
@@ -690,6 +692,11 @@ class CounterAgent(BaseAgent):
     def _file_url_with_range(path, start_line=None, end_line=None):
         """Build a `file:///<abs_path>#L<a>-L<b>` URL for editor jumps.
 
+        Uses `Path.as_uri()` for proper percent-encoding — most Ling-Ling
+        filenames contain spaces, parentheses, and CJK characters, all of
+        which need encoding for Markdown parsers to treat the link
+        destination reliably.
+
         The `#L<start>-L<end>` fragment is only honored by VS Code-family
         editors; Obsidian / `open` will open the file but ignore the line
         range. See README "Lens dual-link" — the Obsidian wikilink remains
@@ -697,11 +704,11 @@ class CounterAgent(BaseAgent):
         """
         if path is None:
             return ""
-        url = f"file://{Path(path).as_posix()}"
-        if not url.startswith("file:///"):
-            # absolute POSIX paths already start with /, giving file:///...;
-            # belt-and-suspenders for relative inputs.
-            url = "file:///" + url[len("file://"):].lstrip("/")
+        try:
+            url = Path(path).resolve().as_uri()
+        except (ValueError, OSError):
+            # Path.as_uri() requires an absolute path; bail if we can't get one.
+            return ""
         if start_line and end_line:
             url = f"{url}#L{start_line}-L{end_line}"
         elif start_line:
