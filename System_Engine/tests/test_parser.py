@@ -14,6 +14,7 @@ from core.parser import (
     extract_json_object,
     clean_llm_response,
     run_markdown_quality_checks,
+    strip_body_frontmatter,
 )
 
 
@@ -138,6 +139,72 @@ class TestMarkdownQualityChecks:
         assert len(result) == 2
         assert isinstance(result[0], str)
         assert isinstance(result[1], list)
+
+
+# ── strip_body_frontmatter ────────────────────────────────────────────
+
+class TestStripBodyFrontmatter:
+    def test_strips_valid_yaml_frontmatter(self):
+        text = "---\ntitle: foo\ntags: [a, b]\n---\n# Body"
+        cleaned, fixes = strip_body_frontmatter(text)
+        assert cleaned == "# Body"
+        assert fixes == ["removed_body_frontmatter"]
+
+    def test_preserves_text_without_frontmatter(self):
+        text = "Just prose, no frontmatter.\n"
+        cleaned, fixes = strip_body_frontmatter(text)
+        assert cleaned == text
+        assert fixes == []
+
+    def test_does_not_eat_horizontal_rule_sections(self):
+        """G-san regression: hand-authored markdown opens with a `---`
+        horizontal rule and later contains another `---` separator. The
+        old non-greedy regex would have eaten everything between them.
+        """
+        text = (
+            "---\n"
+            "# Section 1: Introduction\n"
+            "Some text...\n"
+            "---\n"
+            "# Section 2: Core Prompt\n"
+            "Detail...\n"
+        )
+        cleaned, fixes = strip_body_frontmatter(text)
+        assert cleaned == text
+        assert fixes == []
+        # The crucial guarantee: Section 1 survives.
+        assert "Section 1: Introduction" in cleaned
+
+    def test_does_not_strip_list_at_top(self):
+        # YAML list (not a mapping) — also not real frontmatter.
+        text = "---\n- one\n- two\n- three\n---\n# Body"
+        cleaned, fixes = strip_body_frontmatter(text)
+        assert cleaned == text
+        assert fixes == []
+
+    def test_does_not_strip_scalar_at_top(self):
+        # YAML scalar — not real frontmatter.
+        text = "---\njust a scalar string\n---\n# Body"
+        cleaned, fixes = strip_body_frontmatter(text)
+        assert cleaned == text
+        assert fixes == []
+
+    def test_handles_malformed_yaml_safely(self):
+        # Block looks YAML-ish but contains invalid syntax: leave intact.
+        text = "---\nkey: [unclosed\n---\n# Body"
+        cleaned, fixes = strip_body_frontmatter(text)
+        assert cleaned == text
+        assert fixes == []
+
+    def test_empty_string(self):
+        assert strip_body_frontmatter("") == ("", [])
+
+    def test_strips_with_leading_whitespace(self):
+        # Real frontmatter with a stray blank line in front — still strip.
+        text = "\n\n---\ntitle: foo\n---\nBody"
+        cleaned, fixes = strip_body_frontmatter(text)
+        assert cleaned == "Body"
+        assert fixes == ["removed_body_frontmatter"]
 
 
 if __name__ == "__main__":

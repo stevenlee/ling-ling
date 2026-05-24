@@ -412,13 +412,33 @@ def repair_mermaid_fences(text: str) -> tuple[str, list[str]]:
 # ─── Misc cleanup ──────────────────────────────────────────────────────
 
 def strip_body_frontmatter(text: str) -> tuple[str, list[str]]:
-    """Remove accidental YAML frontmatter from an LLM-generated body."""
+    """Remove accidental YAML frontmatter from an LLM-generated body.
+
+    Only strips the leading `---...---` block when it parses as a YAML
+    mapping. Hand-authored Markdown that opens with a horizontal rule
+    `---` and later contains a second `---` separator is left alone, so
+    we don't accidentally swallow a real document section between two
+    horizontal rules.
+    """
     if not text:
         return "", []
-    cleaned = re.sub(r'^\s*---\s*\n.*?\n---\s*\n?', '', text.strip(), count=1, flags=re.DOTALL)
-    if cleaned != text.strip():
-        return cleaned.strip(), ["removed_body_frontmatter"]
-    return text, []
+    text_stripped = text.strip()
+    match = re.match(
+        r'^---\s*\n(.*?)\n---\s*(?:\n|$)',
+        text_stripped,
+        flags=re.DOTALL,
+    )
+    if not match:
+        return text, []
+    block = match.group(1)
+    try:
+        parsed = yaml.safe_load(block)
+    except yaml.YAMLError:
+        return text, []
+    if not isinstance(parsed, dict):
+        return text, []
+    cleaned = text_stripped[match.end():].lstrip()
+    return cleaned, ["removed_body_frontmatter"]
 
 
 def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> tuple[str, list[str]]:
