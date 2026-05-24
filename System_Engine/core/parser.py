@@ -9,6 +9,7 @@ The public surface (callers across agents/, services/, watchers/, maintenance/):
     repair_mermaid_fences(text)             -> (str, list[dict])
     repair_mermaid_label_quotes(text)       -> (str, list[dict])
     repair_latex_carriage_returns(text)     -> (str, list[dict])
+    repair_latex_escape_collisions(text)    -> (str, list[dict])
     strip_body_frontmatter(text)            -> (str, list[dict])
     extract_json_array(text)                -> list[dict]
     extract_json_object(text)               -> dict
@@ -155,6 +156,20 @@ _MERMAID_NODE_HEAD_RE = re.compile(r'[\w一-鿿][\w\-一-鿿]*')
 
 LATEX_CR_COMMAND_RE = re.compile(r'\r(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b')
 
+# Other JSON-escape collisions affecting LaTeX commands. When LLMs emit
+# LaTeX inside a JSON string, they often forget to escape the backslash;
+# json.loads then interprets `\binom` as <BS>inom, `\frac` as <FF>rac,
+# `\vec` as <VT>ec. We restore the backslash here.
+#
+# Skipped: `\n` (collides with legit newlines) and `\t` (legit tabs).
+# Both `\r` and the alternates below operate on the control characters
+# left behind by JSON decoding, not on literal backslashes.
+_LATEX_ESCAPE_COLLISIONS: tuple[tuple[str, str, str], ...] = (
+    ("\x08", "b", "repaired_latex_backspace"),       # \b → \binom, \big, ...
+    ("\x0c", "f", "repaired_latex_form_feed"),       # \f → \frac, \forall, ...
+    ("\x0b", "v", "repaired_latex_vertical_tab"),    # \v → \vec, \vee, ...
+)
+
 
 # ─── quality_fix record helpers ───────────────────────────────────────
 #
@@ -220,6 +235,55 @@ def repair_latex_carriage_returns(text: str) -> tuple[str, list[dict]]:
         return text, []
     parts.append(text[last_end:])
     return "".join(parts), fixes
+
+
+def repair_latex_escape_collisions(text: str) -> tuple[str, list[dict]]:
+    """Restore LaTeX commands swallowed by JSON's `\\b` / `\\f` / `\\v` escapes.
+
+    LLM-generated JSON often forgets to escape the backslash inside
+    LaTeX. After `json.loads`, `\\binom` becomes `<BS>inom`, `\\frac`
+    becomes `<FF>rac`, `\\vec` becomes `<VT>ec`. This pass walks the
+    text, finds runs of `<control-char><letters>`, and restores the
+    backslash + LaTeX-letter prefix.
+
+    `\\r` is handled separately by `repair_latex_carriage_returns` to
+    preserve its existing `repaired_latex_carriage_return` fix-type for
+    legacy queries against note metadata. `\\n` and `\\t` are NOT
+    repaired because they collide with legitimate newlines and tabs.
+    """
+    if not text:
+        return "", []
+
+    fixes: list[dict] = []
+    cleaned = text
+
+    for control_char, latex_letter, fix_type in _LATEX_ESCAPE_COLLISIONS:
+        if control_char not in cleaned:
+            continue
+        pattern = re.compile(re.escape(control_char) + r"([a-zA-Z]+)")
+        parts: list[str] = []
+        last_end = 0
+        any_match = False
+        for match in pattern.finditer(cleaned):
+            any_match = True
+            parts.append(cleaned[last_end:match.start()])
+            suffix = match.group(1)
+            before = control_char + suffix
+            after = f"\\{latex_letter}{suffix}"
+            parts.append(after)
+            line_no = cleaned.count("\n", 0, match.start()) + 1
+            fixes.append(_make_fix(
+                fix_type,
+                line=line_no,
+                before=before,
+                after=after,
+            ))
+            last_end = match.end()
+        if any_match:
+            parts.append(cleaned[last_end:])
+            cleaned = "".join(parts)
+
+    return cleaned, fixes
 
 
 # ─── Mermaid: label quoting ────────────────────────────────────────────
@@ -544,6 +608,7 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
         pipeline.append(strip_body_frontmatter)
     pipeline.extend([
         repair_latex_carriage_returns,
+        repair_latex_escape_collisions,
         repair_mermaid_fences,
         repair_mermaid_label_quotes,
     ])

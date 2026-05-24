@@ -14,6 +14,7 @@ from core.parser import (
     extract_json_array,
     extract_json_object,
     clean_llm_response,
+    repair_latex_escape_collisions,
     run_markdown_quality_checks,
     strip_body_frontmatter,
 )
@@ -273,6 +274,98 @@ class TestStructuredFixRecords:
         text = f"---\ntitle: {long_value}\n---\nbody"
         _, fixes = strip_body_frontmatter(text)
         assert len(fixes[0]["before"]) <= 80
+
+
+# ── repair_latex_escape_collisions ────────────────────────────────────
+
+
+class TestLatexEscapeCollisions:
+    """LingLens caught this: LLM emits `\\binom` in JSON, json.loads
+    interprets `\\b` as backspace, the backslash and `b` are lost. Same
+    bug for `\\frac` (\\f → form feed) and `\\vec` (\\v → vertical tab).
+    """
+
+    def test_binom_backslash_restored(self):
+        # Simulate what json.loads of LLM output produces
+        decoded = "\x08inom{n}{k}"
+        result, fixes = repair_latex_escape_collisions(decoded)
+        assert result == "\\binom{n}{k}"
+        assert len(fixes) == 1
+        assert fixes[0]["type"] == "repaired_latex_backspace"
+        assert fixes[0]["before"] == "\x08inom"
+        assert fixes[0]["after"] == "\\binom"
+
+    def test_frac_backslash_restored(self):
+        decoded = "\x0crac{1}{2}"
+        result, fixes = repair_latex_escape_collisions(decoded)
+        assert result == "\\frac{1}{2}"
+        assert fixes[0]["type"] == "repaired_latex_form_feed"
+
+    def test_vec_backslash_restored(self):
+        decoded = "\x0bec{x}"
+        result, fixes = repair_latex_escape_collisions(decoded)
+        assert result == "\\vec{x}"
+        assert fixes[0]["type"] == "repaired_latex_vertical_tab"
+
+    def test_multiple_collisions_in_one_text(self):
+        decoded = "Let \x08inom{n}{k} = \x0crac{n!}{k!(n-k)!} where n,k \x0bee N"
+        result, fixes = repair_latex_escape_collisions(decoded)
+        assert "\\binom{n}{k}" in result
+        assert "\\frac{n!}{k!(n-k)!}" in result
+        assert "\\vee N" in result
+        types = {f["type"] for f in fixes}
+        assert types == {
+            "repaired_latex_backspace",
+            "repaired_latex_form_feed",
+            "repaired_latex_vertical_tab",
+        }
+
+    def test_repeated_same_command_records_each(self):
+        decoded = "\x08inom{n}{0} + \x08inom{n-1}{1}"
+        result, fixes = repair_latex_escape_collisions(decoded)
+        assert result == "\\binom{n}{0} + \\binom{n-1}{1}"
+        assert len(fixes) == 2
+
+    def test_line_number_recorded(self):
+        decoded = "line one\nline two\n\x08inom{n}{k}"
+        _, fixes = repair_latex_escape_collisions(decoded)
+        assert fixes[0]["line"] == 3
+
+    def test_plain_text_passes_through(self):
+        text = "no special chars here, just prose"
+        result, fixes = repair_latex_escape_collisions(text)
+        assert result == text
+        assert fixes == []
+
+    def test_empty_input(self):
+        assert repair_latex_escape_collisions("") == ("", [])
+        assert repair_latex_escape_collisions(None or "") == ("", [])
+
+    def test_does_not_touch_n_or_t_escapes(self):
+        # \n (newline) and \t (tab) are intentionally NOT repaired to
+        # avoid corrupting legit whitespace.
+        text = "line one\nline two\tindented"
+        result, fixes = repair_latex_escape_collisions(text)
+        assert result == text
+        assert fixes == []
+
+    def test_end_to_end_json_decode_then_repair(self):
+        # The actual bug path: LLM produces JSON, json.loads breaks the
+        # LaTeX, repair restores it.
+        import json
+        llm_output = '{"q": "\\binom{n}{k}"}'  # LLM forgot to double-escape
+        decoded = json.loads(llm_output)
+        assert decoded["q"] == "\x08inom{n}{k}"   # the bug
+        repaired, _ = repair_latex_escape_collisions(decoded["q"])
+        assert repaired == "\\binom{n}{k}"        # the fix
+
+    def test_integrated_into_quality_pipeline(self):
+        # run_markdown_quality_checks must include this repair so notes
+        # written through the pipeline get the fix automatically.
+        text = "$\x08inom{n}{k}$"
+        result, fixes = run_markdown_quality_checks(text)
+        assert "\\binom" in result
+        assert any(f["type"] == "repaired_latex_backspace" for f in fixes)
 
 
 if __name__ == "__main__":
