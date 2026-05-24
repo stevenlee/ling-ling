@@ -11,7 +11,8 @@ Phase 2  ✅ RAG explain                    (acuity)
 Phase 3  ✅ MaintenanceScheduler + bench   (autonomic reflex)
 mid     ✅ Synthesis critique-as-postcheck (f54a6ec)
 Phase 4  ✅ Capability layer + Lens dual-link (structural map)
-Phase 5  ⏳ Planner                        (motor cortex)
+Phase 5B ✅ PlannerAgent plan-only         (motor cortex, plan-only)
+Phase 5C ⏳ @ling-do controlled execution  (motor cortex, execution)
 ```
 
 Lower layers are prerequisites for the layer that consumes them. See
