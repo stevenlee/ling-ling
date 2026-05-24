@@ -1,5 +1,5 @@
 ---
-name: montecario
+name: montecarlo
 description: Multi-round Monte Carlo sampling — explore random idea combinations across multiple rounds and anneal to the best insights.
 pipeline: montecarlo
 num_rounds: 3

@@ -140,7 +140,6 @@ class CapabilityManager:
         self._specs = {}
         self._scan_dir(self.operations_dir, fallback_type="operation")
         self._scan_dir(self.skills_dir, fallback_type="skill")
-        self._warn_on_known_typos()
 
     def _scan_dir(self, directory: Path, fallback_type: str) -> None:
         if not directory.exists():
@@ -153,18 +152,6 @@ class CapabilityManager:
                 continue
             spec = _parse_capability_file(path, fallback_type=fallback_type)
             self._specs[spec.name] = spec
-
-    def _warn_on_known_typos(self) -> None:
-        # Skill file `montecario.md` exists but the canonical pipeline name
-        # used in InsightAgent and the synthesis prompt is "montecarlo".
-        # File rename is a separate PR; surface it here so it doesn't
-        # silently survive future grep-by-name lookups.
-        if "montecario" in self._specs and "montecarlo" not in self._specs:
-            logging.warning(
-                "CapabilityManager: capability id 'montecario' looks like a "
-                "typo of 'montecarlo' (pipeline name in InsightAgent). "
-                "Rename the file in a follow-up PR."
-            )
 
     def get(self, name: str | None) -> CapabilitySpec | None:
         if not name:

@@ -278,23 +278,6 @@ class TestCapabilityManager:
         assert ok is True
         assert missing == []
 
-    def test_montecario_typo_warning(self, tmp_path, caplog):
-        ops, skills = _make_dirs(tmp_path)
-        _write(skills / "montecario.md", "---\ntype: skill\n---\nbody")
-        with caplog.at_level("WARNING"):
-            CapabilityManager(ops, skills)
-        assert any("montecario" in r.message and "montecarlo" in r.message
-                   for r in caplog.records)
-
-    def test_montecario_no_warning_if_montecarlo_exists(self, tmp_path, caplog):
-        ops, skills = _make_dirs(tmp_path)
-        _write(skills / "montecario.md", "---\ntype: skill\n---\nbody")
-        _write(skills / "montecarlo.md", "---\ntype: skill\n---\nbody")
-        with caplog.at_level("WARNING"):
-            CapabilityManager(ops, skills)
-        assert not any("typo" in r.message for r in caplog.records)
-
-
 # ── CapabilitySpec ──────────────────────────────────────────────────
 
 class TestCapabilitySpec:

@@ -24,7 +24,7 @@ Independent of the main arc; can land anytime.
 
 | # | Item | Size | Trigger |
 |---|---|---|---|
-| A1 | Rename `Skills/montecario.md` → `montecarlo.md` | S | CapabilityManager warns at every startup |
+| A1 | ~~Rename `Skills/montecario.md` → `montecarlo.md`~~ ✅ | S | Done — typo warning removed |
 | A2 | Fix `Templates/translation-rpt.md` YAML-example leak | S | Spawned chip; surfaced during Phase 4 manual verification |
 | A3 | Upgrade `quality_fixes` from type-list to `{type, before, after, line}` | S–M | Better trace readability |
 | A4 | Verify Scripture hot-reload actually exists (README claims it; audit didn't find it) | S | Reconcile docs vs code |
