@@ -1,10 +1,16 @@
 ### 出力形式規範 (Insight Strategic Report)
+
+応答の冒頭に下記スキーマの YAML frontmatter を出力してください。**応答の最初に一度だけ出力し、本文中で繰り返し記述しないでください**。
+
+```yaml
 ---
 title: "インサイトレポート: (トピック)"
 tags: ["insight", "strategy", "analysis"]
 type: "report"
-
 ---
+```
+
+続いて Markdown 本文：
 
 # ✨ インサイトレポート
 ## 主要な発見

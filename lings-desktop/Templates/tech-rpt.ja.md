@@ -1,10 +1,16 @@
 ### 出力形式規範 (Technical Report)
+
+応答の冒頭に下記スキーマの YAML frontmatter を出力してください。**応答の最初に一度だけ出力し、本文中で繰り返し記述しないでください**。
+
+```yaml
 ---
 title: "技術分析: (主題)"
 tags: ["programming", "architecture"]
 type: "technical"
-
 ---
+```
+
+続いて Markdown 本文：
 
 # 技術分析レポート
 ## コアロジック

@@ -1,10 +1,16 @@
 ### Output Format (Insight Strategic Report)
+
+Begin your response with a YAML frontmatter block matching the schema below. **Emit it once, at the very start of your response — never reproduce it inside the body.**
+
+```yaml
 ---
 title: "Insight Report: (Topic)"
 tags: ["insight", "strategy", "analysis"]
 type: "report"
-
 ---
+```
+
+After the closing `---`, the Markdown body:
 
 # ✨ Insight Report
 
