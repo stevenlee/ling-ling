@@ -3,6 +3,14 @@ name: meta-methods
 description: Analyze specific facts and steps to derive underlying logic and first principles.
 limit: 15
 method: random
+type: skill
+expected_inputs:
+  - user_directive
+produces:
+  - insight_report
+cost_class: medium
+applicable_when:
+  database_populated: true
 ---
 
 # System Prompt

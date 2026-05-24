@@ -594,7 +594,10 @@ class CounterAgent(BaseAgent):
         if original_title != reference_title:
             range_text = self._original_range_text(inst)
             suffix = f" ({range_text})" if range_text else ""
+            physical_link = self._physical_source_link(original_title, inst)
             lines.append(f"**Original Reference**: {original_link}{suffix}")
+            if physical_link:
+                lines.append(f"**Open in editor**: {physical_link}")
         lines.append("")
         return lines
 
@@ -628,7 +631,11 @@ class CounterAgent(BaseAgent):
         original_link = self._source_link(original_title, "", "🔗原始檔")
         if range_text:
             original_link = f"{original_link} ({range_text})"
-        return f"{analysis_link}<br>{original_link}"
+        physical_link = self._physical_source_link(original_title, inst)
+        parts = [analysis_link, original_link]
+        if physical_link:
+            parts.append(physical_link)
+        return "<br>".join(parts)
 
     @staticmethod
     def _instance_anchor(inst):
@@ -661,6 +668,61 @@ class CounterAgent(BaseAgent):
         for candidate in RAW_CONSOLIDATE_DIR.glob(f"{article_title}_*.md"):
             return candidate.stem
         return article_title
+
+    @staticmethod
+    def _resolve_original_source_path(article_title):
+        """Return the absolute filesystem path of the original source, or None.
+
+        Looks in the same locations as `_original_source_title` but returns
+        the Path object so we can render a `file:///` link to it.
+        """
+        direct = PAGES_DIR / f"{article_title}.md"
+        if direct.exists():
+            return direct.resolve()
+        raw = RAW_CONSOLIDATE_DIR / f"{article_title}.md"
+        if raw.exists():
+            return raw.resolve()
+        for candidate in RAW_CONSOLIDATE_DIR.glob(f"{article_title}_*.md"):
+            return candidate.resolve()
+        return None
+
+    @staticmethod
+    def _file_url_with_range(path, start_line=None, end_line=None):
+        """Build a `file:///<abs_path>#L<a>-L<b>` URL for editor jumps.
+
+        The `#L<start>-L<end>` fragment is only honored by VS Code-family
+        editors; Obsidian / `open` will open the file but ignore the line
+        range. See README "Lens dual-link" — the Obsidian wikilink remains
+        the always-works form.
+        """
+        if path is None:
+            return ""
+        url = f"file://{Path(path).as_posix()}"
+        if not url.startswith("file:///"):
+            # absolute POSIX paths already start with /, giving file:///...;
+            # belt-and-suspenders for relative inputs.
+            url = "file:///" + url[len("file://"):].lstrip("/")
+        if start_line and end_line:
+            url = f"{url}#L{start_line}-L{end_line}"
+        elif start_line:
+            url = f"{url}#L{start_line}"
+        return url
+
+    @classmethod
+    def _physical_source_link(cls, article_title, inst, label="📄 原始檔"):
+        """Render the file:/// half of the lens dual-link, or '' if unavailable."""
+        path = cls._resolve_original_source_path(article_title)
+        if path is None:
+            return ""
+        source_range = inst.get("original_source_range") or {}
+        start_line = source_range.get("start_line")
+        end_line = source_range.get("end_line")
+        url = cls._file_url_with_range(path, start_line, end_line)
+        if not url:
+            return ""
+        if start_line and end_line:
+            return f"[{label} L{start_line}-L{end_line}]({url})"
+        return f"[{label}]({url})"
 
     @staticmethod
     def _is_stitched_path(resolved_path=""):

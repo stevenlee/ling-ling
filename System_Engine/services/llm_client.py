@@ -35,11 +35,13 @@ from core.config import (
     OPERATIONS_DIR,
     PERSONAS_DIR,
     PROJECT_ROOT,
+    SKILLS_DIR,
     TEMPLATES_DIR,
     settings,
 )
 from core.parser import extract_json_object, strip_body_frontmatter
 from core.utils import MtimeCache, digest_value_to_text
+from services.capability_manager import CapabilityManager
 from services.trace_store import TraceStore, elapsed_ms, usage_to_counts
 
 
@@ -164,6 +166,7 @@ class LLMClient:
         self.provider = LLM_PROVIDER
         self._file_cache = MtimeCache()
         self.trace_store = TraceStore()
+        self.capability_manager = CapabilityManager(OPERATIONS_DIR, SKILLS_DIR)
 
         if self.provider == "vllm":
             self.client, self.model = self._build_openai_client(
@@ -331,6 +334,19 @@ class LLMClient:
                 return self._file_cache.read(localized)
         return self._file_cache.read(file_path)
 
+    def _load_capability_body(self, file_path: Path) -> str:
+        """Load an Operation/Skill body for inclusion in a system prompt.
+
+        Strips the YAML frontmatter (Phase 4 capability metadata) so it
+        does not leak into the model's system prompt. Returns just the
+        prompt body text.
+        """
+        raw = self._load_localized_content(file_path)
+        if not raw:
+            return ""
+        body, _ = strip_body_frontmatter(raw)
+        return body.strip()
+
     def _load_project_identity(self) -> str:
         parts = []
         for filename in _PROJECT_IDENTITY_FILES:
@@ -347,28 +363,37 @@ class LLMClient:
         require_yaml_header: bool = True,
         persona: str | None = None,
         operation: str | None = None,
-    ) -> str:
+    ) -> tuple[str, dict]:
+        """Build the system prompt + capability resolution record.
+
+        Returns `(prompt_text, resolution_dict)`. The resolution dict belongs
+        in `trace_context["metadata"]["capability_resolution"]` — it is never
+        injected into the prompt itself.
+        """
         # Persona axis: None → settings.AGENT_ROLE (legacy), "none" → no persona,
         # any other string → load that persona file. Lets fixed-methodology
         # operations (Stitch / Synthesize) opt out of the global AGENT_ROLE.
         if persona == "none":
             role_instructions = ""
+            persona_resolved = "none"
         else:
-            persona_name = persona or settings.AGENT_ROLE
-            role_instructions = self._load_localized_content(PERSONAS_DIR / f"{persona_name}.md")
+            persona_resolved = persona or settings.AGENT_ROLE
+            role_instructions = self._load_localized_content(PERSONAS_DIR / f"{persona_resolved}.md")
 
         # Operation axis: a persona-agnostic methodology prompt (Synthesize,
         # Critique, ...). Orthogonal to Template (which controls output shape).
+        # Loaded via _load_capability_body so the Phase 4 capability frontmatter
+        # is stripped before the body is concatenated into the system prompt.
         operation_instructions = ""
         if operation and operation != "none":
-            operation_instructions = self._load_localized_content(OPERATIONS_DIR / f"{operation}.md")
+            operation_instructions = self._load_capability_body(OPERATIONS_DIR / f"{operation}.md")
 
         if forced_template == "none":
             template_instructions = ""
+            template_resolved = "none"
         else:
-            template_name = (forced_template or default_template) or settings.USE_TEMPLATE or "wiki-note"
-            if not template_name.endswith(".md"):
-                template_name += ".md"
+            template_resolved = (forced_template or default_template) or settings.USE_TEMPLATE or "wiki-note"
+            template_name = template_resolved if template_resolved.endswith(".md") else f"{template_resolved}.md"
             template_instructions = self._load_localized_content(TEMPLATES_DIR / template_name)
 
         viz_instructions = self._load_localized_content(GUIDELINES_DIR / "Visualization.md")
@@ -392,7 +417,14 @@ class LLMClient:
         )
         sections = [s for s in (role_instructions, operation_instructions, template_instructions) if s]
         sections.append(common_rules)
-        return "\n\n".join(sections)
+        prompt = "\n\n".join(sections)
+
+        resolution = self.capability_manager.resolve(
+            persona=persona_resolved,
+            operation=operation,
+            template=template_resolved,
+        )
+        return prompt, resolution
 
     # ─── Output cleanup ─────────────────────────────────────────────────
 
@@ -447,7 +479,7 @@ class LLMClient:
         context_hint: str | None = None,
     ) -> dict | None:
         instruction_type = "Convert this material into a structured Wiki entity page."
-        system_prompt = self._build_system_prompt(instruction_type)
+        system_prompt, cap_resolution = self._build_system_prompt(instruction_type)
         labels = _LANG_HINT_MAP.get(self._get_lang_hint(), _DEFAULT_LABELS)
 
         try:
@@ -458,7 +490,11 @@ class LLMClient:
                     user_msg,
                     trace_context={
                         "stage": "generate_entity_page",
-                        "metadata": {"filename": filename, "input_kind": "image"},
+                        "metadata": {
+                            "filename": filename,
+                            "input_kind": "image",
+                            "capability_resolution": cap_resolution,
+                        },
                     },
                 )
             else:
@@ -471,7 +507,11 @@ class LLMClient:
                     user_text,
                     trace_context={
                         "stage": "generate_entity_page",
-                        "metadata": {"filename": filename, "input_kind": "markdown"},
+                        "metadata": {
+                            "filename": filename,
+                            "input_kind": "markdown",
+                            "capability_resolution": cap_resolution,
+                        },
                     },
                 )
             return self._hybrid_parse(response)
@@ -506,8 +546,9 @@ class LLMClient:
         persona: str | None = None,
         operation: str | None = None,
     ) -> str:
+        cap_resolution: dict | None = None
         if custom_instruction:
-            system_prompt = self._build_system_prompt(
+            system_prompt, cap_resolution = self._build_system_prompt(
                 custom_instruction,
                 forced_template=forced_template,
                 default_template=default_template,
@@ -546,7 +587,10 @@ class LLMClient:
                     "persona": persona,
                     "operation": operation,
                     "template": forced_template or default_template,
-                    "metadata": {"custom_instruction": bool(custom_instruction)},
+                    "metadata": {
+                        "custom_instruction": bool(custom_instruction),
+                        "capability_resolution": cap_resolution,
+                    },
                 },
             )
         except Exception as e:
@@ -680,6 +724,11 @@ class LLMClient:
                         "title": title,
                         "part_number": part_number,
                         "total_parts": total_parts,
+                        # Inline system prompt — bypasses the three-axis
+                        # (persona / operation / template) build, so no
+                        # capability resolution applies. Recorded as None so
+                        # downstream trace queries can rely on the key existing.
+                        "capability_resolution": None,
                     },
                 },
             )
@@ -770,7 +819,7 @@ class LLMClient:
             f"Final unresolved concepts or carry-over notes:\n{final_concepts or '(none)'}\n\n"
             f"Task:\nWrite the final synthesis in {lang_hint}.\n"
         )
-        system_prompt = self._build_system_prompt(
+        system_prompt, cap_resolution = self._build_system_prompt(
             "Create a source-grounded synthesis from structured part digests.",
             forced_template=template or settings.USE_TEMPLATE or "wiki-note",
             require_yaml_header=False,
@@ -790,7 +839,11 @@ class LLMClient:
                         "persona": "none",
                         "operation": "synthesize",
                         "template": template or settings.USE_TEMPLATE or "wiki-note",
-                        "metadata": {"title": title, "part_count": len(part_digests)},
+                        "metadata": {
+                            "title": title,
+                            "part_count": len(part_digests),
+                            "capability_resolution": cap_resolution,
+                        },
                     },
                 )
             )
@@ -817,7 +870,7 @@ class LLMClient:
             f"## Focus\n{focus or '(general)'}\n\n"
             f"Task:\nProduce the critique in {lang_hint} following the operating rules.\n"
         )
-        system_prompt = self._build_system_prompt(
+        system_prompt, cap_resolution = self._build_system_prompt(
             "Evaluate the candidate text against the provided sources and surface defects.",
             forced_template="none",
             require_yaml_header=False,
@@ -836,7 +889,10 @@ class LLMClient:
                         "persona": "none",
                         "operation": "critique",
                         "template": "none",
-                        "metadata": {"focus": focus},
+                        "metadata": {
+                            "focus": focus,
+                            "capability_resolution": cap_resolution,
+                        },
                     },
                 )
             )

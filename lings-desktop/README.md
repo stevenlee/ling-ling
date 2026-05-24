@@ -154,6 +154,12 @@ lings-desktop/
 
 ## Refactor Notes
 
+### 2026-05-24 Capability Layer & Lens Dual-Link (Phase 4)
+
+- **Capability metadata**：`Templates/Operations/*.md` 與 `Skills/*.md` 加上 frontmatter（`type / expected_inputs / produces / cost_class / applicable_when`）。新的 [services/capability_manager.py](System_Engine/services/capability_manager.py) 在 daemon 啟動時掃描並建索引；`LLMClient._build_system_prompt` 改回傳 `(prompt, resolution)`，resolution 寫入 `llm_calls.metadata_json.capability_resolution`，**不會**注入到 system prompt。Operations 的 frontmatter 在組 system prompt 前由 `_load_capability_body` 剝除。
+- **Lens dual-link**：lens 報告的 evidence 同時輸出 Obsidian wikilink 與 `file:///` 連結。`file:///` 連結帶 `#L<start>-L<end>` fragment——只有 VS Code / Cursor 系列編輯器會跳到指定行，Obsidian 點擊與系統 `open` 會開檔但忽略行號。Wikilink 走 Obsidian 原生導航，永遠可用。
+- **PipelineRunner / Pipeline DSL** 暫緩，設計草案見 [DesignDoc/PipelineRunner_roadmap.md](System_Engine/DesignDoc/PipelineRunner_roadmap.md)。
+
 ### 2026-05-23 RAG Quality & Cost Stack
 
 第二輪 ChromaDB 優化，疊在 embedding provider / mismatch guard / migrations 之上。所有功能都可獨立 toggle，預設行為與舊版兼容。

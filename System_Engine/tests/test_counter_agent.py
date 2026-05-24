@@ -200,5 +200,53 @@ class TestTableCell:
         assert CounterAgent._table_cell(None) == ""
 
 
+# ── Lens dual-link (Phase 4) ──────────────────────────────────────
+
+class TestDualLink:
+    def test_file_url_with_line_range(self):
+        url = CounterAgent._file_url_with_range("/tmp/foo.md", 10, 25)
+        assert url == "file:///tmp/foo.md#L10-L25"
+
+    def test_file_url_with_single_line(self):
+        url = CounterAgent._file_url_with_range("/tmp/foo.md", 42)
+        assert url == "file:///tmp/foo.md#L42"
+
+    def test_file_url_without_range(self):
+        url = CounterAgent._file_url_with_range("/tmp/foo.md")
+        assert url == "file:///tmp/foo.md"
+
+    def test_file_url_none_path(self):
+        assert CounterAgent._file_url_with_range(None, 1, 2) == ""
+
+    def test_physical_link_missing_file_returns_empty(self):
+        # No such article anywhere in PAGES_DIR / RAW_CONSOLIDATE_DIR
+        link = CounterAgent._physical_source_link("DefinitelyDoesNotExist_abc123", {})
+        assert link == ""
+
+    def test_physical_link_includes_line_range_in_label(self, tmp_path, monkeypatch):
+        # Point RAW_CONSOLIDATE_DIR at a tmp directory containing a fake source
+        import agents.counter_agent as ca
+        fake_file = tmp_path / "MyArticle.md"
+        fake_file.write_text("dummy body", encoding="utf-8")
+        monkeypatch.setattr(ca, "RAW_CONSOLIDATE_DIR", tmp_path)
+
+        inst = {"original_source_range": {"start_line": 10, "end_line": 25}}
+        link = CounterAgent._physical_source_link("MyArticle", inst)
+        # Should be: [<label> L10-L25](file:///<abs>#L10-L25)
+        assert "L10-L25" in link
+        assert "file://" in link
+        assert str(fake_file.resolve()) in link
+
+    def test_physical_link_no_range_still_renders(self, tmp_path, monkeypatch):
+        import agents.counter_agent as ca
+        fake_file = tmp_path / "MyArticle.md"
+        fake_file.write_text("dummy body", encoding="utf-8")
+        monkeypatch.setattr(ca, "RAW_CONSOLIDATE_DIR", tmp_path)
+
+        link = CounterAgent._physical_source_link("MyArticle", {})
+        assert "file://" in link
+        assert "L" not in link.split("](")[-1]  # no #L fragment in URL
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

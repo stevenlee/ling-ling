@@ -7,6 +7,15 @@ num_sparks: 6
 top_k: 3
 limit: 10
 method: random
+type: skill
+expected_inputs:
+  - user_directive
+produces:
+  - insight_report
+cost_class: high
+applicable_when:
+  database_populated: true
+  min_documents: 20
 ---
 
 # System Prompt

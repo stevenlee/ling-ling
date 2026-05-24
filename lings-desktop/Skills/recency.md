@@ -3,6 +3,14 @@ name: recency
 description: Analyze recently added knowledge and find integration points with the existing system.
 limit: 20
 method: recency
+type: skill
+expected_inputs:
+  - user_directive
+produces:
+  - insight_report
+cost_class: low
+applicable_when:
+  database_populated: true
 ---
 
 # System Prompt
