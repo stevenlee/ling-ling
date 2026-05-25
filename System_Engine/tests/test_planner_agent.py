@@ -293,7 +293,11 @@ class TestPlannerExecute:
         assert "failed validation" in body
         assert "missing 'capability'" in body
 
-    def test_happy_path_writes_plan_report(self):
+    def test_happy_path_writes_plan_report(self, tmp_path, monkeypatch):
+        # Redirect PLANS_DIR so sidecar JSON lands in tmp, not the vault.
+        import agents.planner_agent as pa_mod
+        monkeypatch.setattr(pa_mod, "PLANS_DIR", tmp_path)
+
         llm = _FakeLLM(self._make_caps(), response=_HAPPY_LLM_RESPONSE)
         agent = _planner(llm)
         body = agent.execute({"user_directive": "synthesize then critique"})
@@ -317,6 +321,13 @@ class TestPlannerExecute:
         assert {s["step_id"] for s in res["steps"]} == {"synth", "crit"}
         for s in res["steps"]:
             assert s["registered"] is True
+        # Sidecar JSON was written for @ling-do
+        sidecar = tmp_path / "synth_then_crit.json"
+        assert sidecar.exists()
+        assert write["metadata"]["plan_sidecar"] == str(sidecar)
+        # And it's a faithful copy of the plan
+        loaded = json.loads(sidecar.read_text())
+        assert loaded == plan_json
 
     def test_llm_call_uses_plan_operation_axis(self):
         llm = _FakeLLM(self._make_caps(), response=_HAPPY_LLM_RESPONSE)

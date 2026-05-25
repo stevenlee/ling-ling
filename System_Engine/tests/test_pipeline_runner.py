@@ -420,9 +420,32 @@ class TestTraceIntegration:
         )
         result = runner.run(_make_demo_spec(), context={"title": "X"})
         assert result.run_id == "run_1"
-        assert len(trace.runs) == 1
-        assert trace.runs[0]["intent"] == "pipeline:demo"
-        assert trace.runs[0]["agent"] == "pipeline_runner"
+        # Phase 5C: 1 parent run for the pipeline + 1 child run per
+        # executed step. Skipped steps do NOT open a child run.
+        assert len(trace.runs) == 3
+        intents = [r["intent"] for r in trace.runs]
+        assert intents == ["pipeline:demo", "step:synth", "step:critique"]
+        # Children carry the step metadata so SQL queries can filter.
+        assert trace.runs[1]["metadata"]["capability"] == "synthesize"
+        assert trace.runs[2]["metadata"]["adapter"] == "llm.critique"
+
+    def test_skipped_step_does_not_open_child_run(self):
+        registry = AdapterRegistry()
+        registry.register("llm.synthesize", lambda inp: {"output": ""})
+        registry.register("llm.critique", lambda inp: {"output": "crt"})
+        trace = _FakeTraceStore()
+        runner = PipelineRunner(
+            capability_manager=_FakeCapMgr({"synthesize", "critique"}),
+            adapter_registry=registry,
+            trace_store=trace,
+        )
+        runner.run(_make_demo_spec(), context={"title": "X"})
+        # Parent + 1 child for synth (which ran). The critique step is
+        # skipped via the when:nonempty gate, so it gets an artifact but
+        # no child run.
+        assert len(trace.runs) == 2
+        intents = [r["intent"] for r in trace.runs]
+        assert intents == ["pipeline:demo", "step:synth"]
 
     def test_each_step_records_an_artifact(self):
         registry = AdapterRegistry()

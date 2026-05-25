@@ -1,0 +1,122 @@
+"""Tests for TraceStore parent_run_id auto-detection (Phase 5C)."""
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+os.environ.setdefault("LLM_PROVIDER", "vllm")
+
+import pytest
+
+from services.trace_store import TraceStore
+
+
+def _trace_store(tmp_path: Path) -> TraceStore:
+    return TraceStore(db_path=tmp_path / "trace.sqlite", retention_days=0)
+
+
+class TestParentRunIdAutoDetect:
+    def test_top_level_run_has_no_parent(self, tmp_path):
+        ts = _trace_store(tmp_path)
+        with ts.run(intent="solo") as run_id:
+            pass
+        row = sqlite3.connect(str(ts.db_path)).execute(
+            "SELECT parent_run_id FROM runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        assert row[0] is None
+
+    def test_nested_run_inherits_parent_from_contextvar(self, tmp_path):
+        ts = _trace_store(tmp_path)
+        with ts.run(intent="parent") as parent_id:
+            with ts.run(intent="child") as child_id:
+                pass
+        conn = sqlite3.connect(str(ts.db_path))
+        parent_link = conn.execute(
+            "SELECT parent_run_id FROM runs WHERE run_id = ?", (child_id,)
+        ).fetchone()[0]
+        assert parent_link == parent_id
+
+    def test_grandchild_chain(self, tmp_path):
+        ts = _trace_store(tmp_path)
+        with ts.run(intent="a") as a_id:
+            with ts.run(intent="b") as b_id:
+                with ts.run(intent="c") as c_id:
+                    pass
+        conn = sqlite3.connect(str(ts.db_path))
+        chain = {
+            row[0]: row[1] for row in conn.execute(
+                "SELECT run_id, parent_run_id FROM runs"
+            )
+        }
+        assert chain[a_id] is None
+        assert chain[b_id] == a_id
+        assert chain[c_id] == b_id
+
+    def test_explicit_parent_overrides_contextvar(self, tmp_path):
+        """When parent_run_id is passed explicitly, it wins over the
+        ambient ContextVar — useful for stitching synthetic trace trees."""
+        ts = _trace_store(tmp_path)
+        explicit_parent = "run_synthetic_parent_id_123"
+        with ts.run(intent="ambient") as ambient_id:
+            with ts.run(intent="child", parent_run_id=explicit_parent) as child_id:
+                pass
+        link = sqlite3.connect(str(ts.db_path)).execute(
+            "SELECT parent_run_id FROM runs WHERE run_id = ?", (child_id,)
+        ).fetchone()[0]
+        assert link == explicit_parent
+        assert link != ambient_id
+
+    def test_sibling_children_share_parent(self, tmp_path):
+        ts = _trace_store(tmp_path)
+        with ts.run(intent="parent") as parent_id:
+            with ts.run(intent="child_a") as a_id:
+                pass
+            with ts.run(intent="child_b") as b_id:
+                pass
+        conn = sqlite3.connect(str(ts.db_path))
+        rows = conn.execute(
+            "SELECT run_id, parent_run_id FROM runs WHERE parent_run_id = ?",
+            (parent_id,),
+        ).fetchall()
+        ids = {r[0] for r in rows}
+        assert ids == {a_id, b_id}
+
+    def test_failed_child_does_not_corrupt_parent_chain(self, tmp_path):
+        ts = _trace_store(tmp_path)
+        try:
+            with ts.run(intent="parent") as parent_id:
+                with ts.run(intent="failing_child") as child_id:
+                    raise RuntimeError("boom")
+        except RuntimeError:
+            pass
+        conn = sqlite3.connect(str(ts.db_path))
+        # Parent recorded as failed (since the exception escaped the parent
+        # context too), child recorded as failed, parent link is intact.
+        row_child = conn.execute(
+            "SELECT parent_run_id, status, error FROM runs WHERE run_id = ?",
+            (child_id,),
+        ).fetchone()
+        assert row_child[0] == parent_id
+        assert row_child[1] == "failed"
+        assert "boom" in row_child[2]
+
+
+class TestSchemaMigration:
+    def test_alter_table_is_idempotent(self, tmp_path):
+        # First TraceStore creates the table with parent_run_id column.
+        ts1 = _trace_store(tmp_path)
+        # Second TraceStore on the same file re-runs the init; the
+        # ALTER TABLE ADD COLUMN raises OperationalError which we catch.
+        ts2 = TraceStore(db_path=ts1.db_path, retention_days=0)
+        # If we got this far without exception, the migration is idempotent.
+        with ts2.run(intent="x") as run_id:
+            pass
+        # And the column is queryable.
+        conn = sqlite3.connect(str(ts2.db_path))
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(runs)")]
+        assert "parent_run_id" in cols
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

@@ -411,7 +411,8 @@ class PipelineRunner:
             return result
 
     def _run_step(self, step: PipelineStep, env: dict) -> StepResult:
-        # Evaluate `when:` first; skipped steps don't resolve inputs.
+        # Evaluate `when:` first; skipped steps don't resolve inputs and
+        # don't get a child run (no LLM work happens).
         try:
             should_run = _eval_when(step.when, env)
         except PipelineError as e:
@@ -429,52 +430,72 @@ class PipelineRunner:
             logging.debug(f"pipeline step {step.id!r} skipped (when=false)")
             return StepResult(id=step.id, status="skipped")
 
-        # Resolve inputs, dispatch to adapter.
-        try:
-            resolved_inputs = _resolve_inputs(step.inputs, env)
-        except PipelineError as e:
-            self._record_step_artifact(
-                step, status="failed",
-                metadata={"error": f"input-resolve: {e}"},
+        # Open a child TraceStore run scoped to this step. Any LLM calls
+        # the adapter makes inside the with-block automatically attribute
+        # to the child run_id via the trace_store ContextVar. The step's
+        # artifact also lands under the child so a SQL `WHERE run_id = ?`
+        # cleanly captures one step's whole footprint.
+        step_run_ctx = (
+            self.trace_store.run(
+                intent=f"step:{step.id}",
+                agent="pipeline_runner",
+                trigger_type="pipeline_step",
+                metadata={
+                    "capability": step.capability,
+                    "adapter": step.adapter,
+                },
             )
-            return StepResult(id=step.id, status="failed", error=str(e))
+            if self.trace_store is not None
+            else _null_context()
+        )
 
-        adapter = self.adapter_registry.get(step.adapter)
-        # validate() already checked this, but defend in case of
-        # post-validate de-registration.
-        if adapter is None:
-            err = f"adapter {step.adapter!r} not registered"
-            self._record_step_artifact(step, status="failed",
-                                        metadata={"error": err})
-            return StepResult(id=step.id, status="failed", error=err)
+        with step_run_ctx:
+            # Resolve inputs, dispatch to adapter.
+            try:
+                resolved_inputs = _resolve_inputs(step.inputs, env)
+            except PipelineError as e:
+                self._record_step_artifact(
+                    step, status="failed",
+                    metadata={"error": f"input-resolve: {e}"},
+                )
+                return StepResult(id=step.id, status="failed", error=str(e))
 
-        started = time.perf_counter()
-        try:
-            output = adapter(resolved_inputs)
-        except Exception as e:
+            adapter = self.adapter_registry.get(step.adapter)
+            # validate() already checked this, but defend in case of
+            # post-validate de-registration.
+            if adapter is None:
+                err = f"adapter {step.adapter!r} not registered"
+                self._record_step_artifact(step, status="failed",
+                                            metadata={"error": err})
+                return StepResult(id=step.id, status="failed", error=err)
+
+            started = time.perf_counter()
+            try:
+                output = adapter(resolved_inputs)
+            except Exception as e:
+                duration = int(round((time.perf_counter() - started) * 1000))
+                self._record_step_artifact(
+                    step, status="failed",
+                    metadata={
+                        "inputs": resolved_inputs,
+                        "error": str(e),
+                        "duration_ms": duration,
+                    },
+                )
+                return StepResult(id=step.id, status="failed",
+                                  error=str(e), duration_ms=duration)
+
             duration = int(round((time.perf_counter() - started) * 1000))
             self._record_step_artifact(
-                step, status="failed",
+                step, status="succeeded",
                 metadata={
                     "inputs": resolved_inputs,
-                    "error": str(e),
+                    "output": output,
                     "duration_ms": duration,
                 },
             )
-            return StepResult(id=step.id, status="failed",
-                              error=str(e), duration_ms=duration)
-
-        duration = int(round((time.perf_counter() - started) * 1000))
-        self._record_step_artifact(
-            step, status="succeeded",
-            metadata={
-                "inputs": resolved_inputs,
-                "output": output,
-                "duration_ms": duration,
-            },
-        )
-        return StepResult(id=step.id, status="succeeded",
-                          output=output, duration_ms=duration)
+            return StepResult(id=step.id, status="succeeded",
+                              output=output, duration_ms=duration)
 
     def _record_step_artifact(
         self,

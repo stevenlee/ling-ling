@@ -70,6 +70,7 @@ class TraceStore:
                 """
                 CREATE TABLE IF NOT EXISTS runs (
                     run_id TEXT PRIMARY KEY,
+                    parent_run_id TEXT,
                     source_event_id TEXT,
                     command_id TEXT,
                     intent TEXT,
@@ -146,6 +147,15 @@ class TraceStore:
                 CREATE INDEX IF NOT EXISTS idx_retrieval_events_run_id ON retrieval_events(run_id);
                 """
             )
+            # Phase 5C migration: add parent_run_id column to existing DBs.
+            # SQLite ALTER TABLE ADD COLUMN is idempotent only via try/except.
+            try:
+                conn.execute("ALTER TABLE runs ADD COLUMN parent_run_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already exists
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id)"
+            )
 
     @contextlib.contextmanager
     def run(
@@ -157,19 +167,33 @@ class TraceStore:
         command_id: str | None = None,
         source_event_id: str | None = None,
         metadata: dict | None = None,
+        parent_run_id: str | None = None,
     ) -> Iterator[str]:
+        """Open a TraceStore run. Nests automatically: if invoked inside an
+        outer `run()` context, `parent_run_id` defaults to the outer
+        run_id, creating a parent→child relationship in the `runs` table.
+
+        Phase 5C uses this so PipelineRunner can open a per-step child
+        run that inherits the pipeline-level parent — and any nested
+        agent calls within the step automatically attribute to the
+        child via the existing _CURRENT_RUN_ID ContextVar.
+        """
         run_id = f"run_{uuid.uuid4().hex}"
+        if parent_run_id is None:
+            parent_run_id = _CURRENT_RUN_ID.get()
         started_at = _utc_now()
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO runs (
-                    run_id, source_event_id, command_id, intent, agent,
-                    trigger_type, status, started_at, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    run_id, parent_run_id, source_event_id, command_id,
+                    intent, agent, trigger_type, status, started_at,
+                    metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
+                    parent_run_id,
                     source_event_id,
                     command_id,
                     intent,

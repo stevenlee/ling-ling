@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from agents.base_agent import BaseAgent
+from core.config import PLANS_DIR
 from core.parser import extract_json_object
 from core.ui import ui
 from services.capability_manager import CapabilitySpec
@@ -85,6 +87,11 @@ class PlannerAgent(BaseAgent):
                 "```"
             )
 
+        # Persist the validated plan as a sidecar JSON so @ling-do can
+        # load it later by plan_id. The markdown report is for humans;
+        # this JSON is the executable hand-off.
+        sidecar_path = self._write_sidecar(spec.id, plan_dict)
+
         # Build report and write it. NO execution.
         report = self._render_plan_report(spec, plan_dict, user_directive, capabilities)
 
@@ -94,12 +101,27 @@ class PlannerAgent(BaseAgent):
             "plan_id": spec.id,
             "step_count": len(spec.steps),
             "plan_json": plan_dict,
+            "plan_sidecar": str(sidecar_path),
             "capability_resolution": self._resolve_plan_capabilities(spec, capabilities),
         }
         title = f"Plan: {spec.description or spec.id}"
         self._write_report(title, report, "planner_plan", meta)
-        ui.success(f"🧠 Planner 完成：{spec.id}（{len(spec.steps)} 個步驟，未執行）")
+        ui.success(
+            f"🧠 Planner 完成：{spec.id}（{len(spec.steps)} 個步驟）"
+            f" → 用 `@ling-do {spec.id}` 執行"
+        )
         return report
+
+    @staticmethod
+    def _write_sidecar(plan_id: str, plan_dict: dict) -> Path:
+        """Persist the plan JSON for downstream @ling-do execution."""
+        PLANS_DIR.mkdir(parents=True, exist_ok=True)
+        path = PLANS_DIR / f"{plan_id}.json"
+        path.write_text(
+            json.dumps(plan_dict, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return path
 
     # ── LLM call ───────────────────────────────────────────────────────
 

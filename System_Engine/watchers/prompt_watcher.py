@@ -29,6 +29,7 @@ INTENT_ROUTES = [
     (["repair-db"],                          ["repair-db"],   "linter"),
     (["insight"],                            ["insight"],     "insight"),
     (["plan"],                               ["plan"],        "plan"),
+    (["do"],                                 ["do"],          "do"),
     (["zip"],                                ["zip"],         "kb_zip"),
     (["unzip"],                              ["unzip"],       "kb_unzip"),
     (["reset"],                              ["reset"],       "kb_reset"),

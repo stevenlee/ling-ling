@@ -5,6 +5,7 @@ from agents.insight_agent import InsightAgent
 from agents.linter_agent import LinterAgent
 from agents.counter_agent import CounterAgent
 from agents.planner_agent import PlannerAgent
+from agents.executor_agent import ExecutorAgent
 
 class AgentRegistry:
     def __init__(self, llm, rag):
@@ -21,6 +22,7 @@ class AgentRegistry:
             "count": CounterAgent,
             "counter": CounterAgent,
             "plan": PlannerAgent,
+            "do": ExecutorAgent,
         }
 
     def get_agent(self, command_key: str):

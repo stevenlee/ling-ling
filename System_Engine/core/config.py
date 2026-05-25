@@ -85,6 +85,7 @@ BACKUPS_DIR = PROJECT_ROOT / "Backups"
 
 DATABASE_DIR = WIKI_VAULT_DIR / "Database"
 MAINTENANCE_STATE_FILE = DATABASE_DIR / "maintenance_state.json"
+PLANS_DIR = DATABASE_DIR / "plans"
 RETRIEVAL_BENCH_FILE = SCRATCH_DIR / "retrieval_bench.yml"
 RAW_DIR = WIKI_VAULT_DIR / "raw"
 RAW_CONSOLIDATE_DIR = RAW_DIR / "consolidate"
