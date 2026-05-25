@@ -312,8 +312,12 @@ class LLMClient:
 
     def _get_lang_hint(self) -> str:
         lang = settings.OUTPUT_LANGUAGE.lower()
+        if "simplified" in lang or "簡體" in lang or "简体" in lang or "zh-cn" in lang:
+            return "Simplified Chinese (zh-CN, 简体中文). MUST NOT use Traditional Chinese (繁體中文)."
+        if "traditional" in lang or "繁體" in lang or "繁体" in lang or "zh-tw" in lang:
+            return "Traditional Chinese (zh-TW, 繁體中文). MUST NOT use Simplified Chinese (简体中文)."
         if "chinese" in lang or "中文" in lang:
-            return "Traditional Chinese (繁體中文)"
+            return f"{settings.OUTPUT_LANGUAGE}. Please be consistent and do NOT mix Simplified and Traditional characters."
         if "japanese" in lang or "日本語" in lang:
             return "Japanese (日本語)"
         return settings.OUTPUT_LANGUAGE
@@ -556,7 +560,11 @@ class LLMClient:
                 persona=persona,
                 operation=operation,
             )
-            user_msg = query_content
+            ctx = wiki_context if wiki_context.strip() else "(No relevant context retrieved.)"
+            user_msg = (
+                f"## User Directive\n{query_content}\n\n"
+                f"## Provided Source Text\n{ctx}\n"
+            )
         else:
             lang_hint = self._get_lang_hint()
             system_prompt = (

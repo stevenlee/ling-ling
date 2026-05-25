@@ -16,7 +16,7 @@
 - [x] Introduce `num_rounds` logic to sweep internal combinations completely before branching outwards.
 - [x] Generate per-round summaries showing seeds, scores, and winners.
 - [x] Implement a cross-round evaluation step where the LLM picks the global champion.
-- [x] Update `montecario.md` skill config to default to 3 rounds.
+- [x] Update `montecarlo.md` skill config to default to 3 rounds.
 
 ## Phase 4: Quality & Observability 🟢 (Completed)
 - [x] Update documentation (`@ling-insight.md`) to reflect new targeted syntax.
@@ -24,4 +24,4 @@
 - [x] Integrate trailing whitespace stripping and excessive blank line collapsing into the quality checker.
 - [x] Pass all regression tests (44/44 passing).
 
-**Status:** The `@ling-insight /montecario` command is now a fully iterative, context-aware analysis engine capable of profound cross-domain synthesis.
+**Status:** The `@ling-insight /montecarlo` command is now a fully iterative, context-aware analysis engine capable of profound cross-domain synthesis.

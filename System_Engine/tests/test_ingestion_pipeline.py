@@ -287,6 +287,23 @@ class TestParseVerdict:
         assert IngestionPipeline._parse_verdict("No verdict line here.") is None
 
 
+class TestQualityFixDedupe:
+    def test_dedupes_structured_fixes_preserving_order(self):
+        fixes = [
+            {"type": "a", "line": 1, "before": "x", "after": "y"},
+            {"type": "b", "line": 2},
+            {"type": "a", "line": 1, "before": "x", "after": "y"},
+            "legacy",
+            "legacy",
+        ]
+
+        assert IngestionPipeline._dedupe_quality_fixes(fixes) == [
+            {"type": "a", "line": 1, "before": "x", "after": "y"},
+            {"type": "b", "line": 2},
+            "legacy",
+        ]
+
+
 class TestRunSynthesisCritique:
     def test_disabled_returns_empty(self, monkeypatch):
         monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", False)

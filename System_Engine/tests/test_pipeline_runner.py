@@ -592,6 +592,7 @@ class _FakeLLM:
     def __init__(self):
         self.synthesis_calls: list[dict] = []
         self.critique_calls: list[dict] = []
+        self.answer_calls: list[dict] = []
 
     def generate_synthesis(self, *, title, part_digests, final_concepts, template=None):
         self.synthesis_calls.append({
@@ -610,17 +611,37 @@ class _FakeLLM:
         })
         return f"CRIT({len(candidate)} chars)"
 
+    def answer_query(self, query_content, wiki_context="", **kwargs):
+        self.answer_calls.append({
+            "query_content": query_content,
+            "wiki_context": wiki_context,
+            **kwargs,
+        })
+        return f"ANSWER({len(query_content)}|{len(wiki_context)})"
+
 
 class TestBuiltinAdapters:
     def test_names_are_stable(self):
-        assert builtin_adapter_names() == ["llm.critique", "llm.synthesize"]
+        assert builtin_adapter_names() == [
+            "llm.answer_from_sources",
+            "llm.critique",
+            "llm.synthesize",
+            "vault.load_sources",
+        ]
 
     def test_register_populates_registry(self):
         registry = AdapterRegistry()
         registered = register_builtin_adapters(registry, _FakeLLM())
-        assert set(registered) == {"llm.synthesize", "llm.critique"}
+        assert set(registered) == {
+            "llm.answer_from_sources",
+            "llm.synthesize",
+            "llm.critique",
+            "vault.load_sources",
+        }
+        assert registry.has("llm.answer_from_sources")
         assert registry.has("llm.synthesize")
         assert registry.has("llm.critique")
+        assert registry.has("vault.load_sources")
 
     def test_synthesize_adapter_wires_arguments(self):
         registry = AdapterRegistry()
@@ -654,6 +675,18 @@ class TestBuiltinAdapters:
             "candidate": "ABCDEF", "sources": "src", "focus": "tone",
         }]
 
+    def test_answer_from_sources_adapter_writes_final_answer(self):
+        registry = AdapterRegistry()
+        llm = _FakeLLM()
+        register_builtin_adapters(registry, llm)
+        answer = registry.get("llm.answer_from_sources")
+
+        out = answer({"query": "compare", "sources": "source text", "focus": "actions"})
+
+        assert out == {"output": "ANSWER(23|11)", "final_answer": "ANSWER(23|11)"}
+        assert llm.answer_calls[0]["operation"] == "answer_from_sources"
+        assert "Focus: actions" in llm.answer_calls[0]["query_content"]
+
     def test_synthesize_adapter_supplies_defaults_for_missing_inputs(self):
         registry = AdapterRegistry()
         llm = _FakeLLM()
@@ -666,6 +699,50 @@ class TestBuiltinAdapters:
         assert call["part_digests"] == []
         assert call["final_concepts"] == ""
         assert call["template"] is None
+
+    def test_load_sources_adapter_resolves_wikilink_titles(self, tmp_path, monkeypatch):
+        import services.builtin_adapters as adapters_mod
+
+        pages = tmp_path / "pages"
+        book = pages / "Book A"
+        book.mkdir(parents=True)
+        (book / "Book A (Stitched).md").write_text("stitched source body", encoding="utf-8")
+        monkeypatch.setattr(adapters_mod, "PAGES_DIR", pages)
+
+        registry = AdapterRegistry()
+        register_builtin_adapters(registry, _FakeLLM())
+        load_sources = registry.get("vault.load_sources")
+
+        out = load_sources({"titles": ["[[Book A]]", "[[Missing Book]]"]})
+
+        assert "## Source: Book A" in out["source_text"]
+        assert "stitched source body" in out["source_text"]
+        assert out["sources"][0]["title"] == "Book A"
+        assert out["sources"][0]["source_kind"] == "stitched"
+        assert out["sources"][0]["truncated"] is False
+        assert out["missing_titles"] == ["Missing Book"]
+
+    def test_load_sources_adapter_reports_truncation_metadata(self, tmp_path, monkeypatch):
+        import services.builtin_adapters as adapters_mod
+
+        pages = tmp_path / "pages"
+        book = pages / "Long Book"
+        book.mkdir(parents=True)
+        (book / "Long Book (Stitched).md").write_text("abcdef", encoding="utf-8")
+        monkeypatch.setattr(adapters_mod, "PAGES_DIR", pages)
+
+        registry = AdapterRegistry()
+        register_builtin_adapters(registry, _FakeLLM())
+        load_sources = registry.get("vault.load_sources")
+
+        out = load_sources({"titles": ["Long Book"], "max_chars_per_source": 3})
+
+        source = out["sources"][0]
+        assert source["original_chars"] == 6
+        assert source["loaded_chars"] > 3  # includes the truncation marker
+        assert source["max_chars"] == 3
+        assert source["truncated"] is True
+        assert "<!-- truncated by vault.load_sources -->" in out["source_text"]
 
     def test_demo_pipeline_runs_with_real_adapter_names(self):
         """The shipped demo YAML uses llm.* names. Registering builtin
@@ -698,6 +775,43 @@ class TestBuiltinAdapters:
         # synthesize fired once, critique fired once (synth output nonempty)
         assert len(llm.synthesis_calls) == 1
         assert len(llm.critique_calls) == 1
+
+    def test_load_sources_critique_demo_pipeline_runs(self, tmp_path, monkeypatch):
+        import services.builtin_adapters as adapters_mod
+        from core.config import WIKI_VAULT_DIR, OPERATIONS_DIR, SKILLS_DIR
+        from services.capability_manager import CapabilityManager
+
+        pages = tmp_path / "pages"
+        book = pages / "Book A"
+        book.mkdir(parents=True)
+        (book / "Book A (Stitched).md").write_text("source body for critique", encoding="utf-8")
+        monkeypatch.setattr(adapters_mod, "PAGES_DIR", pages)
+
+        demo_path = (
+            WIKI_VAULT_DIR / "Templates" / "Pipelines"
+            / "load_sources_critique_demo.yml"
+        )
+        spec = load_pipeline(demo_path)
+        cap_mgr = CapabilityManager(OPERATIONS_DIR, SKILLS_DIR)
+        registry = AdapterRegistry()
+        llm = _FakeLLM()
+        register_builtin_adapters(registry, llm)
+
+        runner = PipelineRunner(
+            capability_manager=cap_mgr,
+            adapter_registry=registry,
+            trace_store=_FakeTraceStore(),
+        )
+        result = runner.run(spec, context={
+            "target_titles": ["[[Book A]]"],
+            "candidate": "Compare this claim against source.",
+            "focus": "source-grounding",
+        })
+
+        assert result.status == "succeeded"
+        assert result.steps["load_sources"].output["missing_titles"] == []
+        assert len(llm.critique_calls) == 1
+        assert "source body for critique" in llm.critique_calls[0]["sources"]
 
 
 if __name__ == "__main__":

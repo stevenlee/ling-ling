@@ -391,7 +391,9 @@ class IngestionPipeline:
             "digest_schema": "part-digest-v1",
             "quality_checker": "deterministic-markdown-v1",
         }
-        combined_fixes = sorted(set((synthesis_fixes or []) + (final_fixes or [])))
+        combined_fixes = self._dedupe_quality_fixes(
+            (synthesis_fixes or []) + (final_fixes or [])
+        )
         if combined_fixes:
             final_meta["quality_fixes"] = combined_fixes
         if critique_verdict:
@@ -459,6 +461,23 @@ class IngestionPipeline:
         if not m:
             return None
         return _VERDICT_NORMALISE.get(m.group(1).strip().lower())
+
+    @staticmethod
+    def _dedupe_quality_fixes(fixes: list) -> list:
+        """Deduplicate structured/string quality fixes while preserving order."""
+        seen = set()
+        out = []
+        for fix in fixes:
+            key = (
+                tuple(sorted(fix.items()))
+                if isinstance(fix, dict)
+                else ("scalar", str(fix))
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(fix)
+        return out
 
     # ── Digest formatting ────────────────────────────────────────────
 

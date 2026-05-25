@@ -20,6 +20,7 @@ os.environ.setdefault("LLM_PROVIDER", "vllm")
 import pytest
 
 from agents.insight_agent import InsightAgent
+from services.capability_manager import CapabilitySpec
 
 
 @pytest.fixture
@@ -52,6 +53,206 @@ class _StubLLM:
 
     def answer_query(self, *a, **kw):
         return "## Test Content\n\nBody."
+
+
+class _PlannerCapMgr:
+    def __init__(self):
+        self._caps = [
+            CapabilitySpec(
+                name="synthesize",
+                type="operation",
+                source_path=Path("/fake/synthesize.md"),
+                description="combine sources",
+                expected_inputs=("title",),
+                produces=("synthesis_text",),
+                cost_class="medium",
+            ),
+            CapabilitySpec(
+                name="critique",
+                type="operation",
+                source_path=Path("/fake/critique.md"),
+                description="evaluate a candidate",
+                expected_inputs=("candidate",),
+                produces=("critique_findings",),
+                cost_class="low",
+            ),
+            CapabilitySpec(
+                name="answer_from_sources",
+                type="operation",
+                source_path=Path("/fake/answer_from_sources.md"),
+                description="final answer",
+                expected_inputs=("query", "sources"),
+                produces=("final_answer",),
+                cost_class="medium",
+            ),
+            CapabilitySpec(
+                name="load_sources",
+                type="operation",
+                source_path=Path("/fake/load_sources.md"),
+                description="load vault sources",
+                expected_inputs=("titles",),
+                produces=("source_text", "sources", "missing_titles"),
+                cost_class="low",
+            ),
+        ]
+        self._by_name = {c.name: c for c in self._caps}
+
+    def all(self):
+        return list(self._caps)
+
+    def get(self, name):
+        return self._by_name.get(name)
+
+
+class _PlannerStubLLM(_StubLLM):
+    def __init__(self):
+        self.capability_manager = _PlannerCapMgr()
+        self.calls = []
+        self.synthesis_calls = []
+        self.critique_calls = []
+        self.answer_from_sources_calls = []
+
+    def answer_query(self, query_content, wiki_context="", **kwargs):
+        self.calls.append({"query": query_content, **kwargs})
+        return """```json
+{
+  "id": "insight_compare_preview",
+  "description": "Compare then critique",
+  "summary": "Build an insight plan without executing it.",
+  "steps": [
+    {
+      "id": "synth",
+      "capability": "synthesize",
+      "adapter": "llm.synthesize",
+      "inputs": {"title": "${context.target_titles}"},
+      "rationale": "Create a synthesis before critique."
+    },
+    {
+      "id": "crit",
+      "capability": "critique",
+      "adapter": "llm.critique",
+      "inputs": {"candidate": "${steps.synth.output}"},
+      "when": {"var": "steps.synth.output", "op": "nonempty"},
+      "rationale": "Check the synthesis for weaknesses."
+    }
+  ]
+}
+```"""
+
+    def generate_synthesis(self, *, title, part_digests, final_concepts, template=None):
+        self.synthesis_calls.append({
+            "title": title,
+            "part_digests": part_digests,
+            "final_concepts": final_concepts,
+            "template": template,
+        })
+        return "SYNTHESIS OUTPUT"
+
+    def critique_text(self, *, candidate, sources, focus=None):
+        self.critique_calls.append({
+            "candidate": candidate,
+            "sources": sources,
+            "focus": focus,
+        })
+        return "CRITIQUE OUTPUT"
+
+
+class _AnswerPlannerStubLLM(_PlannerStubLLM):
+    def answer_query(self, query_content, wiki_context="", **kwargs):
+        if kwargs.get("operation") == "answer_from_sources":
+            self.answer_from_sources_calls.append({
+                "query_content": query_content,
+                "wiki_context": wiki_context,
+                **kwargs,
+            })
+            return "FINAL SOURCE-GROUNDED ANSWER"
+        self.calls.append({"query": query_content, **kwargs})
+        return """```json
+{
+  "id": "load_then_answer",
+  "description": "Load and answer",
+  "summary": "Load sources then produce a final answer.",
+  "steps": [
+    {
+      "id": "answer",
+      "capability": "answer_from_sources",
+      "adapter": "llm.answer_from_sources",
+      "inputs": {
+        "query": "${context.user_directive}",
+        "sources": "source text",
+        "focus": "${context.focus}"
+      },
+      "rationale": "Answer directly from sources."
+    }
+  ]
+}
+```"""
+
+
+class _LoadThenAnswerPlannerStubLLM(_AnswerPlannerStubLLM):
+    def answer_query(self, query_content, wiki_context="", **kwargs):
+        if kwargs.get("operation") == "answer_from_sources":
+            self.answer_from_sources_calls.append({
+                "query_content": query_content,
+                "wiki_context": wiki_context,
+                **kwargs,
+            })
+            return f"FINAL ANSWER WITH {len(wiki_context)} SOURCE CHARS"
+        self.calls.append({"query": query_content, **kwargs})
+        return """```json
+{
+  "id": "load_then_answer",
+  "description": "Load and answer",
+  "summary": "Load sources then produce a final answer.",
+  "steps": [
+    {
+      "id": "load_sources",
+      "capability": "load_sources",
+      "adapter": "vault.load_sources",
+      "inputs": {
+        "titles": "${context.target_titles}",
+        "max_chars_per_source": 4
+      },
+      "rationale": "Load the referenced source."
+    },
+    {
+      "id": "answer",
+      "capability": "answer_from_sources",
+      "adapter": "llm.answer_from_sources",
+      "inputs": {
+        "query": "${context.user_directive}",
+        "sources": "${steps.load_sources.source_text}"
+      },
+      "when": {"var": "steps.load_sources.source_text", "op": "nonempty"},
+      "rationale": "Answer from loaded source text."
+    }
+  ]
+}
+```"""
+
+
+class _MissingContextPlannerStubLLM(_PlannerStubLLM):
+    def answer_query(self, query_content, wiki_context="", **kwargs):
+        self.calls.append({"query": query_content, **kwargs})
+        return """```json
+{
+  "id": "needs_source_text",
+  "description": "Needs source text",
+  "summary": "This plan requires source_text from context.",
+  "steps": [
+    {
+      "id": "crit",
+      "capability": "critique",
+      "adapter": "llm.critique",
+      "inputs": {
+        "candidate": "${context.candidate}",
+        "sources": "${context.source_text}"
+      },
+      "rationale": "Critique against provided source text."
+    }
+  ]
+}
+```"""
 
 
 class TestMirrorMetadata:
@@ -109,6 +310,141 @@ class TestMirrorMetadata:
         assert "type: report_insight_full" in mirror
         assert "title:" in mirror
         assert "version:" in mirror
+
+
+class TestPlannerPreview:
+    def test_execute_planner_mode_bypasses_existing_insight_pipelines(self, stub_agent):
+        agent, _, insights_dir = stub_agent
+        agent.llm = _PlannerStubLLM()
+
+        def boom(*_args, **_kwargs):
+            raise AssertionError("legacy insight pipeline should not run")
+
+        agent._run_single = boom
+        agent._run_montecarlo = boom
+
+        full_markdown = agent.execute({
+            "planner_mode": True,
+            "user_directive": "@ling-insight planner-mode compare [[A]] and [[B]]",
+            "target_titles": ["A", "B"],
+        })
+
+        assert "planner_mode: preview" in full_markdown
+        assert "type: report_insight_planner_preview" in full_markdown
+        assert "Planner mode preview contains a validated recommended plan" in full_markdown
+        assert "## Readiness Check" in full_markdown
+        assert "## Preview Handoff" in full_markdown
+        assert "passed static readiness checks for guarded execution" in full_markdown
+        assert "readiness_verdict: ready" in full_markdown
+        assert "readiness_score: 100" in full_markdown
+        assert "Step 1: `synth`" in full_markdown
+        assert "Step 2: `crit`" in full_markdown
+        assert "no pipeline steps were executed" in full_markdown
+        mirrored = list(insights_dir.glob("🎐insight-plan-*.md"))
+        assert len(mirrored) == 1
+        assert mirrored[0].read_text(encoding="utf-8") == full_markdown
+
+    def test_execute_flag_runs_when_readiness_is_clean(self, stub_agent):
+        agent, _, _ = stub_agent
+        llm = _PlannerStubLLM()
+        agent.llm = llm
+
+        full_markdown = agent.execute({
+            "planner_mode": True,
+            "execute_plan": True,
+            "user_directive": "@ling-insight planner-mode /execute compare [[A]] and [[B]]",
+            "target_titles": ["A", "B"],
+        })
+
+        assert "execute_requested: true" in full_markdown
+        assert "planner_mode: execute" in full_markdown
+        assert "type: report_insight_planner_execute" in full_markdown
+        assert "execution_status: succeeded" in full_markdown
+        assert "finality_status: critique_only" in full_markdown
+        assert "## Execution Result" in full_markdown
+        assert "## Final Step Output" in full_markdown
+        assert "SYNTHESIS OUTPUT" in full_markdown
+        assert "CRITIQUE OUTPUT" in full_markdown
+        assert len(llm.synthesis_calls) == 1
+        assert len(llm.critique_calls) == 1
+
+    def test_execute_flag_runs_answer_from_sources_as_final_output(self, stub_agent):
+        agent, _, _ = stub_agent
+        llm = _AnswerPlannerStubLLM()
+        agent.llm = llm
+
+        full_markdown = agent.execute({
+            "planner_mode": True,
+            "execute_plan": True,
+            "user_directive": "@ling-insight planner-mode /execute compare [[A]]",
+            "target_titles": ["A"],
+        })
+
+        assert "planner_mode: execute" in full_markdown
+        assert "finality_status: final_output" in full_markdown
+        assert "FINAL SOURCE-GROUNDED ANSWER" in full_markdown
+        assert len(llm.answer_from_sources_calls) == 1
+
+    def test_execute_report_includes_loaded_source_appendix(self, stub_agent, tmp_path, monkeypatch):
+        import services.builtin_adapters as adapters_mod
+
+        pages = tmp_path / "pages"
+        book = pages / "Book A"
+        book.mkdir(parents=True)
+        (book / "Book A (Stitched).md").write_text("abcdef", encoding="utf-8")
+        monkeypatch.setattr(adapters_mod, "PAGES_DIR", pages)
+
+        agent, _, _ = stub_agent
+        llm = _LoadThenAnswerPlannerStubLLM()
+        agent.llm = llm
+
+        full_markdown = agent.execute({
+            "planner_mode": True,
+            "execute_plan": True,
+            "user_directive": "@ling-insight planner-mode /execute compare [[Book A]]",
+            "target_titles": ["Book A"],
+        })
+
+        assert "planner_mode: execute" in full_markdown
+        assert "## Source Appendix" in full_markdown
+        assert "| Book A | stitched |" in full_markdown
+        assert "| Title | Kind | Loaded chars | Original chars | Truncated | Path |" in full_markdown
+        assert "yes" in full_markdown
+        assert len(llm.answer_from_sources_calls) == 1
+        assert "## Source: Book A" in llm.answer_from_sources_calls[0]["wiki_context"]
+
+    def test_execute_flag_blocks_missing_context_keys(self, stub_agent):
+        agent, _, _ = stub_agent
+        llm = _MissingContextPlannerStubLLM()
+        agent.llm = llm
+
+        full_markdown = agent.execute({
+            "planner_mode": True,
+            "execute_plan": True,
+            "user_directive": "@ling-insight planner-mode /execute critique [[A]]",
+            "target_titles": ["A"],
+        })
+
+        assert "planner_mode: preview" in full_markdown
+        assert "execution_status: blocked_by_execution_gate" in full_markdown
+        assert "source_text" in full_markdown
+        assert "## Execution Result" not in full_markdown
+        assert len(llm.critique_calls) == 0
+
+    def test_planner_preview_uses_plan_operation_axis(self, stub_agent):
+        agent, _, _ = stub_agent
+        llm = _PlannerStubLLM()
+        agent.llm = llm
+
+        agent.execute({
+            "planner_mode": True,
+            "user_directive": "@ling-insight planner-mode compare notes",
+        })
+
+        assert len(llm.calls) == 1
+        assert llm.calls[0]["operation"] == "plan"
+        assert llm.calls[0]["persona"] == "none"
+        assert llm.calls[0]["forced_template"] == "none"
 
 
 if __name__ == "__main__":

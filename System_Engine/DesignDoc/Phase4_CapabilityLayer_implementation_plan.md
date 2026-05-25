@@ -17,7 +17,7 @@ Compressed handoff for the executing agent. Decisions in this doc are settled; d
 - Pipeline DSL.
 - `@ling-pipeline` intent.
 - `validate_inputs` real implementation (ship as stub returning `(True, [])`).
-- Renaming `montecario.md` → `montecarlo.md` (separate PR; just log a warning in CapabilityManager).
+- Renaming `montecarlo.md` → `montecarlo.md` (separate PR; just log a warning in CapabilityManager).
 
 ## Critical Ordering
 
@@ -46,7 +46,7 @@ Currently [`_load_localized_content`](../services/llm_client.py:326) returns the
   - `_reference_cell` / `_format_instance` emit dual links.
 - `lings-desktop/Templates/Operations/synthesize.md` — add frontmatter.
 - `lings-desktop/Templates/Operations/critique.md` — add frontmatter.
-- `lings-desktop/Skills/{islands,meta-methods,montecario,recency,tag-cluster}.md` — append capability fields to existing frontmatter.
+- `lings-desktop/Skills/{islands,meta-methods,montecarlo,recency,tag-cluster}.md` — append capability fields to existing frontmatter.
 - `README.md` — short Lens dual-link caveat (snippet below).
 - `System_Engine/tests/test_counter_agent.py` — assert dual-link format in output.
 
@@ -202,7 +202,7 @@ Insert under the Phase 4 dated Refactor Notes entry, or near `@ling-lens` in 指
 
 - `tests/test_capability_manager.py`
   - scans both dirs, finds 2 operations + 5 skills
-  - file stem becomes canonical id (verify `montecario` registers as `montecario`, no auto-rename)
+  - file stem becomes canonical id (verify `montecarlo` registers as `montecarlo`, no auto-rename)
   - missing frontmatter → empty `CapabilitySpec`, no raise
   - malformed YAML → warning logged, empty spec, no raise
   - `validate_inputs(unknown)` → `(False, [...])`
@@ -215,7 +215,7 @@ Insert under the Phase 4 dated Refactor Notes entry, or near `@ling-lens` in 指
 | Question | Decision |
 |---|---|
 | Skill / Operation id source | File stem; ignore frontmatter `name:` |
-| `montecario` filename typo | Log warning; rename in separate PR |
+| `montecarlo` filename typo | Log warning; rename in separate PR |
 | Frontmatter parse failure | Graceful: log warning + empty spec |
 | `cost_class` levels | low < 2k, medium 2–10k, high > 10k input tokens |
 | Capability metadata in system prompt | **No** — trace metadata only |

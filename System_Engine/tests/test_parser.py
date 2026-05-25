@@ -14,6 +14,7 @@ from core.parser import (
     extract_json_array,
     extract_json_object,
     clean_llm_response,
+    repair_markdown_bold_spacing,
     repair_latex_escape_collisions,
     run_markdown_quality_checks,
     strip_body_frontmatter,
@@ -274,6 +275,30 @@ class TestStructuredFixRecords:
         text = f"---\ntitle: {long_value}\n---\nbody"
         _, fixes = strip_body_frontmatter(text)
         assert len(fixes[0]["before"]) <= 80
+
+
+# ── Bold spacing repair ──────────────────────────────────────────────
+
+class TestBoldSpacingRepair:
+    def test_repairs_cjk_adjacent_bold(self):
+        text = "這是**重點**內容"
+        cleaned, fixes = repair_markdown_bold_spacing(text)
+        assert cleaned == "這是 **重點** 內容"
+        assert fixes[0]["type"] == "repaired_bold_spacing"
+        assert fixes[0]["line"] == 1
+        assert fixes[0]["before"] == "是**重點**內"
+        assert fixes[0]["after"] == "是 **重點** 內"
+
+    def test_preserves_already_spaced_bold(self):
+        text = "這是 **重點** 內容"
+        cleaned, fixes = repair_markdown_bold_spacing(text)
+        assert cleaned == text
+        assert fixes == []
+
+    def test_quality_pipeline_includes_bold_spacing(self):
+        cleaned, fixes = run_markdown_quality_checks("A**B**C")
+        assert cleaned == "A **B** C"
+        assert any(f["type"] == "repaired_bold_spacing" for f in fixes)
 
 
 # ── repair_latex_escape_collisions ────────────────────────────────────

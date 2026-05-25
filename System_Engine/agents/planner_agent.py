@@ -16,20 +16,17 @@ and feed it to PipelineRunner.
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
-from typing import Any
 
 from agents.base_agent import BaseAgent
 from core.config import PLANS_DIR
-from core.parser import extract_json_object
 from core.ui import ui
 from services.capability_manager import CapabilitySpec
+from services.plan_readiness import assess_plan_readiness
 from services.pipeline_runner import (
-    PipelineError,
     PipelineSpec,
-    load_pipeline_from_dict,
 )
+from services.planner_service import PlannerService
 
 
 class PlannerAgent(BaseAgent):
@@ -46,54 +43,46 @@ class PlannerAgent(BaseAgent):
                 "Provide some text after the @ling-plan command."
             )
 
-        capabilities = self._collect_capabilities()
-        if not capabilities:
-            return self._error_report(
-                "PlannerAgent: no capabilities found in CapabilityManager. "
-                "Cannot plan against an empty registry."
-            )
+        ui.set_status(f"🎐 Planner 正在規劃：{user_directive[:60]}…")
 
-        ui.set_status(f"🧠 Planner 正在規劃：{user_directive[:60]}…")
-
-        raw_response = self._ask_llm_for_plan(
+        result = PlannerService(self.llm).generate_plan(
             user_directive=user_directive,
             target_titles=target_titles,
-            capabilities=capabilities,
             forced_template=forced_template,
         )
-        if not raw_response:
-            return self._error_report(
-                "PlannerAgent: LLM returned an empty response. "
-                "No plan was produced."
-            )
+        if not result.ok:
+            message = (result.error or "PlannerAgent: planning failed.")
+            if result.status == "empty_registry":
+                message = message.replace("PlannerService", "PlannerAgent")
+            elif result.status in {"empty_response", "no_json", "invalid_schema"}:
+                message = message.replace("PlannerService", "PlannerAgent")
+            if result.status == "invalid_schema" and result.plan_dict is not None:
+                message += (
+                    "\n\n**Raw JSON the planner produced:**\n\n"
+                    "```json\n"
+                    f"{json.dumps(result.plan_dict, indent=2, ensure_ascii=False)}\n"
+                    "```"
+                )
+            return self._error_report(message)
 
-        plan_dict = extract_json_object(raw_response)
-        if not plan_dict:
-            return self._error_report(
-                "PlannerAgent: LLM output did not contain a JSON object. "
-                "Raw response (truncated):\n\n"
-                + raw_response[:800]
-            )
-
-        try:
-            spec = load_pipeline_from_dict(plan_dict, default_id="planner_plan")
-        except PipelineError as e:
-            return self._error_report(
-                "PlannerAgent: produced plan failed validation against the "
-                f"PipelineSpec schema.\n\n**Validation error:** {e}\n\n"
-                "**Raw JSON the planner produced:**\n\n"
-                "```json\n"
-                f"{json.dumps(plan_dict, indent=2, ensure_ascii=False)}\n"
-                "```"
-            )
+        spec = result.spec
+        plan_dict = result.plan_dict
+        capabilities = result.capabilities
 
         # Persist the validated plan as a sidecar JSON so @ling-do can
         # load it later by plan_id. The markdown report is for humans;
         # this JSON is the executable hand-off.
         sidecar_path = self._write_sidecar(spec.id, plan_dict)
+        readiness = assess_plan_readiness(
+            spec=spec,
+            plan_dict=plan_dict,
+            capabilities=capabilities,
+        )
 
         # Build report and write it. NO execution.
-        report = self._render_plan_report(spec, plan_dict, user_directive, capabilities)
+        report = self._render_plan_report(
+            spec, plan_dict, user_directive, capabilities, readiness=readiness
+        )
 
         meta = {
             "target_titles": target_titles,
@@ -102,12 +91,24 @@ class PlannerAgent(BaseAgent):
             "step_count": len(spec.steps),
             "plan_json": plan_dict,
             "plan_sidecar": str(sidecar_path),
+            "readiness_verdict": readiness.verdict,
+            "readiness_score": readiness.score,
+            "readiness_findings": [
+                {
+                    "severity": f.severity,
+                    "code": f.code,
+                    "step_id": f.step_id,
+                    "message": f.message,
+                    "suggestion": f.suggestion,
+                }
+                for f in readiness.findings
+            ],
             "capability_resolution": self._resolve_plan_capabilities(spec, capabilities),
         }
         title = f"Plan: {spec.description or spec.id}"
         self._write_report(title, report, "planner_plan", meta)
         ui.success(
-            f"🧠 Planner 完成：{spec.id}（{len(spec.steps)} 個步驟）"
+            f"🎐 Planner 完成：{spec.id}（{len(spec.steps)} 個步驟）"
             f" → 用 `@ling-do {spec.id}` 執行"
         )
         return report
@@ -133,86 +134,25 @@ class PlannerAgent(BaseAgent):
         capabilities: list[CapabilitySpec],
         forced_template: str | None,
     ) -> str:
-        cap_listing = self._format_capability_listing(capabilities)
-
-        target_section = (
-            "\n".join(f"- {t}" for t in target_titles)
-            if target_titles else "(none)"
+        return PlannerService(self.llm).ask_llm_for_plan(
+            user_directive=user_directive,
+            target_titles=target_titles,
+            capabilities=capabilities,
+            forced_template=forced_template,
         )
-
-        user_prompt = (
-            "# Available Capabilities\n\n"
-            f"{cap_listing}\n\n"
-            "# User Directive\n\n"
-            f"{user_directive}\n\n"
-            "# Target References (from [[wikilinks]])\n"
-            f"{target_section}\n\n"
-            "Produce the JSON plan now. Output ONE fenced ```json block. "
-            "No prose outside the fence."
-        )
-
-        try:
-            return self.llm.answer_query(
-                user_prompt,
-                wiki_context="",
-                custom_instruction=(
-                    "Produce a declarative pipeline plan (JSON) for the "
-                    "user's directive. Do not execute anything."
-                ),
-                temperature=0.2,
-                forced_template="none",
-                persona="none",
-                operation="plan",
-            )
-        except Exception as e:
-            logging.error(f"PlannerAgent LLM call failed: {e}")
-            return ""
 
     # ── Capability listing ────────────────────────────────────────────
 
     def _collect_capabilities(self) -> list[CapabilitySpec]:
-        cap_mgr = getattr(self.llm, "capability_manager", None)
-        if cap_mgr is None:
-            return []
-        return [s for s in cap_mgr.all() if s.found]
+        return PlannerService(self.llm).collect_capabilities()
 
     @staticmethod
     def _format_capability_listing(capabilities: list[CapabilitySpec]) -> str:
-        operations = [c for c in capabilities if c.type == "operation"]
-        skills     = [c for c in capabilities if c.type == "skill"]
-        others     = [c for c in capabilities if c.type not in ("operation", "skill")]
-
-        lines: list[str] = []
-        if operations:
-            lines.append("## Operations (methodology prompts; pick these for direct steps)")
-            lines.append("")
-            for c in operations:
-                lines.append(PlannerAgent._format_capability_entry(c))
-            lines.append("")
-        if skills:
-            lines.append("## Skills (insight strategies; usually consumed by InsightAgent — adapters may not yet exist)")
-            lines.append("")
-            for c in skills:
-                lines.append(PlannerAgent._format_capability_entry(c))
-            lines.append("")
-        if others:
-            lines.append("## Other")
-            lines.append("")
-            for c in others:
-                lines.append(PlannerAgent._format_capability_entry(c))
-            lines.append("")
-        return "\n".join(lines).rstrip()
+        return PlannerService.format_capability_listing(capabilities)
 
     @staticmethod
     def _format_capability_entry(c: CapabilitySpec) -> str:
-        parts = [f"- **{c.name}** ({c.cost_class}): {c.description or '(no description)'}"]
-        if c.expected_inputs:
-            parts.append(f"  - expected_inputs: {list(c.expected_inputs)}")
-        if c.expected_context:
-            parts.append(f"  - expected_context: {list(c.expected_context)}")
-        if c.produces:
-            parts.append(f"  - produces: {list(c.produces)}")
-        return "\n".join(parts)
+        return PlannerService.format_capability_entry(c)
 
     # ── Resolution record (for trace metadata) ─────────────────────────
 
@@ -222,18 +162,7 @@ class PlannerAgent(BaseAgent):
         capabilities: list[CapabilitySpec],
     ) -> dict:
         """Per-step capability lookup status, lands in trace metadata."""
-        by_name = {c.name: c for c in capabilities}
-        return {
-            "steps": [
-                {
-                    "step_id": s.id,
-                    "capability": s.capability,
-                    "registered": s.capability in by_name,
-                    "adapter": s.adapter,
-                }
-                for s in spec.steps
-            ],
-        }
+        return PlannerService.resolve_plan_capabilities(spec, capabilities)
 
     # ── Report rendering ──────────────────────────────────────────────
 
@@ -243,6 +172,7 @@ class PlannerAgent(BaseAgent):
         plan_dict: dict,
         user_directive: str,
         capabilities: list[CapabilitySpec],
+        readiness=None,
     ) -> str:
         cap_names = {c.name for c in capabilities}
         unknown_caps = [s.capability for s in spec.steps if s.capability not in cap_names]
@@ -250,7 +180,7 @@ class PlannerAgent(BaseAgent):
         summary = (plan_dict.get("summary") or "").strip() or "(planner did not provide a summary)"
 
         lines: list[str] = [
-            f"# 🧠 Plan: {spec.description or spec.id}",
+            f"# 🎐 Plan: {spec.description or spec.id}",
             "",
             "> [!IMPORTANT]",
             "> This is a **plan only**. No steps have been executed. "
@@ -269,6 +199,9 @@ class PlannerAgent(BaseAgent):
             "## 🪜 Planned Steps",
             "",
         ]
+
+        if readiness is not None:
+            lines.extend(self._render_readiness_section(readiness))
 
         for idx, step in enumerate(spec.steps, 1):
             step_raw = self._raw_step(plan_dict, step.id)
@@ -309,6 +242,36 @@ class PlannerAgent(BaseAgent):
         return "\n".join(lines)
 
     @staticmethod
+    def _render_readiness_section(readiness) -> list[str]:
+        verdict_label = {
+            "ready": "Ready for guarded execution",
+            "needs_review": "Needs review",
+            "blocked": "Blocked",
+        }.get(readiness.verdict, readiness.verdict)
+
+        lines = [
+            "## Readiness Check",
+            "",
+            f"- **Verdict**: `{readiness.verdict}` ({verdict_label})",
+            f"- **Score**: `{readiness.score}/100`",
+            "",
+        ]
+        if not readiness.findings:
+            lines.extend(["No readiness issues detected by static checks.", ""])
+            return lines
+
+        for finding in readiness.findings:
+            scope = f"step `{finding.step_id}`" if finding.step_id else "plan"
+            lines.append(
+                f"- **{finding.severity.upper()} `{finding.code}`** ({scope}): "
+                f"{finding.message}"
+            )
+            if finding.suggestion:
+                lines.append(f"  - Suggestion: {finding.suggestion}")
+        lines.append("")
+        return lines
+
+    @staticmethod
     def _raw_step(plan_dict: dict, step_id: str) -> dict:
         for step in plan_dict.get("steps") or []:
             if isinstance(step, dict) and step.get("id") == step_id:
@@ -321,5 +284,5 @@ class PlannerAgent(BaseAgent):
         body = f"# ❌ Planner Error\n\n{message}\n"
         self._write_report("Planner Error", body, "planner_plan",
                             {"error": True})
-        ui.error(f"🧠 Planner 失敗：{message[:120]}")
+        ui.error(f"🎐 Planner 失敗：{message[:120]}")
         return body

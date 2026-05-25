@@ -1,0 +1,27 @@
+id: load_sources_critique_demo
+description: |
+  Phase 6A demo: load_sources → critique.
+
+  Demonstrates the safe source-loading pattern planner-mode should prefer
+  when a user directive references vault wikilinks. `vault.load_sources`
+  resolves `${context.target_titles}` into real markdown text, then
+  `llm.critique` receives `${steps.load_sources.source_text}` instead of
+  unresolved wikilink strings.
+
+steps:
+  - id: load_sources
+    capability: load_sources
+    adapter: vault.load_sources
+    inputs:
+      titles: "${context.target_titles}"
+
+  - id: critique
+    capability: critique
+    adapter: llm.critique
+    when:
+      var: steps.load_sources.source_text
+      op: nonempty
+    inputs:
+      candidate: "${context.candidate}"
+      sources: "${steps.load_sources.source_text}"
+      focus: "${context.focus}"

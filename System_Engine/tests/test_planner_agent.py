@@ -304,6 +304,7 @@ class TestPlannerExecute:
         # The body is the rendered report
         assert "Plan: Synthesize then critique" in body
         assert "User wants synthesis followed by critique" in body
+        assert "## Readiness Check" in body
         assert "Step 1: `synth`" in body
         assert "Step 2: `crit`" in body
         # Exactly one report was written
@@ -312,6 +313,8 @@ class TestPlannerExecute:
         assert write["report_type"] == "planner_plan"
         assert write["metadata"]["plan_id"] == "synth_then_crit"
         assert write["metadata"]["step_count"] == 2
+        assert write["metadata"]["readiness_verdict"] in {"ready", "needs_review", "blocked"}
+        assert isinstance(write["metadata"]["readiness_score"], int)
         # The captured plan_json is the parsed dict, NOT a string
         plan_json = write["metadata"]["plan_json"]
         assert isinstance(plan_json, dict)

@@ -36,6 +36,7 @@ RAG_EXPLAIN_ENABLED             = os.getenv("RAG_EXPLAIN_ENABLED", "false").lowe
 MAINTENANCE_SCHEDULER_ENABLED   = os.getenv("MAINTENANCE_SCHEDULER_ENABLED", "true").lower() == "true"
 MAINTENANCE_POLL_SECONDS        = int(os.getenv("MAINTENANCE_POLL_SECONDS", "300"))
 RETRIEVAL_BENCH_MIN_PASS_RATE   = float(os.getenv("RETRIEVAL_BENCH_MIN_PASS_RATE", "0.8"))
+LOAD_SOURCES_MAX_CHARS_PER_SOURCE = int(os.getenv("LOAD_SOURCES_MAX_CHARS_PER_SOURCE", "20000"))
 
 
 # ─── Embedding Configuration ──────────────────────────────────────────

@@ -590,6 +590,57 @@ def strip_body_frontmatter(text: str) -> tuple[str, list[dict]]:
     )]
 
 
+# ─── Markdown: bold spacing ────────────────────────────────────────────
+
+_BOLD_BLOCK_RE = re.compile(r'([^\s*])?\*\*(.*?)\*\*([^\s*])?')
+
+def repair_markdown_bold_spacing(text: str) -> tuple[str, list[dict]]:
+    """Ensure spaces around bold **text** for Obsidian compatibility.
+    
+    Obsidian (and some standard markdown parsers) requires spaces around
+    `**` when mixed with CJK characters to reliably parse bold blocks.
+    This turns `強調**XYZ**的` into `強調 **XYZ** 的`.
+    """
+    if not text or "**" not in text:
+        return text, []
+
+    fixes: list[dict] = []
+    new_text = []
+    last_end = 0
+    
+    for match in _BOLD_BLOCK_RE.finditer(text):
+        g1, g2, g3 = match.groups()
+        before_str = match.group(0)
+        
+        needs_space_before = (g1 is not None)
+        needs_space_after = (g3 is not None)
+        
+        if not needs_space_before and not needs_space_after:
+            continue
+            
+        res = ''
+        if g1: res += g1 + ' '
+        res += '**' + g2 + '**'
+        if g3: res += ' ' + g3
+        
+        new_text.append(text[last_end:match.start()])
+        new_text.append(res)
+        line_no = text.count("\n", 0, match.start()) + 1
+        fixes.append(_make_fix(
+            "repaired_bold_spacing",
+            line=line_no,
+            before=before_str,
+            after=res,
+        ))
+        last_end = match.end()
+        
+    if not fixes:
+        return text, []
+        
+    new_text.append(text[last_end:])
+    return "".join(new_text), fixes
+
+
 def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> tuple[str, list[dict]]:
     """Run deterministic cleanup passes. Idempotent.
 
@@ -611,6 +662,7 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
         repair_latex_escape_collisions,
         repair_mermaid_fences,
         repair_mermaid_label_quotes,
+        repair_markdown_bold_spacing,
     ])
 
     for step in pipeline:

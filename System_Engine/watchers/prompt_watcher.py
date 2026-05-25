@@ -133,6 +133,14 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                 if f"/{trigger}" in lower_query:
                     return intent_key
         return None
+
+    @staticmethod
+    def _detect_planner_flags(lower_query: str) -> dict:
+        """Phase 6A flags for opt-in planner preview on high-frequency intents."""
+        return {
+            "planner_mode": ("planner-mode" in lower_query or "/planner" in lower_query),
+            "execute_plan": ("/execute" in lower_query or "/execution" in lower_query),
+        }
             
     def process_prompt(self, filepath: Path):
         try:
@@ -206,6 +214,7 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                             
                         # Specialized context for InsightAgent
                         if intent_key == "insight":
+                            context.update(self._detect_planner_flags(lower_query))
                             for s_id in getattr(agent, 'strategies', {}).keys():
                                 if f"/{s_id}" in lower_query or (s_id == "tags" and "/tag" in lower_query):
                                     context["strategy_id"] = s_id

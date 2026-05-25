@@ -169,6 +169,67 @@ class TestPartDigest:
         assert "(empty digest)" not in LLMClient._format_part_digest_for_prompt("x")
 
 
+# ── Language hint ───────────────────────────────────────────────────
+
+class TestLanguageHint:
+    def test_traditional_chinese_hint_is_explicit(self, monkeypatch):
+        import services.llm_client as llm_mod
+
+        monkeypatch.setattr(llm_mod.settings, "OUTPUT_LANGUAGE", "Traditional Chinese")
+        client = LLMClient.__new__(LLMClient)
+        hint = client._get_lang_hint()
+        assert "Traditional Chinese" in hint
+        assert "MUST NOT use Simplified Chinese" in hint
+
+    def test_simplified_chinese_hint_is_explicit(self, monkeypatch):
+        import services.llm_client as llm_mod
+
+        monkeypatch.setattr(llm_mod.settings, "OUTPUT_LANGUAGE", "Simplified Chinese")
+        client = LLMClient.__new__(LLMClient)
+        hint = client._get_lang_hint()
+        assert "Simplified Chinese" in hint
+        assert "MUST NOT use Traditional Chinese" in hint
+
+    def test_generic_chinese_warns_against_mixing(self, monkeypatch):
+        import services.llm_client as llm_mod
+
+        monkeypatch.setattr(llm_mod.settings, "OUTPUT_LANGUAGE", "Chinese")
+        client = LLMClient.__new__(LLMClient)
+        hint = client._get_lang_hint()
+        assert "do NOT mix" in hint
+
+
+# ── answer_query prompt assembly ────────────────────────────────────
+
+class TestAnswerQuery:
+    def test_custom_instruction_includes_provided_context(self):
+        client = LLMClient.__new__(LLMClient)
+        client._build_system_prompt = lambda *a, **kw: ("system prompt", {})
+        captured = {}
+
+        def fake_complete(system_prompt, user_msg, **kwargs):
+            captured["system_prompt"] = system_prompt
+            captured["user_msg"] = user_msg
+            captured["kwargs"] = kwargs
+            return "answer"
+
+        client._complete_text = fake_complete
+
+        text = client.answer_query(
+            query_content="compare the books",
+            wiki_context="SOURCE BODY FROM VAULT",
+            custom_instruction="answer from sources",
+            operation="answer_from_sources",
+            persona="none",
+            forced_template="none",
+        )
+
+        assert text == "answer"
+        assert "## User Directive\ncompare the books" in captured["user_msg"]
+        assert "## Provided Source Text\nSOURCE BODY FROM VAULT" in captured["user_msg"]
+        assert captured["kwargs"]["trace_context"]["operation"] == "answer_from_sources"
+
+
 # ── LLM tracing ─────────────────────────────────────────────────────
 
 class _FakeUsage:
