@@ -71,7 +71,11 @@ class BaseAgent:
 
         content, fixes = run_markdown_quality_checks(content)
         if fixes:
-            logging.info(f"Applied markdown quality fixes: {', '.join(fixes)}")
+            # Phase A3 changed quality_fixes from list[str] to
+            # list[dict]; the log line needs to pull out the `type` so
+            # str.join doesn't choke. Each fix is {type, line?, before?, after?}.
+            types = [f["type"] if isinstance(f, dict) else str(f) for f in fixes]
+            logging.info(f"Applied markdown quality fixes: {', '.join(types)}")
         return content
 
     @staticmethod
