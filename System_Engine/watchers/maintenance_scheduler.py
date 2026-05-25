@@ -216,7 +216,12 @@ class MaintenanceScheduler(threading.Thread):
             logging.info("MaintenanceScheduler: task %s finished: %s", task.name, summary)
         except Exception as e:
             summary = str(e)
-            logging.error("MaintenanceScheduler: task %s failed: %s", task.name, e)
+            # Log the full traceback — debugging today's insight_daily
+            # failure took 30 minutes of cross-referencing the trace DB
+            # because the original log line dropped the stack entirely.
+            logging.exception(
+                "MaintenanceScheduler: task %s failed", task.name,
+            )
         finally:
             self.state[task.name] = {
                 "last_run_at": now.isoformat(timespec="seconds"),
