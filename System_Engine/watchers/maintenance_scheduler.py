@@ -81,6 +81,13 @@ class MaintenanceScheduler(threading.Thread):
             result = run_retrieval_bench(self.rag)
             return MaintenanceResult(result.status, result.message)
 
+        def trace_prune() -> MaintenanceResult:
+            trace_store = getattr(self.llm, "trace_store", None)
+            if trace_store is None:
+                return MaintenanceResult("skipped", "No trace store associated with LLM client.")
+            trace_store.prune_old()
+            return MaintenanceResult("succeeded", "SQLite trace logs pruned successfully.")
+
         return [
             MaintenanceTask(
                 name="insight_daily",
@@ -100,6 +107,14 @@ class MaintenanceScheduler(threading.Thread):
                 idle_required=True,
                 intent="maintenance.retrieval_bench",
                 agent="RetrievalBench",
+            ),
+            MaintenanceTask(
+                name="trace_prune_daily",
+                action=trace_prune,
+                daily=True,
+                idle_required=False,
+                intent="maintenance.trace_prune",
+                agent="TraceStore",
             ),
         ]
 

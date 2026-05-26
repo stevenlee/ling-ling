@@ -118,5 +118,25 @@ class TestSchemaMigration:
         assert "parent_run_id" in cols
 
 
+class TestPruning:
+    def test_run_does_not_prune_synchronously(self, tmp_path):
+        class NoSyncPruneTraceStore(TraceStore):
+            def __init__(self, *args, **kwargs):
+                self.prune_calls = 0
+                super().__init__(*args, **kwargs)
+
+            def prune_old(self):
+                self.prune_calls += 1
+
+        ts = NoSyncPruneTraceStore(db_path=tmp_path / "trace.sqlite", retention_days=0)
+
+        with ts.run(intent="no_sync_prune"):
+            pass
+
+        assert ts.prune_calls == 0
+        ts.prune_old()
+        assert ts.prune_calls == 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

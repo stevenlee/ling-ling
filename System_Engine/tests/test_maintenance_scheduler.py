@@ -82,3 +82,42 @@ def test_scheduler_persists_state_across_instances(tmp_path):
     scheduler2 = make_scheduler(tmp_path, task)
     assert scheduler2.run_due_once(now + timedelta(hours=2)) == []
     assert calls == ["run"]
+
+
+class MockTraceStore:
+    def __init__(self):
+        self.pruned = False
+
+    def prune_old(self):
+        self.pruned = True
+
+
+class MockLLMForDefaultTasks:
+    def __init__(self, trace_store=None):
+        self.trace_store = trace_store
+
+
+def test_default_tasks_registration(tmp_path):
+    llm = MockLLMForDefaultTasks()
+    scheduler = MaintenanceScheduler(
+        project_root=Path(tmp_path),
+        llm=llm,
+        rag=None,
+        state_file=tmp_path / "maintenance_state.json",
+        enabled=False,
+    )
+    task_names = [t.name for t in scheduler.tasks]
+    assert "trace_prune_daily" in task_names
+
+    prune_task = next(t for t in scheduler.tasks if t.name == "trace_prune_daily")
+    assert prune_task.daily is True
+    assert prune_task.idle_required is False
+
+    result1 = prune_task.action()
+    assert result1.status == "skipped"
+
+    store = MockTraceStore()
+    llm.trace_store = store
+    result2 = prune_task.action()
+    assert result2.status == "succeeded"
+    assert store.pruned is True

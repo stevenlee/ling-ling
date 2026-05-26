@@ -223,7 +223,6 @@ class TraceStore:
                     "UPDATE runs SET status = ?, ended_at = ?, error = ? WHERE run_id = ?",
                     (status, _utc_now(), error, run_id),
                 )
-            self.prune_old()
 
     def current_run_id(self) -> str | None:
         return _CURRENT_RUN_ID.get()

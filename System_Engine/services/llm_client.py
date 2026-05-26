@@ -159,6 +159,75 @@ def _genai():
     return _GENAI_MOD
 
 
+_TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+_NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404}
+
+
+def _error_status_code(exc: Exception) -> int | None:
+    for attr in ("status_code", "status", "code"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int):
+            return val
+        if isinstance(val, str):
+            try:
+                return int(val)
+            except ValueError:
+                pass
+    return None
+
+
+def _is_non_retryable_llm_error(exc: Exception) -> bool:
+    code = _error_status_code(exc)
+    if code in _NON_RETRYABLE_STATUS_CODES:
+        return True
+
+    cls_name = type(exc).__name__
+    non_retry_keywords = (
+        "Authentication",
+        "Permission",
+        "BadRequest",
+        "InvalidArgument",
+        "NotFound",
+    )
+    if any(kw in cls_name for kw in non_retry_keywords):
+        return True
+
+    return False
+
+
+def _is_transient_llm_error(exc: Exception) -> bool:
+    if _is_non_retryable_llm_error(exc):
+        return False
+
+    code = _error_status_code(exc)
+    if code in _TRANSIENT_STATUS_CODES:
+        return True
+
+    cls_name = type(exc).__name__
+    transient_keywords = (
+        "RateLimit",
+        "Timeout",
+        "Connection",
+        "APIConnection",
+        "ServiceUnavailable",
+    )
+    if any(kw in cls_name for kw in transient_keywords):
+        return True
+
+    err_msg = str(exc).lower()
+    fallback_keywords = (
+        "timeout",
+        "temporarily unavailable",
+        "connection",
+        "rate limit",
+        "too many requests",
+    )
+    if any(kw in err_msg for kw in fallback_keywords):
+        return True
+
+    return False
+
+
 # ─── Client ────────────────────────────────────────────────────────────
 
 class LLMClient:
@@ -212,29 +281,28 @@ class LLMClient:
         trace_context = dict(trace_context or {})
         started = time.perf_counter()
 
+        retry_meta = {
+            "retry_attempts": 0,
+            "retry_transient": False,
+        }
+
         try:
-            if self.provider == "gemini":
-                genai = _genai()
-                response = self.client.models.generate_content(
-                    model=self.model,
-                    contents=user_msg if isinstance(user_msg, list) else [str(user_msg)],
-                    config=genai.types.GenerateContentConfig(
-                        system_instruction=system_prompt,
-                        temperature=temperature,
-                        max_output_tokens=max_tokens,
-                    ),
+            text, prompt_tokens, completion_tokens, total_tokens = (
+                self._complete_provider_text_with_retry(
+                    system_prompt,
+                    user_msg,
+                    temperature,
+                    max_tokens,
+                    retry_meta=retry_meta,
                 )
-                text = response.text or ""
-                prompt_tokens, completion_tokens, total_tokens = self._gemini_usage_counts(response)
-            else:
-                text, usage = self._openai_chat(system_prompt, user_msg, temperature, max_tokens)
-                prompt_tokens, completion_tokens, total_tokens = usage_to_counts(usage)
+            )
 
             try:
                 metadata = {
                     "temperature": temperature,
                     "max_tokens": max_tokens,
                     **trace_context.pop("metadata", {}),
+                    **retry_meta,
                 }
                 self.trace_store.record_llm_call(
                     system_prompt=system_prompt,
@@ -255,6 +323,12 @@ class LLMClient:
             return text
         except Exception as e:
             try:
+                metadata = {
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    **trace_context.pop("metadata", {}),
+                    **retry_meta,
+                }
                 self.trace_store.record_llm_call(
                     system_prompt=system_prompt,
                     user_msg=user_msg,
@@ -264,16 +338,77 @@ class LLMClient:
                     latency_ms=elapsed_ms(started),
                     status="failed",
                     error=str(e),
-                    metadata={
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                        **trace_context.pop("metadata", {}),
-                    },
+                    metadata=metadata,
                     **trace_context,
                 )
             except Exception as trace_error:
                 logging.debug(f"LLM trace write failed: {trace_error}")
             raise
+
+    def _complete_provider_text_once(
+        self,
+        system_prompt: str,
+        user_msg: Any,
+        temperature: float,
+        max_tokens: int,
+    ) -> tuple[str, int | None, int | None, int | None]:
+        if self.provider == "gemini":
+            genai = _genai()
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=user_msg if isinstance(user_msg, list) else [str(user_msg)],
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                ),
+            )
+            text = response.text or ""
+            prompt_tokens, completion_tokens, total_tokens = self._gemini_usage_counts(response)
+        else:
+            text, usage = self._openai_chat(system_prompt, user_msg, temperature, max_tokens)
+            prompt_tokens, completion_tokens, total_tokens = usage_to_counts(usage)
+        return text, prompt_tokens, completion_tokens, total_tokens
+
+    def _complete_provider_text_with_retry(
+        self,
+        system_prompt: str,
+        user_msg: Any,
+        temperature: float,
+        max_tokens: int,
+        *,
+        retries: int = 3,
+        initial_delay: float = 1.0,
+        backoff_factor: float = 2.0,
+        retry_meta: dict,
+    ) -> tuple[str, int | None, int | None, int | None]:
+        import random
+        attempts = 0
+        last_error = None
+
+        while attempts < retries:
+            attempts += 1
+            retry_meta["retry_attempts"] = attempts
+            try:
+                return self._complete_provider_text_once(
+                    system_prompt, user_msg, temperature, max_tokens
+                )
+            except Exception as e:
+                last_error = e
+                retry_meta["retry_last_error"] = str(e)
+                if _is_transient_llm_error(e):
+                    retry_meta["retry_transient"] = True
+                    if attempts < retries:
+                        delay = initial_delay * (backoff_factor ** (attempts - 1))
+                        jitter = random.uniform(0, 0.2 * delay)
+                        total_delay = delay + jitter
+                        logging.warning(
+                            f"LLM provider call failed transiently (attempt {attempts}/{retries}): {e}. "
+                            f"Retrying in {total_delay:.2f} seconds..."
+                        )
+                        time.sleep(total_delay)
+                        continue
+                raise e
 
     @staticmethod
     def _gemini_usage_counts(response: Any) -> tuple[int | None, int | None, int | None]:
