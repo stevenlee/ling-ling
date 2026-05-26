@@ -219,7 +219,53 @@ class PlannerService:
     ) -> str:
         cap_names = {c.name for c in capabilities}
         lines: list[str] = []
-        if {"load_sources", "answer_from_sources"}.issubset(cap_names):
+        if {"load_sources", "digest_sources", "answer_from_sources"}.issubset(cap_names) and target_titles and len(target_titles) >= 2:
+            lines.extend([
+                "## Pattern: load vault sources, digest per-source, then answer from digests",
+                "",
+                "Use this when multiple Target References are present (>= 2) to perform per-source compression",
+                "and ensure balanced coverage across all sources in the final answer.",
+                "",
+                "```json",
+                "{",
+                '  "id": "load_digest_answer",',
+                '  "description": "Load sources, digest per-source, then answer from digests.",',
+                '  "summary": "Loads multiple wikilink targets into source_text, digests each source individually using llm.digest_sources, and composes a final answer using the compressed digest_text.",',
+                '  "steps": [',
+                "    {",
+                '      "id": "load_sources",',
+                '      "capability": "load_sources",',
+                '      "adapter": "vault.load_sources",',
+                '      "inputs": {"titles": "${context.target_titles}"},',
+                '      "rationale": "Resolve target wikilinks into real markdown source text."'
+                "    },",
+                "    {",
+                '      "id": "digest_sources",',
+                '      "capability": "digest_sources",',
+                '      "adapter": "llm.digest_sources",',
+                '      "inputs": {',
+                '        "query": "${context.user_directive}",',
+                '        "sources": "${steps.load_sources.source_text}"',
+                '      },',
+                '      "when": {"var": "steps.load_sources.source_text", "op": "nonempty"},',
+                '      "rationale": "Perform per-source digesting to fit context and maintain balanced coverage."'
+                "    },",
+                "    {",
+                '      "id": "answer",',
+                '      "capability": "answer_from_sources",',
+                '      "adapter": "llm.answer_from_sources",',
+                '      "inputs": {',
+                '        "query": "${context.user_directive}",',
+                '        "sources": "${steps.digest_sources.digest_text}"',
+                '      },',
+                '      "when": {"var": "steps.digest_sources.digest_text", "op": "nonempty"},',
+                '      "rationale": "Produce the final source-grounded answer using the balanced digests."'
+                "    }",
+                "  ]",
+                "}",
+                "```",
+            ])
+        elif {"load_sources", "answer_from_sources"}.issubset(cap_names):
             target_hint = (
                 "Use this when Target References are present."
                 if target_titles else
@@ -252,7 +298,7 @@ class PlannerService:
                 '        "query": "${context.user_directive}",',
                 '        "sources": "${steps.load_sources.source_text}",',
                 '        "focus": "${context.focus}"',
-                "      },",
+                '      },',
                 '      "rationale": "Produce the final source-grounded answer directly."',
                 "    }",
                 "  ]",

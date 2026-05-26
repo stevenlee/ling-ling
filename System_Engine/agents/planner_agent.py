@@ -77,6 +77,7 @@ class PlannerAgent(BaseAgent):
             spec=spec,
             plan_dict=plan_dict,
             capabilities=capabilities,
+            target_titles=target_titles,
         )
 
         # Build report and write it. NO execution.

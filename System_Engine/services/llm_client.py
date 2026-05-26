@@ -678,6 +678,44 @@ class LLMClient:
         # and stray prose around the object.
         return extract_json_object(raw) or {}
 
+    # ── Phase 0.3.1: Source Digest ────────────────────────────────────
+
+    def digest_sources(
+        self,
+        *,
+        query: str,
+        source_title: str,
+        source_text: str,
+        budget: int = 6000,
+    ) -> str:
+        """Compress a single source into a concise digest guided by a query.
+
+        Unlike `generate_part_digest` (which processes one chunk of an
+        ingestion pipeline), this method produces a cross-section digest of
+        an entire source for multi-source Insight answers.
+        """
+        return self.answer_query(
+            query_content=(
+                f"Compress the following source into a concise digest of "
+                f"approximately {budget} characters.\n\n"
+                f"User directive: {query}\n\n"
+                f"Source title: {source_title}\n\n"
+                f"Source text:\n{source_text}"
+            ),
+            wiki_context="",
+            custom_instruction=(
+                "You are a source digest operator. Compress the source text "
+                "while preserving: core thesis, evidence snippets, terms and "
+                "motifs relevant to the user directive, and contrasts with "
+                "other potential sources. Flag coverage warnings if the "
+                "source appears truncated or incomplete. Output concise "
+                "Markdown. Do not add YAML frontmatter."
+            ),
+            forced_template="none",
+            persona="none",
+            operation="digest_sources",
+        )
+
     def generate_part_digest(
         self,
         title: str,

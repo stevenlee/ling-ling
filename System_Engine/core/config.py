@@ -38,6 +38,12 @@ MAINTENANCE_POLL_SECONDS        = int(os.getenv("MAINTENANCE_POLL_SECONDS", "300
 RETRIEVAL_BENCH_MIN_PASS_RATE   = float(os.getenv("RETRIEVAL_BENCH_MIN_PASS_RATE", "0.8"))
 LOAD_SOURCES_MAX_CHARS_PER_SOURCE = int(os.getenv("LOAD_SOURCES_MAX_CHARS_PER_SOURCE", "20000"))
 
+# Phase 0.3.1 — Source Digest Layer
+# DIGEST_SOURCES_BUDGET_PER_SOURCE: target output size (chars) for each per-source digest.
+# DIGEST_SOURCES_MAX_SOURCE_CHARS:  max raw text sent to LLM for digesting one source.
+DIGEST_SOURCES_BUDGET_PER_SOURCE = int(os.getenv("DIGEST_SOURCES_BUDGET_PER_SOURCE", "6000"))
+DIGEST_SOURCES_MAX_SOURCE_CHARS = int(os.getenv("DIGEST_SOURCES_MAX_SOURCE_CHARS", "30000"))
+
 
 # ─── Embedding Configuration ──────────────────────────────────────────
 EMBEDDING_PROVIDER              = os.getenv("EMBEDDING_PROVIDER", "local").lower()

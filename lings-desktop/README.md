@@ -259,6 +259,22 @@ venv/bin/pip install pytest
 PYTHONPATH="$PWD/System_Engine" venv/bin/python -m pytest -q System_Engine/tests
 ```
 
+日常開發可用較小的 test profile，避免每次都手動挑一長串測試。完整分層見
+`System_Engine/DesignDoc/Test_Profiles.md`。例如 planner/executor 相關改動：
+
+```bash
+PYTHONPATH="$PWD/System_Engine" venv/bin/python -m pytest -q \
+  System_Engine/tests/test_prompt_watcher.py \
+  System_Engine/tests/test_planner_service.py \
+  System_Engine/tests/test_plan_readiness.py \
+  System_Engine/tests/test_pipeline_runner.py \
+  System_Engine/tests/test_planner_agent.py \
+  System_Engine/tests/test_executor_agent.py \
+  System_Engine/tests/test_insight_agent.py
+```
+
+封版或宣告 phase complete 前仍以 full suite 作為 gate。
+
 Markdown/Mermaid smoke test：
 
 ```bash

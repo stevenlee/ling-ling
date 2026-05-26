@@ -235,3 +235,55 @@ def test_readiness_warns_when_source_text_feeds_part_digests():
     finding = next(f for f in report.findings if f.code == "upstream_output_shape_uncertain")
     assert "part_digests" in finding.message
     assert "source_text" in finding.message
+
+
+def test_readiness_warns_on_multi_source_no_digest():
+    plan = {
+        "id": "bad_multi_source_no_digest",
+        "steps": [
+            {
+                "id": "load",
+                "capability": "load_sources",
+                "adapter": "vault.load_sources",
+                "inputs": {"titles": "${context.target_titles}"},
+            },
+            {
+                "id": "answer",
+                "capability": "answer_from_sources",
+                "adapter": "llm.answer_from_sources",
+                "inputs": {
+                    "query": "${context.user_directive}",
+                    "sources": "${steps.load.source_text}",
+                },
+            },
+        ],
+    }
+    spec = load_pipeline_from_dict(plan)
+    # 1. When digest_sources capability is NOT available
+    report = assess_plan_readiness(
+        spec=spec,
+        plan_dict=plan,
+        capabilities=[
+            _cap("load_sources", expected_inputs=("titles",), produces=("source_text", "sources")),
+            _cap("answer_from_sources", expected_inputs=("query", "sources"), produces=("output",)),
+        ],
+    )
+    assert report.verdict == "needs_review"
+    assert any(f.code == "multi_source_no_digest" for f in report.findings)
+    assert not any(f.code == "digest_skipped" for f in report.findings)
+
+    # 2. When digest_sources capability is available
+    report_with_digest_cap = assess_plan_readiness(
+        spec=spec,
+        plan_dict=plan,
+        capabilities=[
+            _cap("load_sources", expected_inputs=("titles",), produces=("source_text", "sources")),
+            _cap("digest_sources", expected_inputs=("query", "sources"), produces=("digest_text",)),
+            _cap("answer_from_sources", expected_inputs=("query", "sources"), produces=("output",)),
+        ],
+    )
+    assert report_with_digest_cap.verdict == "needs_review"
+    codes = {f.code for f in report_with_digest_cap.findings}
+    assert "multi_source_no_digest" in codes
+    assert "digest_skipped" in codes
+

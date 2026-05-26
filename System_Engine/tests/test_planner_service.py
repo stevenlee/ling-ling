@@ -99,3 +99,41 @@ def test_generate_plan_reports_invalid_schema():
     assert result.ok is False
     assert result.status == "invalid_schema"
     assert "failed validation" in result.error
+
+
+def test_canonical_pattern_recommends_digest_for_multi_target():
+    specs = [
+        CapabilitySpec(
+            name="load_sources",
+            type="operation",
+            source_path=Path("/fake/load_sources.md"),
+            description="load sources",
+            cost_class="low",
+        ),
+        CapabilitySpec(
+            name="digest_sources",
+            type="operation",
+            source_path=Path("/fake/digest_sources.md"),
+            description="digest sources",
+            cost_class="medium",
+        ),
+        CapabilitySpec(
+            name="answer_from_sources",
+            type="operation",
+            source_path=Path("/fake/answer_from_sources.md"),
+            description="answer from sources",
+            cost_class="medium",
+        )
+    ]
+    # We can invoke canonical_planning_patterns directly
+    patterns = PlannerService.canonical_planning_patterns(specs, target_titles=["BookA", "BookB"])
+    assert "Pattern: load vault sources, digest per-source, then answer from digests" in patterns
+    assert "load_digest_answer" in patterns
+    assert "llm.digest_sources" in patterns
+
+    # For 1 target title, it should recommend the 2-step pattern
+    patterns_single = PlannerService.canonical_planning_patterns(specs, target_titles=["BookA"])
+    assert "Pattern: load vault sources before final answer" in patterns_single
+    assert "load_sources_then_answer" in patterns_single
+    assert "load_digest_answer" not in patterns_single
+

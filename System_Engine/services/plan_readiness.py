@@ -52,6 +52,7 @@ def assess_plan_readiness(
     plan_dict: dict,
     capabilities: list[CapabilitySpec],
     registered_adapters: set[str] | None = None,
+    target_titles: list[str] | None = None,
 ) -> ReadinessReport:
     """Return advisory diagnostics for a validated plan."""
     registered_adapters = registered_adapters or set(builtin_adapter_names())
@@ -94,6 +95,8 @@ def assess_plan_readiness(
             step_by_id=step_by_id,
             cap_by_name=cap_by_name,
         ))
+
+    findings.extend(_check_multi_source_digest_rules(spec, cap_by_name, target_titles))
 
     if any(f.severity == "error" for f in findings):
         verdict = "blocked"
@@ -273,3 +276,67 @@ def _expected_signal(input_name: str) -> str | None:
     if input_name == "sources":
         return "source_text"
     return None
+
+
+def _check_multi_source_digest_rules(
+    spec: PipelineSpec,
+    cap_by_name: dict[str, CapabilitySpec],
+    target_titles: list[str] | None = None,
+) -> list[ReadinessFinding]:
+    findings = []
+    
+    # 1. Find if we have a load_sources step that loads multiple titles
+    load_step_id = None
+    has_multi_titles = False
+    for step in spec.steps:
+        if step.capability == "load_sources":
+            load_step_id = step.id
+            titles = step.inputs.get("titles") or step.inputs.get("target_titles")
+            if titles == "${context.target_titles}":
+                if target_titles is not None:
+                    has_multi_titles = len(target_titles) >= 2
+                else:
+                    has_multi_titles = True
+            elif isinstance(titles, list) and len(titles) >= 2:
+                has_multi_titles = True
+            break
+
+    if not has_multi_titles or not load_step_id:
+        return []
+
+    # Check if there is any digest step in the plan
+    has_digest_step = any(step.capability == "digest_sources" for step in spec.steps)
+
+    # Check if the final answer (or any answer_from_sources step) feeds directly from load_sources.source_text
+    feeds_directly_to_answer = False
+    answer_step_id = None
+    for step in spec.steps:
+        if step.capability == "answer_from_sources":
+            answer_step_id = step.id
+            sources_input = step.inputs.get("sources") or step.inputs.get("source_text")
+            if isinstance(sources_input, str) and f"${{steps.{load_step_id}.source_text}}" in sources_input:
+                feeds_directly_to_answer = True
+                break
+
+    # Warning 1: Multi-source feed directly to answer without digest
+    if feeds_directly_to_answer and not has_digest_step:
+        findings.append(ReadinessFinding(
+            severity="warning",
+            code="multi_source_no_digest",
+            step_id=answer_step_id,
+            message=f"Multiple sources from `{load_step_id}` feed directly to final answer `{answer_step_id}` without a digest step.",
+            suggestion="Insert a `digest_sources` step using `adapter: llm.digest_sources` to ensure balanced source coverage.",
+        ))
+
+    # Warning 2: digest_sources capability exists, but plan skipped it
+    has_digest_cap = "digest_sources" in cap_by_name
+    if has_multi_titles and has_digest_cap and not has_digest_step:
+        findings.append(ReadinessFinding(
+            severity="warning",
+            code="digest_skipped",
+            step_id=None,
+            message="Multiple sources are referenced and `digest_sources` capability is available, but no digest step is included in the plan.",
+            suggestion="Use the canonical three-step planning pattern (load_digest_answer) to summarize sources before answering.",
+        ))
+
+    return findings

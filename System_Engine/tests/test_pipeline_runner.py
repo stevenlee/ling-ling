@@ -593,6 +593,7 @@ class _FakeLLM:
         self.synthesis_calls: list[dict] = []
         self.critique_calls: list[dict] = []
         self.answer_calls: list[dict] = []
+        self.digest_calls: list[dict] = []
 
     def generate_synthesis(self, *, title, part_digests, final_concepts, template=None):
         self.synthesis_calls.append({
@@ -619,12 +620,22 @@ class _FakeLLM:
         })
         return f"ANSWER({len(query_content)}|{len(wiki_context)})"
 
+    def digest_sources(self, *, query, source_title, source_text, budget):
+        self.digest_calls.append({
+            "query": query,
+            "source_title": source_title,
+            "source_text": source_text,
+            "budget": budget,
+        })
+        return f"DIGEST({source_title}|{len(source_text)} chars)"
+
 
 class TestBuiltinAdapters:
     def test_names_are_stable(self):
         assert builtin_adapter_names() == [
             "llm.answer_from_sources",
             "llm.critique",
+            "llm.digest_sources",
             "llm.synthesize",
             "vault.load_sources",
         ]
@@ -636,11 +647,13 @@ class TestBuiltinAdapters:
             "llm.answer_from_sources",
             "llm.synthesize",
             "llm.critique",
+            "llm.digest_sources",
             "vault.load_sources",
         }
         assert registry.has("llm.answer_from_sources")
         assert registry.has("llm.synthesize")
         assert registry.has("llm.critique")
+        assert registry.has("llm.digest_sources")
         assert registry.has("vault.load_sources")
 
     def test_synthesize_adapter_wires_arguments(self):
@@ -743,6 +756,105 @@ class TestBuiltinAdapters:
         assert source["max_chars"] == 3
         assert source["truncated"] is True
         assert "<!-- truncated by vault.load_sources -->" in out["source_text"]
+
+    def test_load_sources_aggregates_parts_when_no_stitched(self, tmp_path, monkeypatch):
+        import services.builtin_adapters as adapters_mod
+
+        pages = tmp_path / "pages"
+        book = pages / "Book B"
+        book.mkdir(parents=True)
+        # Create parts, but NO stitched file
+        (book / "Book B (Part 1).md").write_text("part 1 text", encoding="utf-8")
+        (book / "Book B (Part 2).md").write_text("part 2 text", encoding="utf-8")
+        monkeypatch.setattr(adapters_mod, "PAGES_DIR", pages)
+
+        registry = AdapterRegistry()
+        register_builtin_adapters(registry, _FakeLLM())
+        load_sources = registry.get("vault.load_sources")
+
+        out = load_sources({"titles": ["Book B"]})
+        assert "## Source: Book B" in out["source_text"]
+        assert "part 1 text" in out["source_text"]
+        assert "part 2 text" in out["source_text"]
+        
+        source_meta = out["sources"][0]
+        assert source_meta["title"] == "Book B"
+        assert source_meta["source_kind"] == "parts_aggregated"
+        assert source_meta["part_count"] == 2
+        assert len(source_meta["paths"]) == 2
+
+    def test_load_sources_prefers_parts_over_synthesis_when_no_stitched(self, tmp_path, monkeypatch):
+        import services.builtin_adapters as adapters_mod
+
+        pages = tmp_path / "pages"
+        book = pages / "Book C"
+        book.mkdir(parents=True)
+        (book / "Book C (Synthesis).md").write_text("summary only", encoding="utf-8")
+        (book / "Book C (Part 1).md").write_text("part 1 text", encoding="utf-8")
+        (book / "Book C (Part 2).md").write_text("part 2 text", encoding="utf-8")
+        monkeypatch.setattr(adapters_mod, "PAGES_DIR", pages)
+
+        registry = AdapterRegistry()
+        register_builtin_adapters(registry, _FakeLLM())
+        load_sources = registry.get("vault.load_sources")
+
+        out = load_sources({"titles": ["Book C"]})
+
+        assert "part 1 text" in out["source_text"]
+        assert "part 2 text" in out["source_text"]
+        assert "summary only" not in out["source_text"]
+        assert out["sources"][0]["source_kind"] == "parts_aggregated"
+
+    def test_digest_sources_calls_llm_per_source(self):
+        registry = AdapterRegistry()
+        llm = _FakeLLM()
+        register_builtin_adapters(registry, llm)
+        digest = registry.get("llm.digest_sources")
+
+        # Two source sections in source_text
+        source_text = "## Source: Book A\n\ncontent A\n\n---\n\n## Source: Book B\n\ncontent B"
+        out = digest({"query": "analyze themes", "sources": source_text, "digest_budget": 100})
+
+        assert "## Digest: Book A" in out["digest_text"]
+        assert "DIGEST(Book A|9 chars)" in out["digest_text"]
+        assert "## Digest: Book B" in out["digest_text"]
+        assert "DIGEST(Book B|9 chars)" in out["digest_text"]
+        assert len(llm.digest_calls) == 2
+        assert llm.digest_calls[0]["source_title"] == "Book A"
+        assert llm.digest_calls[1]["source_title"] == "Book B"
+        assert out["source_coverage"][0]["title"] == "Book A"
+        assert out["source_coverage"][1]["title"] == "Book B"
+
+    def test_digest_sources_preserves_original_chars_when_truncating(self):
+        registry = AdapterRegistry()
+        llm = _FakeLLM()
+        register_builtin_adapters(registry, llm)
+        digest = registry.get("llm.digest_sources")
+
+        source_text = "## Source: Long Book\n\nabcdef"
+        out = digest({"query": "digest", "sources": source_text, "max_source_chars": 3})
+
+        assert llm.digest_calls[0]["source_text"] == "abc"
+        assert out["source_digests"][0]["original_chars"] == 6
+        assert out["source_digests"][0]["digested_chars"] == 3
+        assert out["source_coverage"][0]["original_chars"] == 6
+        assert out["source_coverage"][0]["digested_chars"] == 3
+        assert out["source_coverage"][0]["truncated_for_digest"] is True
+
+    def test_digest_sources_all_failures_return_empty_digest_text(self):
+        class FailingLLM(_FakeLLM):
+            def digest_sources(self, *, query, source_title, source_text, budget):
+                raise RuntimeError("boom")
+
+        registry = AdapterRegistry()
+        register_builtin_adapters(registry, FailingLLM())
+        digest = registry.get("llm.digest_sources")
+
+        out = digest({"query": "digest", "sources": "## Source: Book A\n\ncontent"})
+
+        assert out["digest_text"] == ""
+        assert out["source_coverage"][0]["has_digest"] is False
+        assert "digest failed" in out["warnings"][0]
 
     def test_demo_pipeline_runs_with_real_adapter_names(self):
         """The shipped demo YAML uses llm.* names. Registering builtin

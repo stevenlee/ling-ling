@@ -1,4 +1,9 @@
-# 🛡️ Ling-Ling 系統測試與品質保障方案 (v0.3 預演)
+# Ling-Ling Testing Strategy
+
+> Current day-to-day test commands live in `System_Engine/DesignDoc/Test_Profiles.md`.
+> This file keeps the longer-term quality model and integration ambitions.
+
+# 🛡️ Ling-Ling 系統測試與品質保障方案
 
 為了從目前的「表淺檢查」升級到「深層邏輯驗證」，我們在下個版本將引入以下測試體系。
 

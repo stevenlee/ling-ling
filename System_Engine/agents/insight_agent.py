@@ -195,6 +195,7 @@ class InsightAgent(BaseAgent):
                 spec=result.spec,
                 plan_dict=result.plan_dict or {},
                 capabilities=result.capabilities,
+                target_titles=target_titles,
             )
             execution_result = None
             execution_blocker = None
@@ -540,42 +541,91 @@ class InsightAgent(BaseAgent):
 
     @staticmethod
     def _render_source_appendix(result: PipelineRunResult) -> list[str]:
+        sources = []
+        missing = []
+        digests_by_title = {}
+        runtime_warnings = []
+
         for step_result in result.steps.values():
             output = step_result.output
             if not isinstance(output, dict):
                 continue
-            sources = output.get("sources")
-            missing = output.get("missing_titles") or []
-            if not isinstance(sources, list) and not missing:
-                continue
+            
+            # Extract from load_sources step
+            if "sources" in output:
+                sources.extend(output["sources"])
+            if "missing_titles" in output:
+                missing.extend(output["missing_titles"])
+                
+            # Extract from digest_sources step
+            if "source_digests" in output:
+                for d in output["source_digests"]:
+                    if isinstance(d, dict) and "title" in d:
+                        digests_by_title[d["title"]] = d
+            if "warnings" in output:
+                warnings_val = output["warnings"]
+                if isinstance(warnings_val, list):
+                    runtime_warnings.extend(warnings_val)
+                elif isinstance(warnings_val, str):
+                    runtime_warnings.append(warnings_val)
 
-            lines = ["## Source Appendix", ""]
-            if isinstance(sources, list) and sources:
+        if not sources and not missing:
+            return []
+
+        lines = ["## Source Appendix", ""]
+        if sources:
+            has_any_digest = len(digests_by_title) > 0
+            if has_any_digest:
+                lines.extend([
+                    "| Title | Kind | Loaded chars | Original chars | Truncated | Digest chars | Coverage Warning | Path |",
+                    "| --- | --- | ---: | ---: | --- | ---: | --- | --- |",
+                ])
+            else:
                 lines.extend([
                     "| Title | Kind | Loaded chars | Original chars | Truncated | Path |",
                     "| --- | --- | ---: | ---: | --- | --- |",
                 ])
-                for src in sources:
-                    if not isinstance(src, dict):
-                        continue
-                    title = InsightAgent._escape_table_cell(str(src.get("title") or ""))
-                    kind = InsightAgent._escape_table_cell(str(src.get("source_kind") or "unknown"))
-                    loaded = src.get("loaded_chars", src.get("chars", ""))
-                    original = src.get("original_chars", "")
-                    truncated = "yes" if src.get("truncated") else "no"
-                    path = InsightAgent._escape_table_cell(str(src.get("path") or ""))
-                    lines.append(f"| {title} | {kind} | {loaded} | {original} | {truncated} | `{path}` |")
-                lines.append("")
 
-            if missing:
-                lines.extend([
-                    "**Missing titles:**",
-                    "",
-                ])
-                lines.extend(f"- `{title}`" for title in missing)
-                lines.append("")
-            return lines
-        return []
+            for src in sources:
+                if not isinstance(src, dict):
+                    continue
+                title_raw = src.get("title") or ""
+                title = InsightAgent._escape_table_cell(str(title_raw))
+                kind = InsightAgent._escape_table_cell(str(src.get("source_kind") or "unknown"))
+                loaded = src.get("loaded_chars", src.get("chars", ""))
+                original = src.get("original_chars", "")
+                truncated = "yes" if src.get("truncated") else "no"
+                path = InsightAgent._escape_table_cell(str(src.get("path") or ""))
+
+                if has_any_digest:
+                    digest_info = digests_by_title.get(title_raw)
+                    if digest_info:
+                        digest_chars = digest_info.get("digest_chars", "")
+                        cov_warnings = []
+                        if digest_info.get("truncated_for_digest"):
+                            cov_warnings.append("truncated for digest")
+                        for w in runtime_warnings:
+                            if f"'{title_raw}'" in w or f'"{title_raw}"' in w:
+                                cov_warnings.append(w)
+                        cov_warning_str = "; ".join(set(cov_warnings)) if cov_warnings else "none"
+                    else:
+                        digest_chars = "N/A"
+                        cov_warning_str = "no digest"
+                    
+                    cov_warning_str = InsightAgent._escape_table_cell(cov_warning_str)
+                    lines.append(f"| {title} | {kind} | {loaded} | {original} | {truncated} | {digest_chars} | {cov_warning_str} | `{path}` |")
+                else:
+                    lines.append(f"| {title} | {kind} | {loaded} | {original} | {truncated} | `{path}` |")
+            lines.append("")
+
+        if missing:
+            lines.extend([
+                "**Missing titles:**",
+                "",
+            ])
+            lines.extend(f"- `{t}`" for t in missing)
+            lines.append("")
+        return lines
 
     @staticmethod
     def _escape_table_cell(value: str) -> str:

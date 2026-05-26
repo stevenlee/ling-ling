@@ -94,6 +94,15 @@ class _PlannerCapMgr:
                 produces=("source_text", "sources", "missing_titles"),
                 cost_class="low",
             ),
+            CapabilitySpec(
+                name="digest_sources",
+                type="operation",
+                source_path=Path("/fake/digest_sources.md"),
+                description="digest sources",
+                expected_inputs=("query", "sources"),
+                produces=("digest_text", "source_digests", "source_coverage", "warnings"),
+                cost_class="medium",
+            ),
         ]
         self._by_name = {c.name: c for c in self._caps}
 
@@ -445,6 +454,105 @@ class TestPlannerPreview:
         assert llm.calls[0]["operation"] == "plan"
         assert llm.calls[0]["persona"] == "none"
         assert llm.calls[0]["forced_template"] == "none"
+
+
+class _LoadDigestAnswerPlannerStubLLM(_AnswerPlannerStubLLM):
+    def __init__(self):
+        super().__init__()
+        self.digest_calls = []
+
+    def digest_sources(self, *, query, source_title, source_text, budget):
+        self.digest_calls.append({
+            "query": query,
+            "source_title": source_title,
+            "source_text": source_text,
+            "budget": budget,
+        })
+        return f"DIGEST OF {source_title}"
+
+    def answer_query(self, query_content, wiki_context="", **kwargs):
+        if kwargs.get("operation") == "digest_sources":
+            return "DIGEST OF BOOK"
+        if kwargs.get("operation") == "answer_from_sources":
+            self.answer_from_sources_calls.append({
+                "query_content": query_content,
+                "wiki_context": wiki_context,
+                **kwargs,
+            })
+            return f"FINAL ANSWER WITH {len(wiki_context)} CHARS"
+        self.calls.append({"query": query_content, **kwargs})
+        return """```json
+{
+  "id": "load_digest_answer",
+  "description": "Load, digest and answer",
+  "summary": "Load sources, digest, then produce a final answer.",
+  "steps": [
+    {
+      "id": "load_sources",
+      "capability": "load_sources",
+      "adapter": "vault.load_sources",
+      "inputs": {
+        "titles": "${context.target_titles}",
+        "max_chars_per_source": 40
+      },
+      "rationale": "Load the referenced source."
+    },
+    {
+      "id": "digest_sources",
+      "capability": "digest_sources",
+      "adapter": "llm.digest_sources",
+      "inputs": {
+        "query": "${context.user_directive}",
+        "sources": "${steps.load_sources.source_text}"
+      },
+      "when": {"var": "steps.load_sources.source_text", "op": "nonempty"},
+      "rationale": "Digest the source."
+    },
+    {
+      "id": "answer",
+      "capability": "answer_from_sources",
+      "adapter": "llm.answer_from_sources",
+      "inputs": {
+        "query": "${context.user_directive}",
+        "sources": "${steps.digest_sources.digest_text}"
+      },
+      "when": {"var": "steps.digest_sources.digest_text", "op": "nonempty"},
+      "rationale": "Answer from loaded source text."
+    }
+  ]
+}
+```"""
+
+
+def test_execute_report_includes_digest_source_appendix(stub_agent, tmp_path, monkeypatch):
+    import services.builtin_adapters as adapters_mod
+
+    pages = tmp_path / "pages"
+    book_a = pages / "Book A"
+    book_a.mkdir(parents=True)
+    (book_a / "Book A (Stitched).md").write_text("abcdef", encoding="utf-8")
+    book_b = pages / "Book B"
+    book_b.mkdir(parents=True)
+    (book_b / "Book B (Stitched).md").write_text("ghijk", encoding="utf-8")
+    monkeypatch.setattr(adapters_mod, "PAGES_DIR", pages)
+
+    agent, _, _ = stub_agent
+    llm = _LoadDigestAnswerPlannerStubLLM()
+    agent.llm = llm
+
+    full_markdown = agent.execute({
+        "planner_mode": True,
+        "execute_plan": True,
+        "user_directive": "@ling-insight planner-mode /execute compare [[Book A]] and [[Book B]]",
+        "target_titles": ["Book A", "Book B"],
+    })
+
+    assert "planner_mode: execute" in full_markdown
+    assert "## Source Appendix" in full_markdown
+    assert "| Title | Kind | Loaded chars | Original chars | Truncated | Digest chars | Coverage Warning | Path |" in full_markdown
+    assert "| Book A | stitched |" in full_markdown
+    assert "| Book B | stitched |" in full_markdown
+    assert "none" in full_markdown
 
 
 if __name__ == "__main__":
