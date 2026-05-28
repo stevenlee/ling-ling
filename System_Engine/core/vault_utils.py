@@ -358,6 +358,11 @@ def update_wiki_index(filepath: Path = None, title: str = None):
         logging.error(f"Wiki Utils: failed to regenerate index.md: {e}")
 
 
+def ensure_wiki_indexes():
+    """Ensure ReadingIndex.md and index.md exist and reflect the current vault."""
+    update_wiki_index()
+
+
 def update_file_tags(filepath: Path, tags: list[str]):
     """Replace the `tags:` field of `filepath`'s YAML frontmatter."""
     content = filepath.read_text(encoding="utf-8")

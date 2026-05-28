@@ -7,7 +7,7 @@ from core.config import (
     LLM_PROVIDER, PROJECT_ROOT, CLIPPINGS_DIR, CONSOLIDATE_DIR,
     TO_LLM_DIR, PAGES_DIR, NOTES_DIR, SCRIPTURE_DIR, PID_FILE, ensure_directories, settings
 )
-from core.vault_utils import READING_INDEX_FILE
+from core.vault_utils import READING_INDEX_FILE, ensure_wiki_indexes
 from core.utils import acquire_pid_lock
 from core.state import global_busy_state
 from services.llm_client import LLMClient
@@ -31,6 +31,7 @@ def main():
     # 2. Initialize core dependencies
     ensure_directories()
     settings.reload()  # Load initial settings from Wiki
+    ensure_wiki_indexes()
     llm_client = LLMClient()
     rag_manager = RAGManager()
 

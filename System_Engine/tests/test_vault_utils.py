@@ -147,3 +147,29 @@ class TestUpdateWikiIndex:
         assert "> [!abstract]- 📅 " in output
         assert "<br>**📂 Article B (1 items)**" in output
         assert "🔖" not in output
+
+    def test_ensure_wiki_indexes_creates_dashboard_and_reading_index(self, monkeypatch, tmp_path):
+        pages = tmp_path / "pages"
+        notes = tmp_path / "Notes"
+        raw = tmp_path / "raw" / "consolidate"
+        index = tmp_path / "index.md"
+        reading_index = tmp_path / "ReadingIndex.md"
+
+        article_dir = pages / "Article D"
+        article_dir.mkdir(parents=True)
+        notes.mkdir()
+        raw.mkdir(parents=True)
+        (article_dir / "Article D.md").write_text("Body", encoding="utf-8")
+
+        monkeypatch.setattr(vault_utils, "PAGES_DIR", pages)
+        monkeypatch.setattr(vault_utils, "NOTES_DIR", notes)
+        monkeypatch.setattr(vault_utils, "RAW_CONSOLIDATE_DIR", raw)
+        monkeypatch.setattr(vault_utils, "INDEX_FILE", index)
+        monkeypatch.setattr(vault_utils, "READING_INDEX_FILE", reading_index)
+
+        vault_utils.ensure_wiki_indexes()
+
+        assert index.exists()
+        assert reading_index.exists()
+        assert "- ✍️ [[ReadingIndex]]" in index.read_text(encoding="utf-8")
+        assert "| [[Article D]] |  |  |  |  |  |  |  |" in reading_index.read_text(encoding="utf-8")
