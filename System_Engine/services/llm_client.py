@@ -39,7 +39,7 @@ from core.config import (
     TEMPLATES_DIR,
     settings,
 )
-from core.parser import extract_json_object, strip_body_frontmatter
+from core.parser import extract_json_object, strip_body_frontmatter, clean_llm_response
 from core.utils import MtimeCache, digest_value_to_text
 from services.capability_manager import CapabilityManager
 from services.trace_store import TraceStore, elapsed_ms, usage_to_counts
@@ -579,9 +579,11 @@ class LLMClient:
     @staticmethod
     def _hybrid_parse(text: str) -> dict:
         """Find the Wiki Note YAML+body inside a model response."""
-        result = {"title": "Untitled", "tags": [], "type": "entity", "content": text.strip() if text else ""}
         if not text:
-            return result
+            return {"title": "Untitled", "tags": [], "type": "entity", "content": ""}
+
+        text = clean_llm_response(text)
+        result = {"title": "Untitled", "tags": [], "type": "entity", "content": text}
 
         yaml_match = _YAML_HEADER_RE.search(text)
         if yaml_match:
@@ -599,7 +601,7 @@ class LLMClient:
                 for key in ("title", "tags", "type", "pending_concepts"):
                     if key in metadata:
                         result[key] = str(metadata[key]) if key == "title" else metadata[key]
-                result["content"] = text[yaml_match.end():].strip()
+                result["content"] = clean_llm_response(text[yaml_match.end():].strip())
                 return result
 
         title_match = _H1_TITLE_RE.search(text)

@@ -10,9 +10,19 @@ from datetime import datetime
 import watchdog.events
 
 from core.state import global_busy_state
-from core.config import TO_LLM_DIR, FROM_LLM_DIR, RAW_PROMPTS_DIR, INDEX_FILE, PROJECT_ROOT, COMMAND_PREFIX, settings
+from core.config import (
+    TO_LLM_DIR,
+    FROM_LLM_DIR,
+    RAW_PROMPTS_DIR,
+    INDEX_FILE,
+    PROJECT_ROOT,
+    COMMAND_PREFIX,
+    LOAD_SOURCES_MAX_CHARS_PER_SOURCE,
+    settings,
+)
 from core.ui import ui
 from agents.registry import AgentRegistry
+from services.builtin_adapters import _resolve_source_paths
 
 LOCK_FILE = PROJECT_ROOT / ".kb_lock"
 
@@ -141,6 +151,29 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             "planner_mode": ("planner-mode" in lower_query or "/planner" in lower_query),
             "execute_plan": ("/execute" in lower_query or "/execution" in lower_query),
         }
+
+    @staticmethod
+    def _load_linked_sources(target_entities: list[str]) -> list[str]:
+        """Load explicitly linked vault sources for default Q&A prompts."""
+        loaded_sources = []
+        max_chars = LOAD_SOURCES_MAX_CHARS_PER_SOURCE
+        target_titles = [t.split('|')[0].strip() for t in target_entities]
+        for title in target_titles:
+            resolved = _resolve_source_paths(title)
+            if not resolved:
+                continue
+
+            text = "\n\n".join(
+                path.read_text(encoding="utf-8")
+                for path, _ in resolved
+            )
+            if max_chars > 0 and len(text) > max_chars:
+                text = (
+                    text[:max_chars].rstrip()
+                    + "\n\n<!-- truncated by PromptWatcher default Q&A -->"
+                )
+            loaded_sources.append(f"## Source: {title}\n\n{text}")
+        return loaded_sources
             
     def process_prompt(self, filepath: Path):
         try:
@@ -233,8 +266,15 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                 
                 else:
                     # Default Chat/Q&A
+                    loaded_sources = self._load_linked_sources(target_entities)
                     relevant = self.rag.query_similar_notes(query_content, top_k=settings.SEARCH_DEPTH)
-                    context = "\n---\n".join(relevant) if relevant else (INDEX_FILE.read_text('utf-8') if INDEX_FILE.exists() else "")
+                    context_parts = []
+                    if loaded_sources:
+                        context_parts.extend(loaded_sources)
+                    if relevant:
+                        context_parts.extend(relevant)
+
+                    context = "\n---\n".join(context_parts) if context_parts else (INDEX_FILE.read_text('utf-8') if INDEX_FILE.exists() else "")
                     res = self.llm.answer_query(query_content, context)
                     
                     trace_ids = self.llm.current_trace_ids() if hasattr(self.llm, "current_trace_ids") else []

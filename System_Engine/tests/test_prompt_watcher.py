@@ -36,3 +36,96 @@ class TestPromptWatcherPlannerFlags:
         )
         assert flags["planner_mode"] is True
         assert flags["execute_plan"] is True
+
+
+class TestPromptWatcherProcessPrompt:
+    def test_default_qa_resolves_bracket_links(self, monkeypatch, tmp_path):
+        from unittest.mock import MagicMock
+
+        # 1. Mock llm_client
+        mock_llm = MagicMock()
+        mock_llm.provider = "vllm"
+        mock_llm.model = "fake-model"
+        mock_llm.answer_query.return_value = "mock_answer"
+        mock_llm.current_trace_ids.return_value = []
+        mock_llm.current_run_id.return_value = None
+
+        # 2. Mock rag_manager
+        mock_rag = MagicMock()
+        mock_rag.query_similar_notes.return_value = ["similar note content"]
+
+        # 3. Mock _resolve_source_paths
+        mock_path = MagicMock()
+        mock_path.read_text.return_value = "referenced file content"
+        mock_resolve = MagicMock(return_value=[(mock_path, "direct")])
+
+        monkeypatch.setattr("watchers.prompt_watcher._resolve_source_paths", mock_resolve)
+
+        # 4. Create prompt file
+        prompt_file = tmp_path / "test_prompt.md"
+        prompt_file.write_text("Hello, what is in [[MyDoc]]?", encoding="utf-8")
+
+        # 5. Instantiate PromptWatcher
+        watcher = PromptWatcher(mock_llm, mock_rag)
+        
+        # Patch output path writing & archiving to avoid side effects
+        monkeypatch.setattr(watcher, "_archive_raw", MagicMock())
+        
+        # Mock FROM_LLM_DIR
+        mock_from_llm = tmp_path / "from_llm"
+        mock_from_llm.mkdir()
+        monkeypatch.setattr("watchers.prompt_watcher.FROM_LLM_DIR", mock_from_llm)
+
+        # 6. Execute process_prompt
+        watcher.process_prompt(prompt_file)
+
+        # 7. Assertions
+        mock_resolve.assert_called_once_with("MyDoc")
+        
+        # Check context argument passed to answer_query
+        assert mock_llm.answer_query.call_count == 1
+        called_args = mock_llm.answer_query.call_args
+        query_content, context = called_args[0]
+        
+        assert "Hello, what is in [[MyDoc]]?" in query_content
+        assert "## Source: MyDoc" in context
+        assert "referenced file content" in context
+        assert "similar note content" in context
+
+    def test_default_qa_truncates_large_bracket_link_sources(self, monkeypatch, tmp_path):
+        from unittest.mock import MagicMock
+
+        mock_llm = MagicMock()
+        mock_llm.provider = "vllm"
+        mock_llm.model = "fake-model"
+        mock_llm.answer_query.return_value = "mock_answer"
+        mock_llm.current_trace_ids.return_value = []
+        mock_llm.current_run_id.return_value = None
+
+        mock_rag = MagicMock()
+        mock_rag.query_similar_notes.return_value = ["similar note content"]
+
+        mock_path = MagicMock()
+        mock_path.read_text.return_value = "abcdefg"
+        mock_resolve = MagicMock(return_value=[(mock_path, "direct")])
+        monkeypatch.setattr("watchers.prompt_watcher._resolve_source_paths", mock_resolve)
+        monkeypatch.setattr("watchers.prompt_watcher.LOAD_SOURCES_MAX_CHARS_PER_SOURCE", 4)
+
+        prompt_file = tmp_path / "test_prompt.md"
+        prompt_file.write_text("Summarize [[BigDoc]]", encoding="utf-8")
+
+        watcher = PromptWatcher(mock_llm, mock_rag)
+        monkeypatch.setattr(watcher, "_archive_raw", MagicMock())
+
+        mock_from_llm = tmp_path / "from_llm"
+        mock_from_llm.mkdir()
+        monkeypatch.setattr("watchers.prompt_watcher.FROM_LLM_DIR", mock_from_llm)
+
+        watcher.process_prompt(prompt_file)
+
+        _, context = mock_llm.answer_query.call_args[0]
+        assert "## Source: BigDoc" in context
+        assert "abcd" in context
+        assert "efg" not in context
+        assert "truncated by PromptWatcher default Q&A" in context
+        assert "similar note content" in context

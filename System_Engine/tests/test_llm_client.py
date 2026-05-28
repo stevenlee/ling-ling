@@ -99,6 +99,20 @@ class TestHybridParse:
         )
         assert r.get("pending_concepts") == ["unfinished"]
 
+    def test_outer_fence_wrap(self):
+        text = "```markdown\n---\ntitle: Outer\ntags: [tag]\n---\nBody inside outer fence\n```"
+        r = LLMClient._hybrid_parse(text)
+        assert r["title"] == "Outer"
+        assert r["tags"] == ["tag"]
+        assert r["content"] == "Body inside outer fence"
+
+    def test_inner_body_fence_wrap(self):
+        text = "---\ntitle: Inner\ntags: [tag]\n---\n```markdown\nBody inside inner fence\n```"
+        r = LLMClient._hybrid_parse(text)
+        assert r["title"] == "Inner"
+        assert r["tags"] == ["tag"]
+        assert r["content"] == "Body inside inner fence"
+
 
 # ── _strip_accidental_frontmatter ────────────────────────────────────
 
