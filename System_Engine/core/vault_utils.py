@@ -12,10 +12,44 @@ from core.config import (
     RAW_CONSOLIDATE_DIR,
 )
 
+READING_INDEX_FILE = INDEX_FILE.parent / "ReadingIndex.md"
 _FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*', re.DOTALL)
 _FRONTMATTER_NL_RE = re.compile(r'^---\s*\n(.*?)\n---\s*(?:\n|$)', re.DOTALL)
 _NATURAL_SORT_RE = re.compile(r'([0-9]+)')
 _PART_RE = re.compile(r'\(Part \d+\)')
+_READING_INDEX_COLUMNS = (
+    "Article",
+    "Status",
+    "Priority",
+    "Importance",
+    "Relevance",
+    "Progress",
+    "Comment",
+    "Updated",
+)
+_READING_KEY_MAP = {
+    "Status": "status",
+    "Priority": "priority",
+    "Importance": "importance",
+    "Relevance": "relevance",
+    "Progress": "progress",
+    "Comment": "comment",
+    "Updated": "updated",
+}
+_READING_INDEX_INTRO = [
+    "# ReadingIndex",
+    "",
+    "Edit the human-maintained columns. The Article column is regenerated from the vault.",
+    "",
+    "- Status: unread, reading, read, parked, skip",
+    "- Priority: 1-5, how soon you want to read it",
+    "- Importance: 1-5, long-term value or objective weight",
+    "- Relevance: 1-5, fit for your current question or project",
+    "- Progress: free text, such as Part 3, 35%, Synthesis done",
+    "- Comment: short human note for deciding what to read next",
+    "- Updated: YYYY-MM-DD",
+    "",
+]
 
 
 def _natural_sort_key(s):
@@ -82,11 +116,178 @@ def _tag_inline(tags: list) -> str:
     return f" `{'` `'.join(tags[:3])}`"
 
 
+def _split_table_row(line: str) -> list[str]:
+    line = line.strip()
+    if line.startswith("|"):
+        line = line[1:]
+    if line.endswith("|"):
+        line = line[:-1]
+
+    cells = []
+    current = []
+    idx = 0
+    while idx < len(line):
+        char = line[idx]
+        next_char = line[idx + 1] if idx + 1 < len(line) else ""
+        if char == "\\" and next_char in ("|", "\\"):
+            current.append(next_char)
+            idx += 2
+            continue
+        if char == "|":
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+        idx += 1
+    cells.append("".join(current).strip())
+    return cells
+
+
+def _table_cell(value) -> str:
+    text = str(value or "").replace("\n", " ").strip()
+    return text.replace("\\", "\\\\").replace("|", "\\|")
+
+
+def _title_from_article_cell(value: str) -> str:
+    value = str(value or "").strip()
+    match = re.search(r"\[\[(.*?)\]\]", value)
+    if match:
+        value = match.group(1)
+    return value.split("|", 1)[0].strip()
+
+
+def _load_reading_index() -> dict:
+    """Load human reading annotations without making index regeneration fragile."""
+    if not READING_INDEX_FILE.exists():
+        return {}
+    try:
+        content = READING_INDEX_FILE.read_text(encoding="utf-8")
+    except Exception as e:
+        logging.debug(f"Wiki index: failed to read reading index: {e}")
+        return {}
+
+    lines = content.splitlines()
+    for idx, line in enumerate(lines):
+        headers = _split_table_row(line)
+        if headers and headers[0] == "Article" and "Comment" in headers:
+            if idx + 1 >= len(lines):
+                return {}
+            annotations = {}
+            for row in lines[idx + 2:]:
+                if not row.strip().startswith("|"):
+                    break
+                cells = _split_table_row(row)
+                if len(cells) < len(headers):
+                    cells.extend([""] * (len(headers) - len(cells)))
+                row_data = dict(zip(headers, cells))
+                title = _title_from_article_cell(row_data.get("Article", ""))
+                if not title:
+                    continue
+                annotation = {}
+                for header, key in _READING_KEY_MAP.items():
+                    value = row_data.get(header, "").strip()
+                    if value:
+                        annotation[key] = value
+                annotations[title] = annotation
+            return annotations
+    return {}
+
+
+def _sync_reading_index(article_titles: list[str]):
+    """Keep article rows current while preserving human-maintained columns."""
+    existing = _load_reading_index()
+    lines = _READING_INDEX_INTRO + [
+        "| " + " | ".join(_READING_INDEX_COLUMNS) + " |",
+        "| " + " | ".join(["---"] * len(_READING_INDEX_COLUMNS)) + " |",
+    ]
+    for title in sorted(article_titles, key=_natural_sort_key):
+        annotation = existing.get(title, {})
+        cells = [f"[[{_table_cell(title)}]]"]
+        for header in _READING_INDEX_COLUMNS[1:]:
+            cells.append(_table_cell(annotation.get(_READING_KEY_MAP[header], "")))
+        lines.append("| " + " | ".join(cells) + " |")
+
+    content = "\n".join(lines) + "\n"
+    if READING_INDEX_FILE.exists():
+        try:
+            if READING_INDEX_FILE.read_text(encoding="utf-8") == content:
+                return
+        except Exception:
+            pass
+    READING_INDEX_FILE.write_text(content, encoding="utf-8")
+
+
+def _annotation_for(annotations: dict, title: str) -> dict:
+    value = annotations.get(title)
+    return value if isinstance(value, dict) else {}
+
+
+def _annotation_inline(annotation: dict) -> str:
+    parts = []
+    status = str(annotation.get("status") or "").strip()
+    if status:
+        parts.append(f"🔖 {status}")
+
+    scores = []
+    for field, label in (
+        ("priority", "P"),
+        ("importance", "I"),
+        ("relevance", "R"),
+    ):
+        value = annotation.get(field)
+        if value not in (None, ""):
+            scores.append(f"{label}{value}")
+    if scores:
+        parts.append("⭐ " + " ".join(scores))
+
+    progress = str(annotation.get("progress") or "").strip()
+    if progress:
+        parts.append(f"📍 {progress}")
+
+    return f" | {' | '.join(parts)}" if parts else ""
+
+
+def _status_label(annotation: dict) -> str:
+    status = str(annotation.get("status") or "").strip()
+    return status.capitalize() if status else ""
+
+
+def _importance_relevance_label(annotation: dict) -> str:
+    scores = []
+    for field, label in (("importance", "I"), ("relevance", "R")):
+        value = annotation.get(field)
+        if value not in (None, ""):
+            scores.append(f"{label}{value}")
+    return " ".join(scores)
+
+
+def _folder_header(date: str, annotation: dict) -> str:
+    parts = []
+    if date:
+        parts.append(f"📅 {date}")
+    status = _status_label(annotation)
+    if status:
+        parts.append(status)
+    scores = _importance_relevance_label(annotation)
+    if scores:
+        parts.append(scores)
+    return " | ".join(parts) or "No reading metadata"
+
+
+def _append_annotation_lines(lines: list[str], annotation: dict, prefix: str = ""):
+    progress = str(annotation.get("progress") or "").strip()
+    if progress:
+        lines.append(f"{prefix}- 📍 {progress}")
+
+    comment = str(annotation.get("comment") or "").strip()
+    if comment:
+        lines.append(f"{prefix}- 💬 {comment}")
+
+
 def update_wiki_index(filepath: Path = None, title: str = None):
     """Regenerate index.md from a full scan of Notes/, pages/, and raw/consolidate/."""
     try:
         logging.info("Wiki Utils: Regenerating Knowledge Map Index...")
-
         sections = {
             "Notes":    {"icon": "✍️", "files": _collect_section(NOTES_DIR)},
             "Entities": {"icon": "🤖", "files": _collect_section(PAGES_DIR)},
@@ -100,10 +301,22 @@ def update_wiki_index(filepath: Path = None, title: str = None):
                     continue
                 entities.setdefault(f.stem, []).append(_read_metadata(f))
 
+        entity_titles = [folder for folder in sections["Entities"]["files"] if folder != "Root"]
+        _sync_reading_index(entity_titles)
+        reading_index = _load_reading_index()
+
         from core.version import VERSION
-        lines = [f"# 🎀 Knowledge Dashboard (v{VERSION})", "---", ""]
+        lines = [
+            f"# 🎀 Knowledge Dashboard (v{VERSION})",
+            "---",
+            "",
+            "- ✍️ [[ReadingIndex]]",
+            "",
+        ]
 
         for s_name, s_info in sections.items():
+            if s_name == "Notes" and not s_info["files"]:
+                continue
             lines.append(f"## {s_info['icon']} {s_name}")
 
             for folder in sorted(s_info["files"]):
@@ -111,12 +324,21 @@ def update_wiki_index(filepath: Path = None, title: str = None):
 
                 if folder == "Root":
                     for meta in files:
+                        annotation = _annotation_for(reading_index, meta["title"])
                         date_str = f" | 📅 {meta['date']}" if meta["date"] else ""
-                        lines.append(f"- [[{meta['title']}]] {_tag_inline(meta['tags'])}{date_str}")
+                        lines.append(
+                            f"- [[{meta['title']}]] {_tag_inline(meta['tags'])}"
+                            f"{date_str}{_annotation_inline(annotation)}"
+                        )
+                        _append_annotation_lines(lines, annotation, prefix="  ")
                 else:
+                    annotation = _annotation_for(reading_index, folder)
                     folder_date = files[0]["date"] if files else ""
-                    date_suffix = f" | 📅 {folder_date}" if folder_date else ""
-                    lines.append(f"> [!abstract]- 📂 {folder} ({len(files)} items){date_suffix}")
+                    lines.append(
+                        f"> [!abstract]- {_folder_header(folder_date, annotation)}"
+                        f"<br>**📂 {folder} ({len(files)} items)**"
+                    )
+                    _append_annotation_lines(lines, annotation, prefix="> ")
 
                     parts = [f for f in files if _PART_RE.search(f["title"])]
                     mains = [f for f in files if not _PART_RE.search(f["title"])]

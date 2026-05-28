@@ -29,6 +29,7 @@ ENV/
 # Logs
 *.log
 System_Engine/daemon.pid
+lings-desktop/maintenance.log.md
 
 # OS
 .DS_Store

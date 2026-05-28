@@ -42,6 +42,15 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             return
 
         title = filepath.stem
+
+        if self._should_refresh_index_only(filepath):
+            with self._timers_lock:
+                if title in self._timers:
+                    self._timers[title].cancel()
+                    del self._timers[title]
+            from core.vault_utils import update_wiki_index
+            update_wiki_index(filepath, title)
+            return
         
         with self._timers_lock:
             if title in self._timers:
@@ -73,6 +82,10 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
 
         if not filepath.exists():
             return
+
+        if self._should_refresh_index_only(filepath):
+            self._schedule_process(filepath, title, delay=2.0)
+            return
             
         # logging.info(f"Vault: {title} modified. Reschedule file sync.")
         self._schedule_process(filepath, title, delay=60.0)
@@ -100,6 +113,12 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             return
             
         # 0. Whitelist Filter: Only index pages/ and Notes/
+        if self._should_refresh_index_only(filepath):
+            logging.info(f"Reading index modified: {title}. Rebuilding index.md...")
+            from core.vault_utils import update_wiki_index
+            update_wiki_index(filepath, title)
+            return
+
         if not self._should_index(filepath):
             return
             
@@ -166,7 +185,15 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
 
     def _should_watch(self, filepath: Path) -> bool:
         from core.config import SCRIPTURE_FILE
-        return filepath.absolute() == SCRIPTURE_FILE.absolute() or self._should_index(filepath)
+        return (
+            filepath.absolute() == SCRIPTURE_FILE.absolute()
+            or self._should_refresh_index_only(filepath)
+            or self._should_index(filepath)
+        )
+
+    def _should_refresh_index_only(self, filepath: Path) -> bool:
+        from core.vault_utils import READING_INDEX_FILE
+        return filepath.absolute() == READING_INDEX_FILE.absolute()
 
     def _should_index(self, filepath: Path) -> bool:
         from core.config import PAGES_DIR, NOTES_DIR

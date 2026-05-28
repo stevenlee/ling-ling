@@ -7,6 +7,7 @@ from core.config import (
     LLM_PROVIDER, PROJECT_ROOT, CLIPPINGS_DIR, CONSOLIDATE_DIR,
     TO_LLM_DIR, PAGES_DIR, NOTES_DIR, SCRIPTURE_DIR, PID_FILE, ensure_directories, settings
 )
+from core.vault_utils import READING_INDEX_FILE
 from core.utils import acquire_pid_lock
 from core.state import global_busy_state
 from services.llm_client import LLMClient
@@ -68,6 +69,7 @@ def main():
     observer.schedule(event_handler_vault, str(PAGES_DIR), recursive=True)
     observer.schedule(event_handler_vault, str(NOTES_DIR), recursive=True)
     observer.schedule(event_handler_vault, str(SCRIPTURE_DIR), recursive=True)
+    observer.schedule(event_handler_vault, str(READING_INDEX_FILE.parent), recursive=False)
     observer.start()
     
     # 5. Startup Scan: Process existing files in Ingest/Command folders
