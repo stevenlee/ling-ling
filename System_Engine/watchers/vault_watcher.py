@@ -49,7 +49,7 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                     self._timers[title].cancel()
                     del self._timers[title]
             from core.vault_utils import update_wiki_index
-            update_wiki_index(filepath, title)
+            update_wiki_index(filepath, title, sync_reading_index=True)
             return
         
         with self._timers_lock:
@@ -61,6 +61,8 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
         try:
             logging.info(f"File deleted in Vault: {title}. Removing from RAG memory...")
             self.rag.delete_document(title)
+            from core.vault_utils import update_wiki_index
+            update_wiki_index(sync_reading_index=True)
         finally:
             global_busy_state.set_busy(False)
 
@@ -173,7 +175,7 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                 
                 # 2. Update index.md
                 from core.vault_utils import update_wiki_index
-                update_wiki_index(filepath, title)
+                update_wiki_index(filepath, title, sync_reading_index=True)
             finally:
                 global_busy_state.set_busy(False)
         except Exception as e:

@@ -61,5 +61,22 @@ class TestVaultWatcherReadingIndex:
 
         watcher.on_deleted(FakeEvent(reading_index))
 
-        mock_update.assert_called_once_with(reading_index, "ReadingIndex")
+        mock_update.assert_called_once_with(reading_index, "ReadingIndex", sync_reading_index=True)
         rag.delete_document.assert_not_called()
+
+    def test_regular_file_deleted_syncs_reading_index(self, monkeypatch, tmp_path):
+        regular_file = tmp_path / "Article L.md"
+        rag = MagicMock()
+        watcher = VaultWatcher(rag)
+        mock_update = MagicMock()
+
+        monkeypatch.setattr(vault_utils, "PAGES_DIR", tmp_path)
+        monkeypatch.setattr(vault_utils, "NOTES_DIR", tmp_path)
+        monkeypatch.setattr(watcher, "_should_watch", lambda x: True)
+        monkeypatch.setattr("core.vault_utils.update_wiki_index", mock_update)
+
+        watcher.on_deleted(FakeEvent(regular_file))
+
+        rag.delete_document.assert_called_once_with("Article L")
+        mock_update.assert_called_once_with(sync_reading_index=True)
+

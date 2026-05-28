@@ -156,22 +156,32 @@ def _title_from_article_cell(value: str) -> str:
     return value.split("|", 1)[0].strip()
 
 
-def _load_reading_index() -> dict:
-    """Load human reading annotations without making index regeneration fragile."""
+def _load_reading_index() -> tuple[dict, bool]:
+    """Load human reading annotations.
+
+    Returns (annotations, parsed_ok). If a user-edited ReadingIndex exists but
+    cannot be parsed, callers must avoid rewriting it.
+    """
     if not READING_INDEX_FILE.exists():
-        return {}
+        return {}, True
     try:
         content = READING_INDEX_FILE.read_text(encoding="utf-8")
     except Exception as e:
         logging.debug(f"Wiki index: failed to read reading index: {e}")
-        return {}
+        return {}, False
+
+    if content.strip() == "":
+        return {}, True
 
     lines = content.splitlines()
     for idx, line in enumerate(lines):
         headers = _split_table_row(line)
-        if headers and headers[0] == "Article" and "Comment" in headers:
+        if headers == list(_READING_INDEX_COLUMNS):
             if idx + 1 >= len(lines):
-                return {}
+                return {}, False
+            separator = _split_table_row(lines[idx + 1])
+            if len(separator) != len(headers):
+                return {}, False
             annotations = {}
             for row in lines[idx + 2:]:
                 if not row.strip().startswith("|"):
@@ -189,18 +199,27 @@ def _load_reading_index() -> dict:
                     if value:
                         annotation[key] = value
                 annotations[title] = annotation
-            return annotations
-    return {}
+            return annotations, True
+    return {}, False
 
 
 def _sync_reading_index(article_titles: list[str]):
     """Keep article rows current while preserving human-maintained columns."""
-    existing = _load_reading_index()
+    existing, parsed_ok = _load_reading_index()
+    if not parsed_ok:
+        logging.warning("Wiki index: ReadingIndex.md could not be parsed; skipping automatic sync.")
+        return
+
+    all_titles = set(article_titles) | {title for title, annotation in existing.items() if annotation}
+    sorted_titles = sorted(all_titles, key=_natural_sort_key)
+    if list(existing.keys()) == sorted_titles:
+        return
+
     lines = _READING_INDEX_INTRO + [
         "| " + " | ".join(_READING_INDEX_COLUMNS) + " |",
         "| " + " | ".join(["---"] * len(_READING_INDEX_COLUMNS)) + " |",
     ]
-    for title in sorted(article_titles, key=_natural_sort_key):
+    for title in sorted_titles:
         annotation = existing.get(title, {})
         cells = [f"[[{_table_cell(title)}]]"]
         for header in _READING_INDEX_COLUMNS[1:]:
@@ -284,13 +303,14 @@ def _append_annotation_lines(lines: list[str], annotation: dict, prefix: str = "
         lines.append(f"{prefix}- 💬 {comment}")
 
 
-def update_wiki_index(filepath: Path = None, title: str = None):
+def update_wiki_index(filepath: Path = None, title: str = None, *, sync_reading_index: bool = False):
     """Regenerate index.md from a full scan of Notes/, pages/, and raw/consolidate/."""
     try:
         logging.info("Wiki Utils: Regenerating Knowledge Map Index...")
+        page_entities = _collect_section(PAGES_DIR)
         sections = {
             "Notes":    {"icon": "✍️", "files": _collect_section(NOTES_DIR)},
-            "Entities": {"icon": "🤖", "files": _collect_section(PAGES_DIR)},
+            "Entities": {"icon": "🤖", "files": {folder: list(files) for folder, files in page_entities.items()}},
         }
 
         # Inject raw/consolidate markdown into Entities, grouped by stem.
@@ -301,9 +321,10 @@ def update_wiki_index(filepath: Path = None, title: str = None):
                     continue
                 entities.setdefault(f.stem, []).append(_read_metadata(f))
 
-        entity_titles = [folder for folder in sections["Entities"]["files"] if folder != "Root"]
-        _sync_reading_index(entity_titles)
-        reading_index = _load_reading_index()
+        entity_titles = [folder for folder in page_entities if folder != "Root"]
+        if sync_reading_index:
+            _sync_reading_index(entity_titles)
+        reading_index, _ = _load_reading_index()
 
         from core.version import VERSION
         lines = [
@@ -360,7 +381,7 @@ def update_wiki_index(filepath: Path = None, title: str = None):
 
 def ensure_wiki_indexes():
     """Ensure ReadingIndex.md and index.md exist and reflect the current vault."""
-    update_wiki_index()
+    update_wiki_index(sync_reading_index=True)
 
 
 def update_file_tags(filepath: Path, tags: list[str]):
