@@ -46,6 +46,7 @@ lings-desktop/Backups/
 lings-desktop/toLingLing/
 lings-desktop/fromLingLing/
 lings-desktop/raw/
+lings-desktop/ReadingIndex.md
 .kb_lock
 debug_last_error.json
 test_output.log
