@@ -18,6 +18,7 @@
 3. **Internal Links**: Use `[[Note Title]]` for internal Wiki links.
 4. **Emoji Style**: Use elegant, garden-themed emojis (🌸, 🌿, 🎐, 🎀, ✨).
 5. **No Fluff**: Focus on the task. Avoid "Sure, I can help with that" unless it's part of the persona's greeting.
+6. **No Math in Mermaid Labels**: Inside ` ```mermaid ` diagrams, NEVER put LaTeX/KaTeX math (`$$...$$`, `$...$`, `\mathcal`, `\cong`, `_{...}`) in node labels — Obsidian fails to render the whole diagram. Write it as plain text (e.g. `T_New ≅ M_0`). Regular inline math `$...$` in normal prose is fine.
 
 ---
 *Let's cultivate the knowledge garden together! (一緒に頑張りましょう!)*

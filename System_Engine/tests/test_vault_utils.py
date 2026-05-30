@@ -29,9 +29,9 @@ class TestUpdateWikiIndex:
         )
         reading_index.write_text(
             "# ReadingIndex\n\n"
-            "| Article | Status | Priority | Importance | Relevance | Progress | Comment | Updated |\n"
-            "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
-            "| [[Article A]] | reading | 4 | 3 | 5 | Part 2 | Start with the synthesis. | 2026-05-28 |\n",
+            "| Article | Stat | Re | Im | Comment |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| [[Article A]] | reading | 5 | 3 | Start with the synthesis. |\n",
             encoding="utf-8",
         )
 
@@ -46,12 +46,11 @@ class TestUpdateWikiIndex:
         output = index.read_text(encoding="utf-8")
         assert "> [!abstract]- 📅 2026-05-28 | Reading | I3 R5<br>**📂 Article A (2 items)**" in output
         assert "Details" not in output
-        assert "> - 📍 Part 2" in output
         assert "> - 💬 Start with the synthesis." in output
         assert "[[Article A (Synthesis)]]" in output
 
         table = reading_index.read_text(encoding="utf-8")
-        assert "| [[Article A]] | reading | 4 | 3 | 5 | Part 2 | Start with the synthesis. | 2026-05-28 |" in table
+        assert "| [[Article A]] | reading | 5 | 3 | Start with the synthesis. |" in table
 
     def test_syncs_reading_index_article_column(self, monkeypatch, tmp_path):
         pages = tmp_path / "pages"
@@ -68,10 +67,10 @@ class TestUpdateWikiIndex:
         raw.mkdir(parents=True)
         reading_index.write_text(
             "# ReadingIndex\n\n"
-            "| Article | Status | Priority | Importance | Relevance | Progress | Comment | Updated |\n"
-            "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
-            "| [[Article A]] | reading | 4 |  |  | Part 2 | Keep this note. |  |\n"
-            "| [[Removed Article]] | skip |  |  |  |  | Old row. |  |\n",
+            "| Article | Stat | Re | Im | Comment |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| [[Article A]] | reading | 5 |  | Keep this note. |\n"
+            "| [[Removed Article]] | skip |  |  | Old row. |\n",
             encoding="utf-8",
         )
 
@@ -84,9 +83,9 @@ class TestUpdateWikiIndex:
         vault_utils.update_wiki_index(sync_reading_index=True)
 
         table = reading_index.read_text(encoding="utf-8")
-        assert "| [[Article A]] | reading | 4 |  |  | Part 2 | Keep this note. |  |" in table
-        assert "| [[Article B]] |  |  |  |  |  |  |  |" in table
-        assert "| [[Removed Article]] | skip |  |  |  |  | Old row. |  |" in table
+        assert "| [[Article A]] | reading | 5 |  | Keep this note. |" in table
+        assert "| [[Article B]] |  |  |  |  |" in table
+        assert "| [[Removed Article]] | skip |  |  | Old row. |" in table
 
     def test_preserves_escaped_pipes_in_human_columns(self, monkeypatch, tmp_path):
         pages = tmp_path / "pages"
@@ -102,9 +101,9 @@ class TestUpdateWikiIndex:
         (article_dir / "Article C.md").write_text("Body", encoding="utf-8")
         reading_index.write_text(
             "# ReadingIndex\n\n"
-            "| Article | Status | Priority | Importance | Relevance | Progress | Comment | Updated |\n"
-            "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
-            "| [[Article C]] | reading |  |  |  |  | compare A\\|B and C:\\\\tmp |  |\n",
+            "| Article | Stat | Re | Im | Comment |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| [[Article C]] | reading |  |  | compare A\\|B and C:\\\\tmp |\n",
             encoding="utf-8",
         )
 
@@ -170,7 +169,7 @@ class TestUpdateWikiIndex:
         assert index.exists()
         assert reading_index.exists()
         assert "- ✍️ [[ReadingIndex]]" in index.read_text(encoding="utf-8")
-        assert "| [[Article D]] |  |  |  |  |  |  |  |" in reading_index.read_text(encoding="utf-8")
+        assert "| [[Article D]] |  |  |  |  |" in reading_index.read_text(encoding="utf-8")
 
     def test_update_wiki_index_does_not_rewrite_reading_index_by_default(self, monkeypatch, tmp_path):
         pages = tmp_path / "pages"
@@ -219,7 +218,7 @@ class TestUpdateWikiIndex:
         vault_utils.ensure_wiki_indexes()
 
         table = reading_index.read_text(encoding="utf-8")
-        assert "| [[Article F]] |  |  |  |  |  |  |  |" in table
+        assert "| [[Article F]] |  |  |  |  |" in table
         assert "[[input]]" not in table
 
     def test_sync_reading_index_aborts_on_header_typo(self, monkeypatch, tmp_path):
@@ -266,10 +265,10 @@ class TestUpdateWikiIndex:
         (article_dir / "Article H.md").write_text("Body", encoding="utf-8")
         reading_index.write_text(
             "# ReadingIndex\n\n"
-            "| Article | Status | Priority | Importance | Relevance | Progress | Comment | Updated |\n"
-            "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
-            "| [[Article H]] |  |  |  |  |  |  |  |\n"
-            "| [[Old Empty Article]] |  |  |  |  |  |  |  |\n",
+            "| Article | Stat | Re | Im | Comment |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| [[Article H]] |  |  |  |  |\n"
+            "| [[Old Empty Article]] |  |  |  |  |\n",
             encoding="utf-8",
         )
 
@@ -299,11 +298,15 @@ class TestUpdateWikiIndex:
         notes.mkdir()
         raw.mkdir(parents=True)
         original = (
-            "# Custom heading kept intact\n\n"
-            "| Article | Status | Priority | Importance | Relevance | Progress | Comment | Updated |\n"
-            "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
-            "| [[Article I]] | reading |  |  |  |  | User changed this directly. |  |\n"
-            "| [[Article J]] |  |  |  |  |  |  |  |\n"
+            "# ReadingIndex\n\nEdit the human-maintained columns. The Article column is regenerated from the vault.\n\n"
+            "- Stat: unread, reading, read, parked, skip\n"
+            "- Re (Relevance): 1-5, fit for your current question or project\n"
+            "- Im (Importance): 1-5, long-term value or objective weight\n"
+            "- Comment: short human note for deciding what to read next\n\n"
+            "| Article | Stat | Re | Im | Comment |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| [[Article I]] | reading | 5 |  | User changed this directly. |\n"
+            "| [[Article J]] |  |  |  |  |\n"
         )
         reading_index.write_text(original, encoding="utf-8")
 
@@ -340,5 +343,40 @@ class TestUpdateWikiIndex:
         vault_utils.ensure_wiki_indexes()
 
         table = reading_index.read_text(encoding="utf-8")
-        assert "| [[Article K]] |  |  |  |  |  |  |  |" in table
+        assert "| [[Article K]] |  |  |  |  |" in table
 
+    def test_sync_reading_index_migrates_old_schema(self, monkeypatch, tmp_path):
+        pages = tmp_path / "pages"
+        notes = tmp_path / "Notes"
+        raw = tmp_path / "raw" / "consolidate"
+        index = tmp_path / "index.md"
+        reading_index = tmp_path / "ReadingIndex.md"
+
+        article_dir = pages / "Article M"
+        article_dir.mkdir(parents=True)
+        notes.mkdir()
+        raw.mkdir(parents=True)
+        (article_dir / "Article M.md").write_text("Body", encoding="utf-8")
+
+        # Write old 8-column layout
+        reading_index.write_text(
+            "# ReadingIndex\n\n"
+            "| Article | Status | Priority | Importance | Relevance | Progress | Comment | Updated |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| [[Article M]] | reading | 4 | 3 | 5 | Part 2 | Migrate this note. | 2026-05-28 |\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(vault_utils, "PAGES_DIR", pages)
+        monkeypatch.setattr(vault_utils, "NOTES_DIR", notes)
+        monkeypatch.setattr(vault_utils, "RAW_CONSOLIDATE_DIR", raw)
+        monkeypatch.setattr(vault_utils, "INDEX_FILE", index)
+        monkeypatch.setattr(vault_utils, "READING_INDEX_FILE", reading_index)
+
+        vault_utils.ensure_wiki_indexes()
+
+        table = reading_index.read_text(encoding="utf-8")
+        # Assert that it was rewritten to the new 5-column layout
+        assert "| Article | Stat | Re | Im | Comment |" in table
+        # Assert that priority, progress, updated are discarded, and others are migrated
+        assert "| [[Article M]] | reading | 5 | 3 | Migrate this note. |" in table

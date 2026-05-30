@@ -18,6 +18,7 @@ import pytest
 from core.parser import (
     repair_mermaid_fences,
     repair_mermaid_label_quotes,
+    repair_mermaid_latex_labels,
     run_markdown_quality_checks,
 )
 
@@ -135,6 +136,61 @@ class TestBrokenHeuristic:
     def test_empty_is_broken(self):
         assert self.check("")
         assert self.check("   \n  ")
+
+
+# ── LaTeX-in-label degradation ─────────────────────────────────────
+
+class TestLatexLabels:
+    """Obsidian's mermaid parser dies on `$$...$$`/`\\command` in node labels;
+    they must be degraded to plain text inside fences only."""
+
+    def _strip(self, body):
+        text = f"```mermaid\n{body}\n```"
+        return repair_mermaid_latex_labels(text)
+
+    def test_strips_double_dollar_wrapper(self):
+        # `\\mathcal{M}_0` — note the quote-repair pass doubles the backslash.
+        result, fixes = self._strip(r'graph TD\nB{"定義: 安全基線流形 $$\\mathcal{M}_0$$"}')
+        assert '安全基線流形 M_0' in result
+        assert "$$" not in result and "\\mathcal" not in result
+        assert any(f["type"] == "stripped_mermaid_latex" for f in fixes)
+
+    def test_converts_symbol_to_unicode(self):
+        result, _ = self._strip(r'graph TD\nE{"驗證: $$\\mathcal{T}_{New} \\cong \\mathcal{M}_0?$$"}')
+        assert '驗證: T_New ≅ M_0?' in result
+        assert "\\cong" not in result
+
+    def test_single_dollar_inline_math_in_label(self):
+        result, _ = self._strip(r'graph TD\nA["速率 $\\alpha$ 增長"]')
+        assert '速率 α 增長' in result
+        assert "$" not in result
+
+    def test_plain_label_untouched(self):
+        text = '```mermaid\ngraph TD\nA["處理中... (Processing)"] --> B["結束"]\n```'
+        result, fixes = repair_mermaid_latex_labels(text)
+        assert result == text
+        assert fixes == []
+
+    def test_escaped_quote_in_label_preserved(self):
+        # `\"` is a legitimate label escape and must survive even when we
+        # strip surrounding LaTeX.
+        result, _ = self._strip(r'graph TD\nA["說 \"$$\\alpha$$\" 的人"]')
+        assert r'\"' in result
+        assert "$$" not in result and "\\alpha" not in result
+
+    def test_outside_mermaid_math_preserved(self):
+        # Inline `$...$` in prose is valid Obsidian markdown — never touch it.
+        text = "前提是 $\\mathcal{M}_0$ 成立。\n\n```mermaid\ngraph TD\nA --> B\n```"
+        result, fixes = repair_mermaid_latex_labels(text)
+        assert "$\\mathcal{M}_0$" in result
+        assert fixes == []
+
+    def test_idempotent(self):
+        body = r'graph TD\nE{"驗證: $$\\mathcal{T}_{New} \\cong \\mathcal{M}_0?$$"}'
+        once, _ = self._strip(body)
+        twice, fixes = repair_mermaid_latex_labels(once)
+        assert once == twice
+        assert fixes == []
 
 
 # ── Pipeline idempotency ───────────────────────────────────────────

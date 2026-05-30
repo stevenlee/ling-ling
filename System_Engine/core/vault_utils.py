@@ -19,21 +19,22 @@ _NATURAL_SORT_RE = re.compile(r'([0-9]+)')
 _PART_RE = re.compile(r'\(Part \d+\)')
 _READING_INDEX_COLUMNS = (
     "Article",
-    "Status",
-    "Priority",
-    "Importance",
-    "Relevance",
-    "Progress",
+    "Stat",
+    "Re",
+    "Im",
     "Comment",
-    "Updated",
 )
 _READING_KEY_MAP = {
-    "Status": "status",
-    "Priority": "priority",
-    "Importance": "importance",
-    "Relevance": "relevance",
-    "Progress": "progress",
+    "Stat": "status",
+    "Re": "relevance",
+    "Im": "importance",
     "Comment": "comment",
+    "Comments": "comment",
+    "Status": "status",
+    "Relevance": "relevance",
+    "Importance": "importance",
+    "Priority": "priority",
+    "Progress": "progress",
     "Updated": "updated",
 }
 _READING_INDEX_INTRO = [
@@ -41,13 +42,10 @@ _READING_INDEX_INTRO = [
     "",
     "Edit the human-maintained columns. The Article column is regenerated from the vault.",
     "",
-    "- Status: unread, reading, read, parked, skip",
-    "- Priority: 1-5, how soon you want to read it",
-    "- Importance: 1-5, long-term value or objective weight",
-    "- Relevance: 1-5, fit for your current question or project",
-    "- Progress: free text, such as Part 3, 35%, Synthesis done",
+    "- Stat: unread, reading, read, parked, skip",
+    "- Re (Relevance): 1-5, fit for your current question or project",
+    "- Im (Importance): 1-5, long-term value or objective weight",
     "- Comment: short human note for deciding what to read next",
-    "- Updated: YYYY-MM-DD",
     "",
 ]
 
@@ -156,32 +154,42 @@ def _title_from_article_cell(value: str) -> str:
     return value.split("|", 1)[0].strip()
 
 
-def _load_reading_index() -> tuple[dict, bool]:
+def _load_reading_index() -> tuple[dict, bool, bool]:
     """Load human reading annotations.
 
-    Returns (annotations, parsed_ok). If a user-edited ReadingIndex exists but
-    cannot be parsed, callers must avoid rewriting it.
+    Returns (annotations, parsed_ok, schema_matched). If a user-edited ReadingIndex exists but
+    cannot be parsed, callers must avoid rewriting it. schema_matched indicates if the table
+    headers on disk match current columns exactly.
     """
     if not READING_INDEX_FILE.exists():
-        return {}, True
+        return {}, True, True
     try:
         content = READING_INDEX_FILE.read_text(encoding="utf-8")
     except Exception as e:
         logging.debug(f"Wiki index: failed to read reading index: {e}")
-        return {}, False
+        return {}, False, False
 
     if content.strip() == "":
-        return {}, True
+        return {}, True, False
 
     lines = content.splitlines()
     for idx, line in enumerate(lines):
         headers = _split_table_row(line)
-        if headers == list(_READING_INDEX_COLUMNS):
+        if headers and headers[0] == "Article":
+            allowed_schemas = [
+                ["Article", "Stat", "Re", "Im", "Comment"],
+                ["Article", "Stat", "Re", "Im", "Comments"],
+                ["Article", "Status", "Priority", "Importance", "Relevance", "Progress", "Comment", "Updated"],
+                ["Article", "Status", "Priority", "Importance", "Relevance", "Progress", "Comments", "Updated"],
+            ]
+            if headers not in allowed_schemas:
+                return {}, False, False
+            schema_matched = (headers == list(_READING_INDEX_COLUMNS))
             if idx + 1 >= len(lines):
-                return {}, False
+                return {}, False, False
             separator = _split_table_row(lines[idx + 1])
             if len(separator) != len(headers):
-                return {}, False
+                return {}, False, False
             annotations = {}
             for row in lines[idx + 2:]:
                 if not row.strip().startswith("|"):
@@ -199,20 +207,20 @@ def _load_reading_index() -> tuple[dict, bool]:
                     if value:
                         annotation[key] = value
                 annotations[title] = annotation
-            return annotations, True
-    return {}, False
+            return annotations, True, schema_matched
+    return {}, False, False
 
 
 def _sync_reading_index(article_titles: list[str]):
     """Keep article rows current while preserving human-maintained columns."""
-    existing, parsed_ok = _load_reading_index()
+    existing, parsed_ok, schema_matched = _load_reading_index()
     if not parsed_ok:
         logging.warning("Wiki index: ReadingIndex.md could not be parsed; skipping automatic sync.")
         return
 
     all_titles = set(article_titles) | {title for title, annotation in existing.items() if annotation}
     sorted_titles = sorted(all_titles, key=_natural_sort_key)
-    if list(existing.keys()) == sorted_titles:
+    if list(existing.keys()) == sorted_titles and schema_matched:
         return
 
     lines = _READING_INDEX_INTRO + [
@@ -324,7 +332,7 @@ def update_wiki_index(filepath: Path = None, title: str = None, *, sync_reading_
         entity_titles = [folder for folder in page_entities if folder != "Root"]
         if sync_reading_index:
             _sync_reading_index(entity_titles)
-        reading_index, _ = _load_reading_index()
+        reading_index, _, _ = _load_reading_index()
 
         from core.version import VERSION
         lines = [

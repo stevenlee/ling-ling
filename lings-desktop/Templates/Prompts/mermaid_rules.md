@@ -9,6 +9,11 @@ When generating or fixing Mermaid diagrams, follow these strict rules to ensure 
 2. **Illegal Node IDs**: Node IDs should be simple alphanumeric characters. Do not use spaces or symbols in IDs.
 3. **Old Syntax**: Use `flowchart` instead of `graph` for better layout control.
 4. **Complex Subgraphs**: Keep subgraphs simple; nested subgraphs often fail to render in older Obsidian versions.
+5. **No LaTeX / Math in Labels**: Do NOT put `$$...$$`, `$...$`, or backslash commands (`\mathcal`, `\cong`, `\frac`, subscripts like `_{x}`) inside node labels. Obsidian's Mermaid parser cannot render them and the **entire diagram fails**. Write the math as plain text instead.
+   - ❌ `B["定義: 安全基線流形 $$\mathcal{M}_0$$"]`
+   - ✅ `B["定義: 安全基線流形 M_0"]`
+   - ❌ `E{"驗證: $$\mathcal{T}_{New} \cong \mathcal{M}_0?$$"}`
+   - ✅ `E["驗證: T_New ≅ M_0?"]`
 
 ## ✅ Best Practices / 最佳實踐
 1. **Always Quote Labels**: Use double quotes for all node labels to be safe.

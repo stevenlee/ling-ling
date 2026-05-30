@@ -8,6 +8,7 @@ The public surface (callers across agents/, services/, watchers/, maintenance/):
     run_markdown_quality_checks(text, ...)  -> (str, list[dict])
     repair_mermaid_fences(text)             -> (str, list[dict])
     repair_mermaid_label_quotes(text)       -> (str, list[dict])
+    repair_mermaid_latex_labels(text)       -> (str, list[dict])
     repair_latex_carriage_returns(text)     -> (str, list[dict])
     repair_latex_escape_collisions(text)    -> (str, list[dict])
     strip_body_frontmatter(text)            -> (str, list[dict])
@@ -169,6 +170,55 @@ _LATEX_ESCAPE_COLLISIONS: tuple[tuple[str, str, str], ...] = (
     ("\x0c", "f", "repaired_latex_form_feed"),       # \f → \frac, \forall, ...
     ("\x0b", "v", "repaired_latex_vertical_tab"),    # \v → \vec, \vee, ...
 )
+
+# Mermaid (Obsidian's parser) cannot render LaTeX/KaTeX math inside node
+# labels: `$$...$$` delimiters and backslash commands like `\mathcal` throw a
+# parse error that takes the whole diagram down. The bracket-balance heuristic
+# never catches it because `{System}`/`{M}_0` stay balanced. So we degrade the
+# math to readable plain text *inside mermaid fences only* — inline `$...$`
+# math in normal prose is legitimate Obsidian markdown and is left untouched.
+#
+# `\command{X}` wrappers that only style their argument collapse to `X`.
+_MERMAID_LATEX_WRAPPERS = (
+    "mathcal", "mathbb", "mathbf", "mathrm", "mathsf", "mathit", "mathfrak",
+    "boldsymbol", "operatorname", "textbf", "textit", "textrm", "text", "bm",
+)
+# `\command` symbols map to a Unicode glyph. Longest names first so the
+# word-boundary match never lets `\in` shadow `\infty`.
+_MERMAID_LATEX_SYMBOLS: dict[str, str] = {
+    "Rightarrow": "⇒", "rightarrow": "→", "Leftarrow": "⇐", "leftarrow": "←",
+    "leftrightarrow": "↔", "mapsto": "↦", "implies": "⇒", "iff": "⇔",
+    "subseteq": "⊆", "supseteq": "⊇", "subset": "⊂", "supset": "⊃",
+    "notin": "∉", "infty": "∞", "forall": "∀", "exists": "∃", "nabla": "∇",
+    "partial": "∂", "approx": "≈", "equiv": "≡", "cong": "≅", "neq": "≠",
+    "leq": "≤", "geq": "≥", "times": "×", "cdot": "·", "div": "÷", "pm": "±",
+    "oplus": "⊕", "otimes": "⊗", "cup": "∪", "cap": "∩", "land": "∧",
+    "lor": "∨", "neg": "¬", "sqrt": "√", "sum": "Σ", "prod": "Π", "int": "∫",
+    "to": "→", "in": "∈",
+    "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
+    "zeta": "ζ", "eta": "η", "theta": "θ", "iota": "ι", "kappa": "κ",
+    "lambda": "λ", "mu": "μ", "nu": "ν", "xi": "ξ", "rho": "ρ", "sigma": "σ",
+    "tau": "τ", "phi": "φ", "chi": "χ", "psi": "ψ", "omega": "ω",
+    "Gamma": "Γ", "Delta": "Δ", "Theta": "Θ", "Lambda": "Λ", "Xi": "Ξ",
+    "Sigma": "Σ", "Phi": "Φ", "Psi": "Ψ", "Omega": "Ω", "Pi": "Π",
+}
+_MERMAID_LATEX_WRAPPER_RE = re.compile(
+    r'\\+\s*(?:' + "|".join(_MERMAID_LATEX_WRAPPERS) + r')\s*\{([^{}]*)\}'
+)
+_MERMAID_LATEX_SYMBOL_RES: tuple[tuple[re.Pattern, str], ...] = tuple(
+    (re.compile(r'\\+' + re.escape(name) + r'\b'), glyph)
+    # Longest command names first so `\infty` isn't partially eaten by `\in`.
+    for name, glyph in sorted(
+        _MERMAID_LATEX_SYMBOLS.items(), key=lambda kv: len(kv[0]), reverse=True
+    )
+)
+# `_{sub}` / `^{sup}` → drop the braces, keep `_sub` / `^sup`.
+_MERMAID_LATEX_SCRIPT_RE = re.compile(r'([_^])\{([^{}]*)\}')
+# Any backslash command we don't have a glyph for: drop it entirely.
+_MERMAID_LATEX_UNKNOWN_CMD_RE = re.compile(r'\\+[a-zA-Z]+')
+# A stray backslash that is NOT escaping a double-quote (`\"` is a legitimate
+# mermaid label escape and must survive).
+_MERMAID_LATEX_STRAY_SLASH_RE = re.compile(r'\\(?!")')
 
 
 # ─── quality_fix record helpers ───────────────────────────────────────
@@ -427,6 +477,107 @@ def repair_mermaid_label_quotes(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+# ─── Mermaid: LaTeX-in-label degradation ──────────────────────────────
+
+
+def _mermaid_latex_to_plaintext(s: str) -> str:
+    """Degrade KaTeX/LaTeX math in a mermaid label to readable plain text.
+
+    `$$\\mathcal{T}_{New} \\cong \\mathcal{M}_0?$$` → `T_New ≅ M_0?`. Backslash
+    counts are irrelevant (the quote-repair pass doubles them) since every
+    backslash command is consumed; `\\"` is preserved as a label-quote escape.
+    """
+    s = s.replace("$$", "").replace("$", "")
+    # Collapse styling wrappers (`\mathcal{T}` → `T`); loop for shallow nesting.
+    prev = None
+    while prev != s:
+        prev = s
+        s = _MERMAID_LATEX_WRAPPER_RE.sub(r"\1", s)
+    for pattern, glyph in _MERMAID_LATEX_SYMBOL_RES:
+        s = pattern.sub(glyph, s)
+    s = _MERMAID_LATEX_SCRIPT_RE.sub(r"\1\2", s)
+    s = s.replace("{", "").replace("}", "")
+    s = _MERMAID_LATEX_UNKNOWN_CMD_RE.sub("", s)
+    s = _MERMAID_LATEX_STRAY_SLASH_RE.sub("", s)
+    # Collapse the whitespace the removed commands leave behind.
+    s = re.sub(r"[ \t]{2,}", " ", s)
+    return re.sub(r"\s+([,.;:?!])", r"\1", s).strip()
+
+
+def _strip_latex_in_mermaid_line(line: str) -> tuple[str, bool]:
+    """Degrade LaTeX inside each double-quoted label on one mermaid line.
+
+    Only quoted segments containing a `$` or a `\\command` are touched, so
+    ordinary labels (and the line's arrow/structure syntax) are left intact.
+    """
+    out: list[str] = []
+    i, n = 0, len(line)
+    changed = False
+    while i < n:
+        ch = line[i]
+        if ch != '"':
+            out.append(ch)
+            i += 1
+            continue
+        j = i + 1
+        while j < n and line[j] != '"':
+            if line[j] == "\\" and j + 1 < n:
+                j += 2
+                continue
+            j += 1
+        inner = line[i + 1:j]
+        if "$" in inner or re.search(r"\\[a-zA-Z]", inner):
+            degraded = _mermaid_latex_to_plaintext(inner)
+            if degraded != inner:
+                changed = True
+                inner = degraded
+        out.append(f'"{inner}"')
+        i = j + 1 if j < n else j
+    return "".join(out), changed
+
+
+def repair_mermaid_latex_labels(text: str) -> tuple[str, list[dict]]:
+    """Degrade LaTeX math inside mermaid node labels to plain text.
+
+    Runs after label-quoting so every label is already wrapped in `"..."`.
+    Obsidian's mermaid renderer can't parse `$$...$$`/`\\command` inside a
+    label and fails the whole diagram; this keeps the diagram renderable.
+    """
+    if not text:
+        return "", []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+            out.append(line)
+            continue
+        if in_mermaid and stripped == "```":
+            in_mermaid = False
+            out.append(line)
+            continue
+
+        if in_mermaid:
+            new_line, changed = _strip_latex_in_mermaid_line(line)
+            if changed:
+                fixes.append(_make_fix(
+                    "stripped_mermaid_latex",
+                    line=idx + 1,
+                    before=line,
+                    after=new_line,
+                ))
+            out.append(new_line)
+        else:
+            out.append(line)
+
+    return "\n".join(out), fixes
+
+
 # ─── Mermaid: fence repair ────────────────────────────────────────────
 
 _FENCE_RE = re.compile(r'^```(\w*)\s*$')
@@ -662,6 +813,7 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
         repair_latex_escape_collisions,
         repair_mermaid_fences,
         repair_mermaid_label_quotes,
+        repair_mermaid_latex_labels,
         repair_markdown_bold_spacing,
     ])
 
