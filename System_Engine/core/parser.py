@@ -154,6 +154,14 @@ _MERMAID_SHAPES: tuple[tuple[str, str], ...] = (
 # node ids, which combined with the `>...]` asymmetric shape silently
 # corrupts `A[X] --> B[Y]` into `A["X"] -->"B[Y"]`.
 _MERMAID_NODE_HEAD_RE = re.compile(r'[\w一-鿿][\w\-一-鿿]*')
+_QUOTED_NODE_DEF_RE = re.compile(r'^(\s*)\"([\w\-一-鿿]+)\s*([\[\({>].*[\]\)}])\"(\s*)$')
+_MERMAID_CONN_ARROW_PAT = r'(?:-->|---|-.->|==>|--[xo]|-\.-|==)'
+_MERMAID_CONN_START_QUOTED_ID_RE = re.compile(
+    r'^(\s*)\"([\w\-一-鿿]+)\"\s*(' + _MERMAID_CONN_ARROW_PAT + r')'
+)
+_MERMAID_CONN_END_QUOTED_ID_RE = re.compile(
+    r'(' + _MERMAID_CONN_ARROW_PAT + r')\s*\"([\w\-一-鿿]+)\"(\s*(?:%%.*)?)$'
+)
 
 LATEX_CR_COMMAND_RE = re.compile(r'\r(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b')
 
@@ -420,15 +428,24 @@ def _quote_labels_in_line(line: str) -> tuple[str, bool]:
             label_start = head_end + len(opener)
             label = code_part[label_start:close_at]
             stripped = label.strip()
-            if stripped and not stripped.startswith(('"', "'")):
-                escaped = stripped.replace("\\", "\\\\").replace('"', '\\"')
-                out.append(code_part[i:head_end])
-                out.append(opener)
-                out.append(f'"{escaped}"')
-                out.append(closer)
-                changed = True
-            else:
-                out.append(code_part[i:close_at + len(closer)])
+            if stripped:
+                if stripped.startswith("'") and stripped.endswith("'") and len(stripped) >= 2:
+                    inner = stripped[1:-1]
+                    escaped = inner.replace("\\", "\\\\").replace('"', '\\"')
+                    out.append(code_part[i:head_end])
+                    out.append(opener)
+                    out.append(f'"{escaped}"')
+                    out.append(closer)
+                    changed = True
+                elif not stripped.startswith(('"', "'")):
+                    escaped = stripped.replace("\\", "\\\\").replace('"', '\\"')
+                    out.append(code_part[i:head_end])
+                    out.append(opener)
+                    out.append(f'"{escaped}"')
+                    out.append(closer)
+                    changed = True
+                else:
+                    out.append(code_part[i:close_at + len(closer)])
             i = close_at + len(closer)
             matched = True
             break
@@ -462,15 +479,29 @@ def repair_mermaid_label_quotes(text: str) -> tuple[str, list[dict]]:
             continue
 
         if in_mermaid:
-            new_line, changed = _quote_labels_in_line(line)
-            if changed:
+            m = _QUOTED_NODE_DEF_RE.match(line)
+            pre_processed = line
+            if m:
+                pre_processed = f"{m.group(1)}{m.group(2)}{m.group(3)}{m.group(4)}"
+            new_line, changed = _quote_labels_in_line(pre_processed)
+
+            # Strip quotes around node IDs on connection lines
+            conn_line = _MERMAID_CONN_START_QUOTED_ID_RE.sub(r'\1\2 \3', new_line)
+            conn_line = _MERMAID_CONN_END_QUOTED_ID_RE.sub(r'\1 \2\3', conn_line)
+            if conn_line != new_line:
+                new_line = conn_line
+                changed = True
+
+            if pre_processed != line or changed:
                 fixes.append(_make_fix(
                     "quoted_mermaid_labels",
                     line=idx + 1,
                     before=line,
                     after=new_line,
                 ))
-            out.append(new_line)
+                out.append(new_line)
+            else:
+                out.append(line)
         else:
             out.append(line)
 

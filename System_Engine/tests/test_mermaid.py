@@ -75,6 +75,29 @@ class TestLabelQuoting:
         result, _ = self._quote('graph TD\nA[say "hi"] --> B')
         assert r'A["say \"hi\""]' in result
 
+    def test_quotes_single_quoted_labels(self):
+        result, fixes = self._quote("graph TD\nA2['路徑預測模擬 (Path Simulation)'] --> B")
+        assert 'A2["路徑預測模擬 (Path Simulation)"]' in result
+        assert any(f["type"] == "quoted_mermaid_labels" for f in fixes)
+
+    def test_quotes_single_quoted_labels_with_outer_quotes(self):
+        result, fixes = self._quote('graph TD\n    "A2[\'路徑預測模擬 (Path Simulation)\']"')
+        assert '    A2["路徑預測模擬 (Path Simulation)"]' in result
+        assert any(f["type"] == "quoted_mermaid_labels" for f in fixes)
+
+    def test_connection_lines_strip_quotes(self):
+        result, fixes = self._quote('graph TD\n    "A1" --> "B1"\n    "A2" --> B2\n    A3 -.-> "B3"')
+        assert '    A1 --> B1' in result
+        assert '    A2 --> B2' in result
+        assert '    A3 -.-> B3' in result
+        assert any(f["type"] == "quoted_mermaid_labels" for f in fixes)
+
+    def test_connection_lines_preserve_quoted_edge_labels(self):
+        result, fixes = self._quote('graph TD\n    A -- "edge" --> B\n    A -. "maybe" .-> B')
+        assert '    A -- "edge" --> B' in result
+        assert '    A -. "maybe" .-> B' in result
+        assert fixes == []
+
     def test_skips_lines_outside_mermaid(self):
         # `[label]` outside a mermaid block is a markdown link target — never quote.
         text = "See [the docs] for info.\n\n```mermaid\ngraph TD\nA[Hello] --> B\n```"
