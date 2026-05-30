@@ -121,3 +121,15 @@ def test_default_tasks_registration(tmp_path):
     result2 = prune_task.action()
     assert result2.status == "succeeded"
     assert store.pruned is True
+
+
+def test_full_insight_date_part_supports_old_and_new_filenames():
+    old_path = Path("🎐full-insight-20260529-213000.md")
+    new_path = Path("[20260530-101119][Siddhartha][full-insight].md")
+
+    assert MaintenanceScheduler._full_insight_date_part(old_path) == "20260529"
+    assert MaintenanceScheduler._full_insight_date_part(new_path) == "20260530"
+    assert (
+        MaintenanceScheduler._full_insight_date_part(Path("[20260530][Vault][insight-recency].md"))
+        is None
+    )

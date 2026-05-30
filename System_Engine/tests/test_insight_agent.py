@@ -273,13 +273,20 @@ class TestMirrorMetadata:
             "Test Report", "Body of report.", "report_insight",
             {"exercise_strategy": "recency", "pipeline": "single"},
         )
-        agent._mirror_to_insights(full_markdown, prefix="🎐insight")
+        agent._mirror_to_insights(
+            full_markdown,
+            requested_cmd="insight-recency",
+            related_titles=["Test Source"],
+        )
 
         # Canonical report on disk equals the returned full_markdown.
         assert path.read_text(encoding="utf-8") == full_markdown
 
         # Insights/ copy equals the canonical report — same bytes.
-        mirrored = list(insights_dir.glob("🎐insight-*.md"))
+        mirrored = [
+            path for path in insights_dir.iterdir()
+            if path.name.endswith("[Test Source][insight-recency].md")
+        ]
         assert len(mirrored) == 1
         assert mirrored[0].read_text(encoding="utf-8") == full_markdown
 
@@ -293,7 +300,7 @@ class TestMirrorMetadata:
             "Test Report", "Body.", "report_insight",
             {"exercise_strategy": "recency"},
         )
-        agent._mirror_to_insights(full_markdown, prefix="🎐insight")
+        agent._mirror_to_insights(full_markdown, requested_cmd="insight-recency")
 
         mirror = next(insights_dir.iterdir()).read_text(encoding="utf-8")
         assert mirror.startswith("---\n"), "mirror should have YAML frontmatter"
@@ -312,13 +319,48 @@ class TestMirrorMetadata:
         _, full_markdown = agent._write_report(
             "全方位洞察報告", "Body content.", "report_insight_full",
         )
-        agent._mirror_to_insights(full_markdown, prefix="🎐full-insight")
+        agent._mirror_to_insights(
+            full_markdown,
+            requested_cmd="full-insight",
+            related_titles=["A", "B"],
+        )
 
-        mirror = next(insights_dir.glob("🎐full-insight-*.md")).read_text(encoding="utf-8")
+        mirror = next(
+            path for path in insights_dir.iterdir()
+            if path.name.endswith("[A+B][full-insight].md")
+        ).read_text(encoding="utf-8")
         assert mirror.startswith("---\n"), "full-insight mirror lost its frontmatter"
         assert "type: report_insight_full" in mirror
         assert "title:" in mirror
         assert "version:" in mirror
+
+    def test_mirror_filename_uses_datetime_related_doc_and_command(self, stub_agent):
+        agent, _, insights_dir = stub_agent
+
+        _, full_markdown = agent._write_report(
+            "Test Report", "Body.", "report_insight",
+        )
+        agent._mirror_to_insights(
+            full_markdown,
+            requested_cmd="full-insight",
+            related_titles=["Siddhartha", "妙法蓮華經"],
+        )
+
+        mirrored = list(insights_dir.iterdir())
+        assert len(mirrored) == 1
+        assert mirrored[0].name.endswith("[Siddhartha+妙法蓮華經][full-insight].md")
+
+    def test_mirror_filename_uses_vault_when_no_related_doc(self, stub_agent):
+        agent, _, insights_dir = stub_agent
+
+        _, full_markdown = agent._write_report(
+            "Test Report", "Body.", "report_insight",
+        )
+        agent._mirror_to_insights(full_markdown, requested_cmd="full-insight")
+
+        mirrored = list(insights_dir.iterdir())
+        assert len(mirrored) == 1
+        assert mirrored[0].name.endswith("[Vault][full-insight].md")
 
 
 class TestPlannerPreview:
@@ -349,7 +391,10 @@ class TestPlannerPreview:
         assert "Step 1: `synth`" in full_markdown
         assert "Step 2: `crit`" in full_markdown
         assert "no pipeline steps were executed" in full_markdown
-        mirrored = list(insights_dir.glob("🎐insight-plan-*.md"))
+        mirrored = [
+            path for path in insights_dir.iterdir()
+            if path.name.endswith("[A+B][insight-plan-preview].md")
+        ]
         assert len(mirrored) == 1
         assert mirrored[0].read_text(encoding="utf-8") == full_markdown
 

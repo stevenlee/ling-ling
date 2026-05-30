@@ -253,9 +253,11 @@ class MaintenanceScheduler(threading.Thread):
         if not insights_dir.exists():
             return None
         latest: date | None = None
-        for path in insights_dir.glob("*full-insight-*.md"):
+        for path in insights_dir.glob("*.md"):
             try:
-                date_part = path.stem.split("full-insight-", 1)[1][:8]
+                date_part = MaintenanceScheduler._full_insight_date_part(path)
+                if not date_part:
+                    continue
                 run_date = datetime.strptime(date_part, "%Y%m%d").date()
             except (IndexError, ValueError):
                 continue
@@ -264,3 +266,12 @@ class MaintenanceScheduler(threading.Thread):
         if latest is None:
             return None
         return datetime.combine(latest, datetime.min.time()).isoformat(timespec="seconds")
+
+    @staticmethod
+    def _full_insight_date_part(path: Path) -> str | None:
+        stem = path.stem
+        if "full-insight-" in stem:
+            return stem.split("full-insight-", 1)[1][:8]
+        if stem.endswith("][full-insight]") and stem.startswith("["):
+            return stem[1:9]
+        return None

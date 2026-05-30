@@ -87,10 +87,25 @@ class InsightAgent(BaseAgent):
             )
 
         if is_full_report:
-            return self.generate_full_insight(user_directive, forced_template=forced_template)
-        return self.generate_insight(strategy_id, user_directive, forced_template=forced_template)
+            return self.generate_full_insight(
+                user_directive,
+                forced_template=forced_template,
+                target_titles=target_titles,
+            )
+        return self.generate_insight(
+            strategy_id,
+            user_directive,
+            forced_template=forced_template,
+            target_titles=target_titles,
+        )
 
-    def generate_insight(self, strategy_id: str, user_directive: str = "", forced_template: str | None = None) -> str:
+    def generate_insight(
+        self,
+        strategy_id: str,
+        user_directive: str = "",
+        forced_template: str | None = None,
+        target_titles: list[str] | None = None,
+    ) -> str:
         if strategy_id not in self.strategies:
             if not self.strategies:
                 return "❌ Error: No strategies found."
@@ -114,10 +129,19 @@ class InsightAgent(BaseAgent):
         _, full_markdown = self._write_report(
             f"洞察分析-{config['name']}", report_content, "report_insight", meta
         )
-        self._mirror_to_insights(full_markdown, prefix="🎐insight")
+        self._mirror_to_insights(
+            full_markdown,
+            requested_cmd=f"insight-{strategy_id}",
+            related_titles=target_titles,
+        )
         return full_markdown
 
-    def generate_full_insight(self, user_directive: str = "", forced_template: str | None = None) -> str:
+    def generate_full_insight(
+        self,
+        user_directive: str = "",
+        forced_template: str | None = None,
+        target_titles: list[str] | None = None,
+    ) -> str:
         """Run all strategies, then perform a cross-strategy synthesis."""
         section_results = []
         insight_seeds = []
@@ -144,10 +168,20 @@ class InsightAgent(BaseAgent):
         )
 
         _, full_markdown = self._write_report("全方位洞察報告", final_markdown, "report_insight_full")
-        self._mirror_to_insights(full_markdown, prefix="🎐full-insight")
+        self._mirror_to_insights(
+            full_markdown,
+            requested_cmd="full-insight",
+            related_titles=target_titles,
+        )
         return full_markdown
 
-    def _mirror_to_insights(self, full_markdown: str, prefix: str) -> None:
+    def _mirror_to_insights(
+        self,
+        full_markdown: str,
+        requested_cmd: str | None = None,
+        related_titles: list[str] | None = None,
+        prefix: str | None = None,
+    ) -> None:
         """Drop a byte-identical copy of the canonical report in Insights/.
 
         We re-write the same full markdown (frontmatter + body) that
@@ -155,8 +189,46 @@ class InsightAgent(BaseAgent):
         stays indexable in Obsidian with the full title/type/version/stats
         frontmatter.
         """
-        insight_file = self.insights_dir / f"{prefix}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+        insight_file = self.insights_dir / self._build_insights_filename(
+            requested_cmd=requested_cmd or self._cmd_from_legacy_prefix(prefix),
+            related_titles=related_titles,
+        )
         insight_file.write_text(full_markdown, encoding="utf-8")
+
+    @classmethod
+    def _build_insights_filename(
+        cls,
+        *,
+        requested_cmd: str,
+        related_titles: list[str] | None = None,
+    ) -> str:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        related = cls._related_doc_name(related_titles)
+        cmd = cls._sanitize_filename_part(requested_cmd) or "insight"
+        return f"[{timestamp}][{related}][{cmd}].md"
+
+    @classmethod
+    def _related_doc_name(cls, related_titles: list[str] | None) -> str:
+        titles = [
+            cleaned
+            for title in (related_titles or [])
+            if (cleaned := cls._sanitize_filename_part(str(title)))
+        ]
+        if not titles:
+            return "Vault"
+        return "+".join(titles)
+
+    @staticmethod
+    def _sanitize_filename_part(value: str) -> str:
+        cleaned = re.sub(r'[\\/*?:"<>|\[\]\n\r\t]+', "-", value).strip(" .-")
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        return cleaned[:80].strip(" .-")
+
+    @staticmethod
+    def _cmd_from_legacy_prefix(prefix: str | None) -> str:
+        if not prefix:
+            return "insight"
+        return prefix.removeprefix("🎐").strip("-") or "insight"
 
     # ── Pipeline: Planner Preview ─────────────────────────────────────
 
@@ -294,7 +366,16 @@ class InsightAgent(BaseAgent):
             report_type,
             meta,
         )
-        self._mirror_to_insights(full_markdown, prefix="🎐insight-plan")
+        requested_cmd = (
+            "insight-plan-execute"
+            if report_type == "report_insight_planner_execute"
+            else "insight-plan-preview"
+        )
+        self._mirror_to_insights(
+            full_markdown,
+            requested_cmd=requested_cmd,
+            related_titles=target_titles,
+        )
         return full_markdown
 
     def _render_planner_preview_report(
