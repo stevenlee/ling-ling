@@ -688,12 +688,27 @@ class LLMClient:
         operation: str | None = None,
     ) -> str:
         cap_resolution: dict | None = None
-        if custom_instruction:
+        template_requested = forced_template or default_template
+        use_template_builder = bool(custom_instruction) or (
+            bool(template_requested) and template_requested != "none"
+        )
+        if use_template_builder:
+            # Two callers land here:
+            #   1. custom_instruction set (digest/critique helpers) — legacy
+            #      behavior: the instruction IS the task, no YAML header forced.
+            #   2. a /template selected on the default Q&A path with no custom
+            #      instruction — honor the template's own YAML schema so the
+            #      output is a clean template-shaped document.
+            instruction = custom_instruction or (
+                "Answer the user's request by producing a document that strictly "
+                "follows the provided Markdown template. Draw the content from the "
+                "provided source text; do not add conversational framing."
+            )
             system_prompt, cap_resolution = self._build_system_prompt(
-                custom_instruction,
+                instruction,
                 forced_template=forced_template,
                 default_template=default_template,
-                require_yaml_header=False,
+                require_yaml_header=not custom_instruction,
                 persona=persona,
                 operation=operation,
             )

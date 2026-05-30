@@ -243,6 +243,47 @@ class TestAnswerQuery:
         assert "## Provided Source Text\nSOURCE BODY FROM VAULT" in captured["user_msg"]
         assert captured["kwargs"]["trace_context"]["operation"] == "answer_from_sources"
 
+    def test_forced_template_routes_through_builder_without_custom_instruction(self):
+        client = LLMClient.__new__(LLMClient)
+        captured = {}
+
+        def fake_build(instruction, **kwargs):
+            captured["instruction"] = instruction
+            captured["build_kwargs"] = kwargs
+            return "system prompt", {"template": kwargs.get("forced_template")}
+
+        client._build_system_prompt = fake_build
+        client._complete_text = lambda system_prompt, user_msg, **kw: "answer"
+
+        text = client.answer_query(
+            query_content="fill in the disclosure",
+            wiki_context="SOURCE BODY",
+            forced_template="sw-inv-disclosure-rpt",
+        )
+
+        assert text == "answer"
+        # No custom_instruction → builder is invoked with a generated task and
+        # the template's own YAML schema is honored.
+        assert captured["build_kwargs"]["forced_template"] == "sw-inv-disclosure-rpt"
+        assert captured["build_kwargs"]["require_yaml_header"] is True
+
+    def test_plain_qa_skips_builder(self):
+        def _no_builder(*a, **kw):
+            raise AssertionError("builder must not run for plain Q&A")
+
+        client = LLMClient.__new__(LLMClient)
+        client._build_system_prompt = _no_builder
+        client._load_project_identity = lambda: "IDENTITY"
+        client._get_lang_hint = lambda: "English"
+        client._complete_text = lambda system_prompt, user_msg, **kw: "plain answer"
+
+        text = client.answer_query(
+            query_content="what is ling-ling?",
+            wiki_context="",
+            forced_template="none",
+        )
+        assert text == "plain answer"
+
 
 # ── LLM tracing ─────────────────────────────────────────────────────
 

@@ -129,3 +129,61 @@ class TestPromptWatcherProcessPrompt:
         assert "efg" not in context
         assert "truncated by PromptWatcher default Q&A" in context
         assert "similar note content" in context
+
+    def test_default_qa_supports_template(self, monkeypatch, tmp_path):
+        from unittest.mock import MagicMock
+
+        # The model returns a complete template-shaped document with its own
+        # YAML frontmatter.
+        template_output = (
+            '---\ntitle: "Invention Disclosure: Foo"\n'
+            'tags: ["patent", "disclosure", "software"]\ntype: "disclosure"\n---\n\n'
+            "# Invention Disclosure (Software & Algorithm)\n"
+        )
+        mock_llm = MagicMock()
+        mock_llm.provider = "vllm"
+        mock_llm.model = "fake-model"
+        mock_llm.answer_query.return_value = template_output
+        mock_llm.current_trace_ids.return_value = []
+        mock_llm.current_run_id.return_value = None
+
+        mock_rag = MagicMock()
+        mock_rag.query_similar_notes.return_value = []
+
+        monkeypatch.setattr(
+            "watchers.prompt_watcher._resolve_source_paths",
+            MagicMock(return_value=[]),
+        )
+
+        prompt_file = tmp_path / "disclosure_req.md"
+        prompt_file.write_text(
+            "請根據 [[Automatic Case Investigator]] 的內容填入專利揭露書。\n"
+            "/template sw-inv-disclosure-rpt",
+            encoding="utf-8",
+        )
+
+        watcher = PromptWatcher(mock_llm, mock_rag)
+        monkeypatch.setattr(watcher, "_archive_raw", MagicMock())
+
+        mock_from_llm = tmp_path / "from_llm"
+        mock_from_llm.mkdir()
+        monkeypatch.setattr("watchers.prompt_watcher.FROM_LLM_DIR", mock_from_llm)
+
+        watcher.process_prompt(prompt_file)
+
+        # The parsed /template name is forwarded as forced_template.
+        assert mock_llm.answer_query.call_count == 1
+        assert (
+            mock_llm.answer_query.call_args.kwargs["forced_template"]
+            == "sw-inv-disclosure-rpt"
+        )
+
+        # Output is the template document verbatim — no chat envelope, no
+        # blockquoted query, no double frontmatter.
+        outputs = list(mock_from_llm.iterdir())
+        assert len(outputs) == 1
+        written = outputs[0].read_text(encoding="utf-8")
+        assert written.startswith('---\ntitle: "Invention Disclosure: Foo"')
+        assert "type: chat" not in written
+        assert "> 請根據" not in written
+        assert written.count("---\n") == 2  # only the template's own frontmatter

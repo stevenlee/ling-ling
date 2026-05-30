@@ -1,14 +1,14 @@
 ---
-be_a: translator
-use_template: translation-rpt
-say: Traditional Chinese
-digest_limit: 8192
+be_a: patent-expert
+use_template: sw-inv-disclosure-rpt
+say: English
+digest_limit: 32768
 digest_overlap: 1024
 dreaming_from: 3
 dreaming_to: 5
 self_healing: true
 creativity: 0.4
-max_output: 8192
+max_output: 32768
 memory_limit: 32768
 search_depth: 3
 strict_mode: true

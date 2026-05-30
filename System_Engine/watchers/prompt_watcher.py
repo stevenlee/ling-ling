@@ -275,27 +275,49 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                         context_parts.extend(relevant)
 
                     context = "\n---\n".join(context_parts) if context_parts else (INDEX_FILE.read_text('utf-8') if INDEX_FILE.exists() else "")
-                    res = self.llm.answer_query(query_content, context)
+                    
+                    forced_template = None
+                    template_match = re.search(r'/template[:\s]+([\w-]+)', lower_query)
+                    if template_match:
+                        forced_template = template_match.group(1)
+                    
+                    res = self.llm.answer_query(query_content, context, forced_template=forced_template)
                     
                     trace_ids = self.llm.current_trace_ids() if hasattr(self.llm, "current_trace_ids") else []
                     run_id = self.llm.current_run_id() if hasattr(self.llm, "current_run_id") else None
-                    trace_meta = ""
-                    if run_id or trace_ids:
-                        trace_meta = (
-                            f"run_id: {run_id or ''}\n"
-                            f"trace_ids: {trace_ids}\n"
-                        )
+                    
                     output_path = FROM_LLM_DIR / f"💌re-{filepath.stem}.md"
-                    output_path.write_text(
-                        f"---\ntitle: \"re: {filepath.stem}\"\ntype: chat\n{trace_meta}---\n\n"
-                        f"> {query_content.strip()}\n\n{res}\n",
-                        encoding='utf-8',
-                    )
+                    
+                    if forced_template:
+                        # Template path: the model emits its own YAML frontmatter
+                        # + body, so write it through verbatim rather than wrapping
+                        # it in the chat-reply envelope. Yields a clean
+                        # template-shaped document.
+                        output_path = FROM_LLM_DIR / f"📄{forced_template}-{filepath.stem}.md"
+                        body = res if res.endswith("\n") else f"{res}\n"
+                        output_path.write_text(body, encoding='utf-8')
+                        artifact_type = "report"
+                        artifact_title = f"{forced_template}: {filepath.stem}"
+                    else:
+                        trace_meta = ""
+                        if run_id or trace_ids:
+                            trace_meta = (
+                                f"run_id: {run_id or ''}\n"
+                                f"trace_ids: {trace_ids}\n"
+                            )
+                        full_content = (
+                            f"---\ntitle: \"re: {filepath.stem}\"\ntype: chat\n{trace_meta}---\n\n"
+                            f"> {query_content.strip()}\n\n{res}\n"
+                        )
+                        output_path.write_text(full_content, encoding='utf-8')
+                        artifact_type = "chat"
+                        artifact_title = f"re: {filepath.stem}"
+                    
                     if hasattr(self.llm, "trace_store"):
                         self.llm.trace_store.record_artifact(
                             path=output_path,
-                            artifact_type="chat",
-                            title=f"re: {filepath.stem}",
+                            artifact_type=artifact_type,
+                            title=artifact_title,
                             trace_id=trace_ids[-1] if trace_ids else None,
                             metadata={"run_id": run_id, "trace_ids": trace_ids},
                         )
