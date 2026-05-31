@@ -50,7 +50,7 @@ class TestUpdateWikiIndex:
         assert "[[Article A (Synthesis)]]" in output
 
         table = reading_index.read_text(encoding="utf-8")
-        assert "| [[Article A]] | reading | 5 | 3 | Start with the synthesis. |" in table
+        assert "| [[Article A (Synthesis)\\|Article A]] | reading | 5 | 3 | Start with the synthesis. |" in table
 
     def test_syncs_reading_index_article_column(self, monkeypatch, tmp_path):
         pages = tmp_path / "pages"
@@ -83,9 +83,9 @@ class TestUpdateWikiIndex:
         vault_utils.update_wiki_index(sync_reading_index=True)
 
         table = reading_index.read_text(encoding="utf-8")
-        assert "| [[Article A]] | reading | 5 |  | Keep this note. |" in table
-        assert "| [[Article B]] |  |  |  |  |" in table
-        assert "| [[Removed Article]] | skip |  |  | Old row. |" in table
+        assert "| [[Article A (Synthesis)\\|Article A]] | reading | 5 |  | Keep this note. |" in table
+        assert "| [[Article B (Synthesis)\\|Article B]] |  |  |  |  |" in table
+        assert "| [[Removed Article (Synthesis)\\|Removed Article]] | skip |  |  | Old row. |" in table
 
     def test_preserves_escaped_pipes_in_human_columns(self, monkeypatch, tmp_path):
         pages = tmp_path / "pages"
@@ -169,7 +169,7 @@ class TestUpdateWikiIndex:
         assert index.exists()
         assert reading_index.exists()
         assert "- ✍️ [[ReadingIndex]]" in index.read_text(encoding="utf-8")
-        assert "| [[Article D]] |  |  |  |  |" in reading_index.read_text(encoding="utf-8")
+        assert "| [[Article D (Synthesis)\\|Article D]] |  |  |  |  |" in reading_index.read_text(encoding="utf-8")
 
     def test_update_wiki_index_does_not_rewrite_reading_index_by_default(self, monkeypatch, tmp_path):
         pages = tmp_path / "pages"
@@ -218,7 +218,7 @@ class TestUpdateWikiIndex:
         vault_utils.ensure_wiki_indexes()
 
         table = reading_index.read_text(encoding="utf-8")
-        assert "| [[Article F]] |  |  |  |  |" in table
+        assert "| [[Article F (Synthesis)\\|Article F]] |  |  |  |  |" in table
         assert "[[input]]" not in table
 
     def test_sync_reading_index_aborts_on_header_typo(self, monkeypatch, tmp_path):
@@ -281,7 +281,7 @@ class TestUpdateWikiIndex:
         vault_utils.ensure_wiki_indexes()
 
         table = reading_index.read_text(encoding="utf-8")
-        assert "[[Article H]]" in table
+        assert "[[Article H (Synthesis)\\|Article H]]" in table
         assert "Old Empty Article" not in table
 
     def test_sync_reading_index_skips_write_when_article_order_is_current(self, monkeypatch, tmp_path):
@@ -305,8 +305,8 @@ class TestUpdateWikiIndex:
             "- Comment: short human note for deciding what to read next\n\n"
             "| Article | Stat | Re | Im | Comment |\n"
             "| --- | --- | --- | --- | --- |\n"
-            "| [[Article I]] | reading | 5 |  | User changed this directly. |\n"
-            "| [[Article J]] |  |  |  |  |\n"
+            "| [[Article I (Synthesis)\\|Article I]] | reading | 5 |  | User changed this directly. |\n"
+            "| [[Article J (Synthesis)\\|Article J]] |  |  |  |  |\n"
         )
         reading_index.write_text(original, encoding="utf-8")
 
@@ -343,7 +343,7 @@ class TestUpdateWikiIndex:
         vault_utils.ensure_wiki_indexes()
 
         table = reading_index.read_text(encoding="utf-8")
-        assert "| [[Article K]] |  |  |  |  |" in table
+        assert "| [[Article K (Synthesis)\\|Article K]] |  |  |  |  |" in table
 
     def test_sync_reading_index_migrates_old_schema(self, monkeypatch, tmp_path):
         pages = tmp_path / "pages"
@@ -379,7 +379,7 @@ class TestUpdateWikiIndex:
         # Assert that it was rewritten to the new 5-column layout
         assert "| Article | Stat | Re | Im | Comment |" in table
         # Assert that priority, progress, updated are discarded, and others are migrated
-        assert "| [[Article M]] | reading | 5 | 3 | Migrate this note. |" in table
+        assert "| [[Article M (Synthesis)\\|Article M]] | reading | 5 | 3 | Migrate this note. |" in table
 
     def test_sync_reading_index_migrates_custom_5_column_schema(self, monkeypatch, tmp_path):
         pages = tmp_path / "pages"
@@ -415,5 +415,5 @@ class TestUpdateWikiIndex:
         # Assert it was rewritten to standard 5-column layout
         assert "| Article | Stat | Re | Im | Comment |" in table
         # Assert the Status, Im, Re columns were mapped and aligned correctly
-        assert "| [[Article N]] | reading | 5 | 4 | Custom 5-column note. |" in table
+        assert "| [[Article N (Synthesis)\\|Article N]] | reading | 5 | 4 | Custom 5-column note. |" in table
 

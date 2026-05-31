@@ -151,7 +151,10 @@ def _title_from_article_cell(value: str) -> str:
     match = re.search(r"\[\[(.*?)\]\]", value)
     if match:
         value = match.group(1)
-    return value.split("|", 1)[0].strip()
+    title = value.split("|", 1)[0].strip()
+    if title.endswith(" (Synthesis)"):
+        title = title[:-12]
+    return title
 
 
 def _load_reading_index() -> tuple[dict, bool, bool]:
@@ -226,8 +229,6 @@ def _sync_reading_index(article_titles: list[str]):
 
     all_titles = set(article_titles) | {title for title, annotation in existing.items() if annotation}
     sorted_titles = sorted(all_titles, key=_natural_sort_key)
-    if list(existing.keys()) == sorted_titles and schema_matched:
-        return
 
     lines = _READING_INDEX_INTRO + [
         "| " + " | ".join(_READING_INDEX_COLUMNS) + " |",
@@ -235,7 +236,7 @@ def _sync_reading_index(article_titles: list[str]):
     ]
     for title in sorted_titles:
         annotation = existing.get(title, {})
-        cells = [f"[[{_table_cell(title)}]]"]
+        cells = [f"[[{_table_cell(title)} (Synthesis)\\|{_table_cell(title)}]]"]
         for header in _READING_INDEX_COLUMNS[1:]:
             cells.append(_table_cell(annotation.get(_READING_KEY_MAP[header], "")))
         lines.append("| " + " | ".join(cells) + " |")
