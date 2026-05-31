@@ -380,3 +380,40 @@ class TestUpdateWikiIndex:
         assert "| Article | Stat | Re | Im | Comment |" in table
         # Assert that priority, progress, updated are discarded, and others are migrated
         assert "| [[Article M]] | reading | 5 | 3 | Migrate this note. |" in table
+
+    def test_sync_reading_index_migrates_custom_5_column_schema(self, monkeypatch, tmp_path):
+        pages = tmp_path / "pages"
+        notes = tmp_path / "Notes"
+        raw = tmp_path / "raw" / "consolidate"
+        index = tmp_path / "index.md"
+        reading_index = tmp_path / "ReadingIndex.md"
+
+        article_dir = pages / "Article N"
+        article_dir.mkdir(parents=True)
+        notes.mkdir()
+        raw.mkdir(parents=True)
+        (article_dir / "Article N.md").write_text("Body", encoding="utf-8")
+
+        # Write custom 5-column layout: Status | Im | Re | Comment
+        reading_index.write_text(
+            "# ReadingIndex\n\n"
+            "| Article | Status | Im | Re | Comment |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| [[Article N]] | reading | 4 | 5 | Custom 5-column note. |\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(vault_utils, "PAGES_DIR", pages)
+        monkeypatch.setattr(vault_utils, "NOTES_DIR", notes)
+        monkeypatch.setattr(vault_utils, "RAW_CONSOLIDATE_DIR", raw)
+        monkeypatch.setattr(vault_utils, "INDEX_FILE", index)
+        monkeypatch.setattr(vault_utils, "READING_INDEX_FILE", reading_index)
+
+        vault_utils.ensure_wiki_indexes()
+
+        table = reading_index.read_text(encoding="utf-8")
+        # Assert it was rewritten to standard 5-column layout
+        assert "| Article | Stat | Re | Im | Comment |" in table
+        # Assert the Status, Im, Re columns were mapped and aligned correctly
+        assert "| [[Article N]] | reading | 5 | 4 | Custom 5-column note. |" in table
+

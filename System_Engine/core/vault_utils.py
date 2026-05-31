@@ -179,6 +179,12 @@ def _load_reading_index() -> tuple[dict, bool, bool]:
             allowed_schemas = [
                 ["Article", "Stat", "Re", "Im", "Comment"],
                 ["Article", "Stat", "Re", "Im", "Comments"],
+                ["Article", "Stat", "Im", "Re", "Comment"],
+                ["Article", "Stat", "Im", "Re", "Comments"],
+                ["Article", "Status", "Re", "Im", "Comment"],
+                ["Article", "Status", "Re", "Im", "Comments"],
+                ["Article", "Status", "Im", "Re", "Comment"],
+                ["Article", "Status", "Im", "Re", "Comments"],
                 ["Article", "Status", "Priority", "Importance", "Relevance", "Progress", "Comment", "Updated"],
                 ["Article", "Status", "Priority", "Importance", "Relevance", "Progress", "Comments", "Updated"],
             ]
