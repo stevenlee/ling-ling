@@ -82,10 +82,11 @@ class _FakeLLM:
         self.synthesize_calls = []
         self.critique_calls = []
 
-    def generate_synthesis(self, *, title, part_digests, final_concepts, template=None):
+    def generate_synthesis(self, *, title, part_digests, final_concepts, template=None, **kwargs):
         self.synthesize_calls.append({
             "title": title, "part_digests": part_digests,
             "final_concepts": final_concepts, "template": template,
+            **kwargs,
         })
         if self.synthesize_raises:
             raise self.synthesize_raises

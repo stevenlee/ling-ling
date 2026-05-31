@@ -595,12 +595,13 @@ class _FakeLLM:
         self.answer_calls: list[dict] = []
         self.digest_calls: list[dict] = []
 
-    def generate_synthesis(self, *, title, part_digests, final_concepts, template=None):
+    def generate_synthesis(self, *, title, part_digests, final_concepts, template=None, **kwargs):
         self.synthesis_calls.append({
             "title": title,
             "part_digests": part_digests,
             "final_concepts": final_concepts,
             "template": template,
+            **kwargs,
         })
         return f"SYNTH({title}|{len(part_digests)} parts)"
 

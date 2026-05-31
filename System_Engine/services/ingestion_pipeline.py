@@ -21,6 +21,7 @@ from core.config import (
     THOUGHTFUL_EMIT_SUMMARY,
     THOUGHTFUL_USE_LLM_FOR_INGEST,
     USE_THOUGHTFUL_SPLITTER,
+    settings,
 )
 from core.parser import (
     dump_markdown_with_metadata,
@@ -74,10 +75,50 @@ class IngestionPipeline:
     # ── Public entry points ──────────────────────────────────────────
 
     def ingest_markdown(self, content: str, source_filepath: Path):
-        if len(content) > self.splitter.chunk_size + 1000:
-            self._ingest_long_document(content, source_filepath, source_filepath.stem)
+        meta = parse_markdown_metadata(content)
+        
+        # Determine document type
+        doc_type = meta.get("document_type") or meta.get("type")
+        if not doc_type:
+            filename_lower = source_filepath.name.lower()
+            content_lower = content.lower()
+            if filename_lower.startswith(("us", "ep", "jp", "cn")) or "patent" in filename_lower:
+                doc_type = "patent"
+            elif "claims" in content_lower and "prior art" in content_lower:
+                doc_type = "patent"
+            elif "abstract" in content_lower and "introduction" in content_lower:
+                doc_type = "paper"
+            else:
+                doc_type = "default"
         else:
-            self.ingest_to_wiki(content, source_filepath)
+            doc_type = str(doc_type).lower()
+
+        # Resolve personas and templates
+        ingest_persona = meta.get("ingest_persona") or "translator"
+        ingest_template = meta.get("ingest_template") or "translation-rpt"
+        
+        if doc_type == "patent":
+            synthesis_persona = meta.get("synthesis_persona") or "patent-expert"
+            synthesis_template = meta.get("synthesis_template") or "sw-inv-disclosure-rpt"
+        elif doc_type in ("paper", "research", "academic"):
+            synthesis_persona = meta.get("synthesis_persona") or "researcher"
+            synthesis_template = meta.get("synthesis_template") or "research-rpt"
+        else:
+            synthesis_persona = meta.get("synthesis_persona") or settings.AGENT_ROLE or "none"
+            synthesis_template = meta.get("synthesis_template") or settings.USE_TEMPLATE or "wiki-note"
+            
+        doc_config = {
+            "ingest_persona": ingest_persona,
+            "ingest_template": ingest_template,
+            "synthesis_persona": synthesis_persona,
+            "synthesis_template": synthesis_template,
+            "doc_type": doc_type,
+        }
+
+        if len(content) > self.splitter.chunk_size + 1000:
+            self._ingest_long_document(content, source_filepath, source_filepath.stem, doc_config=doc_config)
+        else:
+            self.ingest_to_wiki(content, source_filepath, doc_config=doc_config)
 
     def ingest_to_wiki(
         self,
@@ -85,6 +126,7 @@ class IngestionPipeline:
         source_filepath: Path,
         llm_result: dict | None = None,
         part_info: dict | None = None,
+        doc_config: dict | None = None,
     ):
         """Convert raw content into one wiki page.
 
@@ -98,11 +140,22 @@ class IngestionPipeline:
                 index_content = (part_info or {}).get("index_content")
                 if index_content is None:
                     index_content = INDEX_FILE.read_text(encoding="utf-8") if INDEX_FILE.exists() else ""
+                
+                # Resolve dynamic persona/template:
+                if part_info:
+                    persona = part_info.get("ingest_persona", "translator")
+                    template = part_info.get("ingest_template", "translation-rpt")
+                else:
+                    persona = (doc_config or {}).get("synthesis_persona") or settings.AGENT_ROLE or "none"
+                    template = (doc_config or {}).get("synthesis_template") or settings.USE_TEMPLATE or "wiki-note"
+
                 llm_result = self.llm.generate_entity_page(
                     raw_content,
                     source_filepath.name,
                     index_content,
                     context_hint=context_hint,
+                    persona=persona,
+                    forced_template=template,
                 )
                 if not llm_result:
                     raise ValueError("LLM generation failed.")
@@ -205,7 +258,7 @@ class IngestionPipeline:
 
     # ── Long-document pipeline ──────────────────────────────────────
 
-    def _ingest_long_document(self, content: str, source_filepath: Path, base_title: str):
+    def _ingest_long_document(self, content: str, source_filepath: Path, base_title: str, doc_config: dict | None = None):
         chunk_spans = self.splitter.split_text_with_spans(content)
         chunks = [s["text"] for s in chunk_spans]
         source_spans = [self._source_span_for_chunk(content, span, i + 1) for i, span in enumerate(chunk_spans)]
@@ -220,7 +273,7 @@ class IngestionPipeline:
         # keys simply aren't present and `_process_parts` falls back to "".
         part_state = self._process_parts(
             chunks, source_spans, source_filepath, base_title, index_content,
-            chunk_metas=chunk_spans,
+            chunk_metas=chunk_spans, doc_config=doc_config,
         )
 
         ui.set_status(f"Stitching: {base_title}...")
@@ -243,6 +296,7 @@ class IngestionPipeline:
             chunks=chunks,
             source_spans=source_spans,
             part_state=part_state,
+            doc_config=doc_config,
         )
 
         # Single index rebuild at the very end of the long-doc run, covering
@@ -257,6 +311,7 @@ class IngestionPipeline:
         base_title: str,
         index_content: str,
         chunk_metas: list[dict] | None = None,
+        doc_config: dict | None = None,
     ) -> dict:
         master_tags: list = []
         pending_concepts = ""
@@ -290,6 +345,9 @@ class IngestionPipeline:
                 # Optional metadata from ThoughtfulSplitter (empty under legacy splitter):
                 "section_path": chunk_meta.get("section_path") or [],
                 "boundary_type": chunk_meta.get("boundary_type") or "",
+                # Configurable ingest persona and template:
+                "ingest_persona": (doc_config or {}).get("ingest_persona", "translator"),
+                "ingest_template": (doc_config or {}).get("ingest_template", "translation-rpt"),
             }
             result = self.ingest_to_wiki(chunk, source_filepath, part_info=part_info)
             if not result:
@@ -334,13 +392,19 @@ class IngestionPipeline:
         chunks: list[str],
         source_spans: list[dict],
         part_state: dict,
+        doc_config: dict | None = None,
     ) -> Path:
         from core.version import VERSION
+
+        syn_persona = (doc_config or {}).get("synthesis_persona", "none")
+        syn_template = (doc_config or {}).get("synthesis_template") or settings.USE_TEMPLATE or "wiki-note"
 
         synthesis_text = self.llm.generate_synthesis(
             base_title,
             part_state["part_digests"],
             part_state["pending_concepts"],
+            template=syn_template,
+            persona=syn_persona,
         )
         synthesis_text, synthesis_fixes = run_markdown_quality_checks(synthesis_text, strip_frontmatter=True)
 
