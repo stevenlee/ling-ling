@@ -313,6 +313,7 @@ class TestEndToEndIngestion:
         monkeypatch.setattr(vu_mod, "PAGES_DIR", pages)
         monkeypatch.setattr(vu_mod, "NOTES_DIR", notes)
         monkeypatch.setattr(vu_mod, "INDEX_FILE", index)
+        monkeypatch.setattr(vu_mod, "READING_INDEX_FILE", tmp_path / "ReadingIndex.md")
 
 
 # ─── ChromaDB metadata format ───────────────────────────────────────

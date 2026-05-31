@@ -138,7 +138,7 @@ class IngestionPipeline:
             # Long-doc parts pass `defer_index=True` so we only rebuild the
             # wiki index once at the end of the run, not per part.
             if not (part_info and part_info.get("defer_index")):
-                update_wiki_index(page_path, title)
+                update_wiki_index(page_path, title, sync_reading_index=True)
 
             llm_result["_page_path"] = str(page_path)
             llm_result["_title"] = title
@@ -247,7 +247,7 @@ class IngestionPipeline:
 
         # Single index rebuild at the very end of the long-doc run, covering
         # every part + stitched + synthesis we just wrote.
-        update_wiki_index(synthesis_file, base_title)
+        update_wiki_index(synthesis_file, base_title, sync_reading_index=True)
 
     def _process_parts(
         self,
