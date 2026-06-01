@@ -46,6 +46,27 @@ class FakeLLM:
     def critique_text(self, candidate, sources, focus=None):
         return "Overall Verdict: keep"
 
+    def classify_document(self, filename, content_prefix):
+        filename_lower = filename.lower()
+        content_lower = content_prefix.lower()
+        if filename_lower.startswith(("us", "ep", "jp", "cn")) or "patent" in filename_lower:
+            return "patent"
+        elif "claims" in content_lower and "prior art" in content_lower:
+            return "patent"
+        elif "abstract" in content_lower and "introduction" in content_lower:
+            return "paper"
+        elif "novel" in filename_lower or "novel" in content_lower:
+            return "novel"
+        return "default"
+
+    def generate_persona_and_template(self, category):
+        return {
+            "persona_name": f"{category}-assistant",
+            "persona_content": f"# {category.capitalize()} Assistant\nFake guidelines for {category}",
+            "template_name": f"{category}-summary",
+            "template_content": f"# {category.capitalize()} Summary\nFake structure for {category}"
+        }
+
 
 class FakeRAG:
     def __init__(self):
@@ -70,14 +91,19 @@ class TestDynamicPipeline:
         monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
         monkeypatch.setattr(pipeline, "rag", rag)
 
+        # Mock out paths to keep tests isolated
+        scripture_dir = tmp_path / "Scripture"
+        scripture_dir.mkdir()
+        monkeypatch.setattr("services.ingestion_pipeline.SCRIPTURE_DIR", scripture_dir)
+        monkeypatch.setattr("services.ingestion_pipeline.PERSONAS_DIR", scripture_dir / "Personas")
+        monkeypatch.setattr("services.ingestion_pipeline.TEMPLATES_DIR", tmp_path / "Templates")
+
         # Content has claims and prior art
         content = "This describes an invention.\n\nClaims\n1. A device...\n\nPrior Art\nExisting systems..."
         source_file = tmp_path / "MyPatent.md"
         source_file.write_text(content)
 
         monkeypatch.setattr("services.ingestion_pipeline.update_wiki_index", MagicMock())
-
-        # Direct patching of config/settings directories to temp dirs
         monkeypatch.setattr("services.ingestion_pipeline.PAGES_DIR", tmp_path / "pages")
         monkeypatch.setattr("services.ingestion_pipeline.INDEX_FILE", tmp_path / "index.md")
 
@@ -87,7 +113,7 @@ class TestDynamicPipeline:
         assert len(llm.generate_entity_page_calls) == 1
         call = llm.generate_entity_page_calls[0]
         assert call["persona"] == "patent-expert"
-        assert call["forced_template"] == "sw-inv-disclosure-rpt"
+        assert call["forced_template"] == "patent-rpt"
 
     def test_short_doc_paper_auto_detection_by_filename(self, monkeypatch, tmp_path, fake_services):
         llm, rag = fake_services
@@ -96,13 +122,19 @@ class TestDynamicPipeline:
         monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
         monkeypatch.setattr(pipeline, "rag", rag)
 
+        # Mock out paths
+        scripture_dir = tmp_path / "Scripture"
+        scripture_dir.mkdir()
+        monkeypatch.setattr("services.ingestion_pipeline.SCRIPTURE_DIR", scripture_dir)
+        monkeypatch.setattr("services.ingestion_pipeline.PERSONAS_DIR", scripture_dir / "Personas")
+        monkeypatch.setattr("services.ingestion_pipeline.TEMPLATES_DIR", tmp_path / "Templates")
+
         # Filename starts with US -> should be patent
         content = "Standard paper."
         source_file = tmp_path / "US9876543.md"
         source_file.write_text(content)
 
         monkeypatch.setattr("services.ingestion_pipeline.update_wiki_index", MagicMock())
-
         monkeypatch.setattr("services.ingestion_pipeline.PAGES_DIR", tmp_path / "pages")
         monkeypatch.setattr("services.ingestion_pipeline.INDEX_FILE", tmp_path / "index.md")
 
@@ -111,7 +143,7 @@ class TestDynamicPipeline:
         assert len(llm.generate_entity_page_calls) == 1
         call = llm.generate_entity_page_calls[0]
         assert call["persona"] == "patent-expert"
-        assert call["forced_template"] == "sw-inv-disclosure-rpt"
+        assert call["forced_template"] == "patent-rpt"
 
     def test_short_doc_frontmatter_overrides(self, monkeypatch, tmp_path, fake_services):
         llm, rag = fake_services
@@ -120,12 +152,18 @@ class TestDynamicPipeline:
         monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
         monkeypatch.setattr(pipeline, "rag", rag)
 
+        # Mock out paths
+        scripture_dir = tmp_path / "Scripture"
+        scripture_dir.mkdir()
+        monkeypatch.setattr("services.ingestion_pipeline.SCRIPTURE_DIR", scripture_dir)
+        monkeypatch.setattr("services.ingestion_pipeline.PERSONAS_DIR", scripture_dir / "Personas")
+        monkeypatch.setattr("services.ingestion_pipeline.TEMPLATES_DIR", tmp_path / "Templates")
+
         content = "---\ndocument_type: paper\nsynthesis_persona: super-analyst\nsynthesis_template: custom-rpt\n---\nSome body"
         source_file = tmp_path / "paper.md"
         source_file.write_text(content)
 
         monkeypatch.setattr("services.ingestion_pipeline.update_wiki_index", MagicMock())
-
         monkeypatch.setattr("services.ingestion_pipeline.PAGES_DIR", tmp_path / "pages")
         monkeypatch.setattr("services.ingestion_pipeline.INDEX_FILE", tmp_path / "index.md")
 
@@ -144,17 +182,21 @@ class TestDynamicPipeline:
         monkeypatch.setattr(pipeline.splitter, "chunk_size", 20)
         monkeypatch.setattr(pipeline, "rag", rag)
 
+        # Mock out paths
+        scripture_dir = tmp_path / "Scripture"
+        scripture_dir.mkdir()
+        monkeypatch.setattr("services.ingestion_pipeline.SCRIPTURE_DIR", scripture_dir)
+        monkeypatch.setattr("services.ingestion_pipeline.PERSONAS_DIR", scripture_dir / "Personas")
+        monkeypatch.setattr("services.ingestion_pipeline.TEMPLATES_DIR", tmp_path / "Templates")
+
         content = "US Patent Document\n\nClaims\nPrior Art\n" + ("Part content section. " * 100)
         source_file = tmp_path / "US_Patent_Long.md"
         source_file.write_text(content)
 
         monkeypatch.setattr("services.ingestion_pipeline.update_wiki_index", MagicMock())
-
         pages_dir = tmp_path / "pages"
         monkeypatch.setattr("services.ingestion_pipeline.PAGES_DIR", pages_dir)
         monkeypatch.setattr("services.ingestion_pipeline.INDEX_FILE", tmp_path / "index.md")
-
-        # Mock out the critique enabled to false to avoid complexity
         monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", False)
 
         pipeline.ingest_markdown(content, source_file)
@@ -165,8 +207,86 @@ class TestDynamicPipeline:
             assert call["persona"] == "translator"
             assert call["forced_template"] == "translation-rpt"
 
-        # For final synthesis, it should use patent-expert/sw-inv-disclosure-rpt based on US prefix
+        # For final synthesis, it should use patent-expert/patent-rpt based on US prefix
         assert len(llm.generate_synthesis_calls) == 1
         syn_call = llm.generate_synthesis_calls[0]
         assert syn_call["persona"] == "patent-expert"
-        assert syn_call["template"] == "sw-inv-disclosure-rpt"
+        assert syn_call["template"] == "patent-rpt"
+
+    def test_doctype_table_registry_lifecycle(self, monkeypatch, tmp_path, fake_services):
+        llm, rag = fake_services
+        pipeline = IngestionPipeline(llm, rag)
+
+        scripture_dir = tmp_path / "Scripture"
+        scripture_dir.mkdir()
+        monkeypatch.setattr("services.ingestion_pipeline.SCRIPTURE_DIR", scripture_dir)
+
+        # File does not exist initially, load mapping should create it and return defaults
+        mappings = pipeline.load_doctype_mappings()
+        assert "patent" in mappings
+        assert mappings["patent"]["persona"] == "patent-expert"
+        assert mappings["patent"]["template"] == "patent-rpt"
+
+        doctype_file = scripture_dir / "DocType.md"
+        assert doctype_file.exists()
+
+        # Register a new type
+        pipeline.register_doctype("novel", "novel-assistant", "novel-summary", "Custom Novel layout")
+        
+        # Load again and check it's registered
+        updated_mappings = pipeline.load_doctype_mappings()
+        assert "novel" in updated_mappings
+        assert updated_mappings["novel"]["persona"] == "novel-assistant"
+        assert updated_mappings["novel"]["template"] == "novel-summary"
+        assert updated_mappings["novel"]["description"] == "Custom Novel layout"
+
+    def test_unregistered_category_dynamic_growth(self, monkeypatch, tmp_path, fake_services):
+        llm, rag = fake_services
+        pipeline = IngestionPipeline(llm, rag)
+
+        monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
+        monkeypatch.setattr(pipeline, "rag", rag)
+
+        scripture_dir = tmp_path / "Scripture"
+        personas_dir = scripture_dir / "Personas"
+        templates_dir = tmp_path / "Templates"
+        
+        scripture_dir.mkdir()
+        personas_dir.mkdir()
+        templates_dir.mkdir()
+
+        monkeypatch.setattr("services.ingestion_pipeline.SCRIPTURE_DIR", scripture_dir)
+        monkeypatch.setattr("services.ingestion_pipeline.PERSONAS_DIR", personas_dir)
+        monkeypatch.setattr("services.ingestion_pipeline.TEMPLATES_DIR", templates_dir)
+
+        monkeypatch.setattr("services.ingestion_pipeline.update_wiki_index", MagicMock())
+        monkeypatch.setattr("services.ingestion_pipeline.PAGES_DIR", tmp_path / "pages")
+        monkeypatch.setattr("services.ingestion_pipeline.INDEX_FILE", tmp_path / "index.md")
+
+        # Ingest novel document, LLM will classify it as "novel"
+        content = "This is a story about ling-ling the cute assistant in a fantasy land."
+        source_file = tmp_path / "novel_clipping.md"
+        
+        pipeline.ingest_markdown(content, source_file)
+
+        # Check that files were dynamically written to the directories
+        expected_persona_file = personas_dir / "novel-assistant.md"
+        expected_template_file = templates_dir / "novel-summary.md"
+
+        assert expected_persona_file.exists()
+        assert expected_template_file.exists()
+
+        assert "Fake guidelines for novel" in expected_persona_file.read_text()
+        assert "Fake structure for novel" in expected_template_file.read_text()
+
+        # Check that the mapping was written to DocType.md table
+        mappings = pipeline.load_doctype_mappings()
+        assert "novel" in mappings
+        assert mappings["novel"]["persona"] == "novel-assistant"
+        assert mappings["novel"]["template"] == "novel-summary"
+
+        # Check that the ingested page used the dynamically created persona and template
+        assert len(llm.generate_entity_page_calls) == 1
+        call = llm.generate_entity_page_calls[0]
+        assert call["persona"] == "novel-assistant"
+        assert call["forced_template"] == "novel-summary"

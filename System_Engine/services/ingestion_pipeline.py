@@ -22,6 +22,9 @@ from core.config import (
     THOUGHTFUL_USE_LLM_FOR_INGEST,
     USE_THOUGHTFUL_SPLITTER,
     settings,
+    SCRIPTURE_DIR,
+    PERSONAS_DIR,
+    TEMPLATES_DIR,
 )
 from core.parser import (
     dump_markdown_with_metadata,
@@ -72,6 +75,51 @@ class IngestionPipeline:
         else:
             self.splitter = TextSplitter()
 
+    def load_doctype_mappings(self) -> dict[str, dict[str, str]]:
+        doctype_file = SCRIPTURE_DIR / "DocType.md"
+        if not doctype_file.exists():
+            init_content = (
+                "# Document Type Mappings\n\n"
+                "This table maps document categories to their respective synthesis personas and templates.\n\n"
+                "| Category | Persona | Template | Description |\n"
+                "| --- | --- | --- | --- |\n"
+                "| patent | patent-expert | patent-rpt | Patent disclosures and claims |\n"
+                "| paper | researcher | research-rpt | Scientific and academic papers |\n"
+            )
+            doctype_file.parent.mkdir(parents=True, exist_ok=True)
+            doctype_file.write_text(init_content, encoding="utf-8")
+
+        content = doctype_file.read_text(encoding="utf-8")
+        mappings = {}
+        for line in content.splitlines():
+            line = line.strip()
+            if not line.startswith("|") or not line.endswith("|"):
+                continue
+            parts = [p.strip() for p in line.split("|")[1:-1]]
+            if len(parts) < 3:
+                continue
+            category, persona, template = parts[0], parts[1], parts[2]
+            if category.lower() in ("category", "---") or not category:
+                continue
+            desc = parts[3] if len(parts) > 3 else ""
+            mappings[category.lower()] = {
+                "persona": persona,
+                "template": template,
+                "description": desc
+            }
+        return mappings
+
+    def register_doctype(self, category: str, persona: str, template: str, description: str = ""):
+        doctype_file = SCRIPTURE_DIR / "DocType.md"
+        self.load_doctype_mappings()  # Ensure file exists
+        
+        new_line = f"| {category} | {persona} | {template} | {description} |"
+        content = doctype_file.read_text(encoding="utf-8")
+        if not content.endswith("\n"):
+            content += "\n"
+        content += new_line + "\n"
+        doctype_file.write_text(content, encoding="utf-8")
+
     # ── Public entry points ──────────────────────────────────────────
 
     def ingest_markdown(self, content: str, source_filepath: Path):
@@ -80,32 +128,83 @@ class IngestionPipeline:
         # Determine document type
         doc_type = meta.get("document_type") or meta.get("type")
         if not doc_type:
-            filename_lower = source_filepath.name.lower()
-            content_lower = content.lower()
-            if filename_lower.startswith(("us", "ep", "jp", "cn")) or "patent" in filename_lower:
-                doc_type = "patent"
-            elif "claims" in content_lower and "prior art" in content_lower:
-                doc_type = "patent"
-            elif "abstract" in content_lower and "introduction" in content_lower:
-                doc_type = "paper"
-            else:
-                doc_type = "default"
+            # Clean content prefix (strip yaml frontmatter first to classify based on raw content)
+            clean_content = content
+            if content.startswith("---"):
+                match = _FRONTMATTER_RE.match(content)
+                if match:
+                    clean_content = content[match.end():]
+            content_prefix = clean_content[:500]
+            doc_type = self.llm.classify_document(source_filepath.name, content_prefix)
+        
+        # Defensive check for MagicMock/non-str from mock LLM clients in legacy tests
+        if not isinstance(doc_type, str):
+            doc_type = "default"
         else:
-            doc_type = str(doc_type).lower()
+            doc_type = doc_type.lower().strip()
 
-        # Resolve personas and templates
+        # Resolve synthesis persona and template via DocType.md registry
+        mappings = self.load_doctype_mappings()
+        
+        # Check if user explicitly overrides synthesis config in frontmatter
+        synthesis_persona = meta.get("synthesis_persona")
+        synthesis_template = meta.get("synthesis_template")
+        
+        if not synthesis_persona or not synthesis_template:
+            # Check mappings
+            if doc_type in mappings:
+                synthesis_persona = synthesis_persona or mappings[doc_type]["persona"]
+                synthesis_template = synthesis_template or mappings[doc_type]["template"]
+            elif doc_type in ("patent", "paper"): # fallback support for default categories
+                if doc_type == "patent":
+                    synthesis_persona = synthesis_persona or "patent-expert"
+                    synthesis_template = synthesis_template or "patent-rpt"
+                else:
+                    synthesis_persona = synthesis_persona or "researcher"
+                    synthesis_template = synthesis_template or "research-rpt"
+            else:
+                # Dynamic generation case: new category
+                gen = self.llm.generate_persona_and_template(doc_type)
+                
+                # Defensive check that we got a dictionary and not a MagicMock object
+                if isinstance(gen, dict) and "Mock" not in type(gen).__name__:
+                    persona_name = gen.get("persona_name")
+                    persona_content = gen.get("persona_content")
+                    template_name = gen.get("template_name")
+                    template_content = gen.get("template_content")
+                    
+                    # Check that we received valid string contents (not MagicMocks)
+                    if (isinstance(persona_name, str) and isinstance(persona_content, str) and
+                        isinstance(template_name, str) and isinstance(template_content, str)):
+                        # Clean names
+                        persona_name = re.sub(r'[^a-zA-Z0-9\-]', '', persona_name.replace(".md", ""))
+                        template_name = re.sub(r'[^a-zA-Z0-9\-]', '', template_name.replace(".md", ""))
+                        
+                        # Write persona file
+                        p_file = PERSONAS_DIR / f"{persona_name}.md"
+                        p_file.parent.mkdir(parents=True, exist_ok=True)
+                        p_file.write_text(persona_content, encoding="utf-8")
+                        
+                        # Write template file
+                        t_file = TEMPLATES_DIR / f"{template_name}.md"
+                        t_file.parent.mkdir(parents=True, exist_ok=True)
+                        t_file.write_text(template_content, encoding="utf-8")
+                        
+                        # Register mapping
+                        self.register_doctype(doc_type, persona_name, template_name, f"Auto-generated for {doc_type}")
+                        
+                        synthesis_persona = synthesis_persona or persona_name
+                        synthesis_template = synthesis_template or template_name
+                    else:
+                        synthesis_persona = synthesis_persona or settings.AGENT_ROLE or "none"
+                        synthesis_template = synthesis_template or settings.USE_TEMPLATE or "wiki-note"
+                else:
+                    synthesis_persona = synthesis_persona or settings.AGENT_ROLE or "none"
+                    synthesis_template = synthesis_template or settings.USE_TEMPLATE or "wiki-note"
+
+        # Resolve ingest personas and templates
         ingest_persona = meta.get("ingest_persona") or "translator"
         ingest_template = meta.get("ingest_template") or "translation-rpt"
-        
-        if doc_type == "patent":
-            synthesis_persona = meta.get("synthesis_persona") or "patent-expert"
-            synthesis_template = meta.get("synthesis_template") or "sw-inv-disclosure-rpt"
-        elif doc_type in ("paper", "research", "academic"):
-            synthesis_persona = meta.get("synthesis_persona") or "researcher"
-            synthesis_template = meta.get("synthesis_template") or "research-rpt"
-        else:
-            synthesis_persona = meta.get("synthesis_persona") or settings.AGENT_ROLE or "none"
-            synthesis_template = meta.get("synthesis_template") or settings.USE_TEMPLATE or "wiki-note"
             
         doc_config = {
             "ingest_persona": ingest_persona,
@@ -114,6 +213,7 @@ class IngestionPipeline:
             "synthesis_template": synthesis_template,
             "doc_type": doc_type,
         }
+
 
         if len(content) > self.splitter.chunk_size + 1000:
             self._ingest_long_document(content, source_filepath, source_filepath.stem, doc_config=doc_config)

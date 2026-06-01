@@ -1297,3 +1297,77 @@ class LLMClient:
             valid.append(idx)
         valid.sort()
         return valid[:2]
+
+    # ─── Dynamic Routing (Option C) ───────────────────────────────────
+
+    def classify_document(self, filename: str, content_prefix: str) -> str:
+        """Analyze the filename and content prefix to classify it into a category.
+
+        Returns:
+            A lowercase word like 'patent', 'paper', 'novel', etc.
+        """
+        system_prompt = (
+            "You are an expert document classifier.\n"
+            "Analyze the filename and the first 500 characters of the document content to classify it into a category.\n"
+            "Examples of common categories: patent, paper, novel, finance, medical, legal, tutorial.\n"
+            "If it matches a common category, output that category. Otherwise, determine a single-word lowercase category (slug) that best fits the document (e.g., 'recipe', 'diary').\n\n"
+            "Return ONLY the category name as a single lowercase word (no punctuation, no markdown, no spaces)."
+        )
+        user_msg = f"Filename: {filename}\nContent prefix:\n{content_prefix}"
+        try:
+            raw = self._complete_text(
+                system_prompt=system_prompt,
+                user_msg=user_msg,
+                temperature=0.0,
+                max_tokens=20,
+                trace_context={
+                    "stage": "classify_document",
+                    "metadata": {"filename": filename},
+                },
+            )
+            # Clean response to ensure only lowercase alphanumeric characters (and hyphen) are returned.
+            category = raw.strip().lower()
+            category = re.sub(r'[^a-z0-9\-]', '', category)
+            return category or "default"
+        except Exception as e:
+            logging.warning(f"classify_document LLM call failed: {e}")
+            return "default"
+
+    def generate_persona_and_template(self, category: str) -> dict:
+        """Dynamically generate a Persona note and a Markdown Template for a new document category.
+
+        Returns:
+            A dict with 'persona_name', 'persona_content', 'template_name', and 'template_content'.
+        """
+        system_prompt = (
+            "We need to dynamically generate a Persona note and a Markdown Template for a new document category: \"{category}\".\n\n"
+            "1. Persona: A markdown document defining the role, traits, and guidelines for an AI agent handling this type of document.\n"
+            "2. Template: A markdown template detailing the structure, sections, and layout of the synthesized output for this type of document.\n\n"
+            "Generate BOTH. Output MUST be valid JSON with the following structure:\n"
+            "{{\n"
+            "    \"persona_name\": \"Suggested filename for persona, e.g., 'novel-assistant' (use lowercase-hyphenated slug)\",\n"
+            "    \"persona_content\": \"Markdown content for the persona file\",\n"
+            "    \"template_name\": \"Suggested filename for template, e.g., 'novel-summary' (use lowercase-hyphenated slug)\",\n"
+            "    \"template_content\": \"Markdown content for the template file\"\n"
+            "}}\n\n"
+            "Ensure the response is raw JSON."
+        ).format(category=category)
+
+        user_msg = f"Generate the persona and template for category: {category}"
+        try:
+            raw = self._complete_text(
+                system_prompt=system_prompt,
+                user_msg=user_msg,
+                temperature=0.3,
+                max_tokens=2048,
+                trace_context={
+                    "stage": "generate_persona_and_template",
+                    "metadata": {"category": category},
+                },
+            )
+            parsed = extract_json_object(raw)
+            return parsed or {}
+        except Exception as e:
+            logging.warning(f"generate_persona_and_template LLM call failed: {e}")
+            return {}
+
