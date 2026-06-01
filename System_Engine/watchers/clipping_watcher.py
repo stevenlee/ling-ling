@@ -40,9 +40,6 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
         if event.is_directory:
             return
             
-        if global_busy_state.is_busy():
-            return
-        
         filepath = Path(event.dest_path) if is_move else Path(event.src_path)
         if filepath.name.startswith((".", "@")):
             return
@@ -51,7 +48,8 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
         if filepath.suffix.lower() not in supported_extensions:
             return
         
-        global_busy_state.set_busy(True)
+        if not global_busy_state.try_set_busy():
+            return
         try:
             ui.set_status(f"Preparing: {filepath.name}")
             time.sleep(1) # Small buffer for file system stability

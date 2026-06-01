@@ -92,12 +92,11 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             return
 
         # Respect global busy state — file stays in toLingLing/ for re-scan on idle
-        if global_busy_state.is_busy():
+        if not global_busy_state.try_set_busy():
             ui.info(f"⏳ 系統忙碌中，指令已排隊等待：{filepath.name}")
             return
 
         ui.cmd_received(filepath.name)
-        global_busy_state.set_busy(True)
         try:
             ui.set_status(f"正在處理指令：{filepath.name}")
             self.process_prompt(filepath)

@@ -74,5 +74,17 @@ class BusyState:
         with self._lock:
             return self._busy
 
+    def try_set_busy(self) -> bool:
+        """Atomically check if busy; if not busy, set busy to True and return True.
+        If already busy (or lock file exists), return False.
+        """
+        if self.lock_file.exists():
+            return False
+        with self._lock:
+            if self._busy:
+                return False
+            self._busy = True
+            return True
+
 
 global_busy_state = BusyState()

@@ -1,5 +1,6 @@
 import threading
 import logging
+import time
 from pathlib import Path
 import watchdog.events
 import re
@@ -57,14 +58,24 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                 self._timers[title].cancel()
                 del self._timers[title]
                 
-        global_busy_state.set_busy(True)
+        # Try to set busy, retry a few times to avoid lock clashing
+        acquired = False
+        for _ in range(5):
+            if global_busy_state.try_set_busy():
+                acquired = True
+                break
+            time.sleep(0.5)
+        if not acquired:
+            logging.warning(f"Vault: lock clashed on delete for {title}. Proceeding without lock...")
+            
         try:
             logging.info(f"File deleted in Vault: {title}. Removing from RAG memory...")
             self.rag.delete_document(title)
             from core.vault_utils import update_wiki_index
             update_wiki_index(sync_reading_index=True)
         finally:
-            global_busy_state.set_busy(False)
+            if acquired:
+                global_busy_state.set_busy(False)
 
     def on_modified(self, event):
         if event.is_directory or not event.src_path.endswith('.md'):
@@ -109,22 +120,22 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
         if not filepath.exists():
             return
             
-        if global_busy_state.is_busy():
+        if not global_busy_state.try_set_busy():
             # Reschedule and try again later to avoid lock clashing
             self._schedule_process(filepath, title, delay=10.0)
             return
             
-        # 0. Whitelist Filter: Only index pages/ and Notes/
-        if self._should_refresh_index_only(filepath):
-            logging.info(f"Reading index modified: {title}. Rebuilding index.md...")
-            from core.vault_utils import update_wiki_index
-            update_wiki_index(filepath, title)
-            return
-
-        if not self._should_index(filepath):
-            return
-            
         try:
+            # 0. Whitelist Filter: Only index pages/ and Notes/
+            if self._should_refresh_index_only(filepath):
+                logging.info(f"Reading index modified: {title}. Rebuilding index.md...")
+                from core.vault_utils import update_wiki_index
+                update_wiki_index(filepath, title)
+                return
+
+            if not self._should_index(filepath):
+                return
+                
             content = filepath.read_text(encoding='utf-8')
             
             # 使用統一解析器提取標籤
@@ -168,18 +179,16 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             ui.info(f"🛍️ Syncing Brain...：[bold cyan]{title}[/bold cyan] (๑˃̵ᴗ˂̵)و")
             
             logging.info(f"File sync settled: {title}. Updating memory and index...")
-            global_busy_state.set_busy(True)
-            try:
-                # 1. Update RAG
-                self.rag.add_document(filepath, title, content, tags=final_tags)
-                
-                # 2. Update index.md
-                from core.vault_utils import update_wiki_index
-                update_wiki_index(filepath, title, sync_reading_index=True)
-            finally:
-                global_busy_state.set_busy(False)
+            # 1. Update RAG
+            self.rag.add_document(filepath, title, content, tags=final_tags)
+            
+            # 2. Update index.md
+            from core.vault_utils import update_wiki_index
+            update_wiki_index(filepath, title, sync_reading_index=True)
         except Exception as e:
             logging.error(f"Failed to update RAG on modification for {title}: {e}")
+        finally:
+            global_busy_state.set_busy(False)
 
     def _update_file_tags(self, filepath: Path, tags: list[str]):
         from core.vault_utils import update_file_tags
