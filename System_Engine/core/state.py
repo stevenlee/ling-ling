@@ -37,6 +37,12 @@ class BusyState:
                 self._busy = status
 
         if not should_fire:
+            if not status:
+                try:
+                    from core.ui import ui
+                    ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)
+                except Exception:
+                    pass
             return
 
         try:
@@ -56,6 +62,11 @@ class BusyState:
             with self._lock:
                 self._busy = False
                 self._firing_callbacks = False
+            try:
+                from core.ui import ui
+                ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)
+            except Exception:
+                pass
 
     def is_busy(self) -> bool:
         if self.lock_file.exists():
