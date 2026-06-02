@@ -2,6 +2,8 @@ import time
 import logging
 import shutil
 import contextlib
+import threading
+import queue
 from pathlib import Path
 from datetime import datetime
 import watchdog.events
@@ -17,13 +19,27 @@ from core.ui import ui
 
 
 class ClippingWatcher(watchdog.events.FileSystemEventHandler):
-    """Thin filesystem event handler — delegates all document processing to IngestionPipeline."""
+    """Filesystem event handler for Consolidate/ — delegates processing to IngestionPipeline.
+
+    Uses an internal job queue so that multiple files dropped into Consolidate/
+    are processed sequentially.  Events that arrive while the system is busy are
+    held in the queue and drained either when the current job finishes (via the
+    ``scan_existing`` idle callback) or the next time ``_drain_queue`` runs.
+    """
+
+    _SUPPORTED_EXTENSIONS = {'.md', '.png', '.jpg', '.jpeg'}
 
     def __init__(self, llm_client, rag_manager):
         super().__init__()
         self.llm = llm_client
         self.rag = rag_manager
         self.pipeline = IngestionPipeline(llm_client, rag_manager)
+        # ── Job queue (thread-safe) ──
+        self._job_queue: queue.Queue[Path] = queue.Queue()
+        self._queued_paths: set[str] = set()
+        self._queue_lock = threading.Lock()
+
+    # ── FSEvent handlers ─────────────────────────────────────────────
 
     def on_created(self, event):
         self._handle_event(event)
@@ -39,50 +55,115 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
     def _handle_event(self, event, is_move=False):
         if event.is_directory:
             return
-            
+
         filepath = Path(event.dest_path) if is_move else Path(event.src_path)
         if filepath.name.startswith((".", "@")):
             return
-            
-        supported_extensions = ['.md', '.png', '.jpg', '.jpeg']
-        if filepath.suffix.lower() not in supported_extensions:
+        if filepath.suffix.lower() not in self._SUPPORTED_EXTENSIONS:
             return
-        
+
+        # Small delay for filesystem stability (file may still be written)
+        time.sleep(1)
+        if not filepath.exists():
+            return
+
+        self._enqueue(filepath)
+        self._drain_queue()
+
+    # ── Job queue internals ──────────────────────────────────────────
+
+    def _enqueue(self, filepath: Path) -> bool:
+        """Add *filepath* to the processing queue.  Returns True if newly enqueued."""
+        key = str(filepath)
+        with self._queue_lock:
+            if key in self._queued_paths:
+                return False
+            self._queued_paths.add(key)
+        self._job_queue.put(filepath)
+        return True
+
+    def _dequeue(self) -> Path | None:
+        """Non-blocking dequeue.  Returns *None* when empty."""
+        try:
+            return self._job_queue.get_nowait()
+        except queue.Empty:
+            return None
+
+    def _mark_done(self, filepath: Path):
+        """Remove *filepath* from the tracked set so it can be re-queued later."""
+        with self._queue_lock:
+            self._queued_paths.discard(str(filepath))
+
+    def _drain_queue(self):
+        """Acquire the global busy state and process every queued file.
+
+        If the system is already busy the files stay in the queue — they will
+        be picked up by the ``scan_existing`` idle callback when the system
+        transitions back to idle.
+        """
         if not global_busy_state.try_set_busy():
             return
         try:
-            ui.set_status(f"Preparing: {filepath.name}")
-            time.sleep(1) # Small buffer for file system stability
-            
-            if not filepath.exists():
-                return
-                
-            self.process_file(filepath)
-            ui.success(f"Successfully Consolidated: {filepath.name}")
-        except Exception as e:
-            ui.error(f"Consolidation Failed: {e}")
+            self._process_queue_items()
         finally:
-            ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)
             global_busy_state.set_busy(False)
 
-    def scan_existing(self):
-        """Scan for files already in the directory at startup."""
-        from core.config import CONSOLIDATE_DIR
+    def _process_queue_items(self) -> int:
+        """Drain the queue and process each file.  Caller must hold busy state.
+
+        Returns the number of files that were successfully processed (i.e. no
+        longer present in the source directory after archival).
+        """
         processed = 0
+        while True:
+            filepath = self._dequeue()
+            if filepath is None:
+                break
+            try:
+                if not filepath.exists():
+                    continue
+                ui.set_status(f"Preparing: {filepath.name}")
+                self.process_file(filepath)
+                if not filepath.exists():
+                    processed += 1
+                ui.success(f"Successfully Consolidated: {filepath.name}")
+            except Exception as e:
+                ui.error(f"Consolidation Failed: {e}")
+                logging.error(f"Consolidation failed for {filepath.name}: {e}")
+            finally:
+                self._mark_done(filepath)
+        return processed
+
+    # ── Startup / idle callback ──────────────────────────────────────
+
+    def scan_existing(self):
+        """Scan Consolidate/ for un-processed files and drain the queue.
+
+        Called in two contexts — both guarantee that the global busy state is
+        already held by the caller:
+
+        1. **Startup scan** (``main.py``) — inside an explicit
+           ``set_busy(True)`` block.
+        2. **Idle callback** (``BusyState.set_busy(False)``) — the callback
+           mechanism holds the busy flag while callbacks execute.
+
+        Returns the number of files processed (the idle-callback loop uses this
+        to decide whether to re-scan).
+        """
+        from core.config import CONSOLIDATE_DIR
         if CONSOLIDATE_DIR.exists():
-            supported_extensions = {'.md', '.png', '.jpg', '.jpeg'}
             for f in sorted(CONSOLIDATE_DIR.iterdir()):
                 if (
                     f.is_file()
                     and not f.name.startswith((".", "@"))
-                    and f.suffix.lower() in supported_extensions
+                    and f.suffix.lower() in self._SUPPORTED_EXTENSIONS
                 ):
-                    ui.info(f"Startup scan found: {f.name}")
-                    self.process_file(f)
-                    if not f.exists():
-                        processed += 1
-        return processed
-        
+                    if self._enqueue(f):
+                        ui.info(f"Found pending file: {f.name}")
+        return self._process_queue_items()
+
+    # ── File processing ──────────────────────────────────────────────
+
     def process_file(self, filepath: Path):
         run_context = (
             self.llm.trace_run(
@@ -107,13 +188,13 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
+
             self.pipeline.ingest_markdown(content, filepath)
-            
+
             # Archive
             self._archive_markdown_with_sidecar_images(filepath)
             ui.success(f"Clipping complete: [bold]{filepath.stem}[/bold]")
-            
+
         except Exception as e:
             logging.error(f"Error handling markdown {filepath.name}: {e}")
 

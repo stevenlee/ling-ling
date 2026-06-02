@@ -1,6 +1,7 @@
 import time
 import re
 import threading
+import queue
 import logging
 import os
 import shutil
@@ -51,9 +52,13 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
         self.llm = llm_client
         self.rag = rag_manager
         self.registry = AgentRegistry(self.llm, self.rag)
-        
-        self._processed_files = set()
-        self._processed_lock = threading.Lock()
+        # ── Job queue (thread-safe) ──
+        self._job_queue: queue.Queue[Path] = queue.Queue()
+        self._queued_paths: set[str] = set()
+        self._queue_lock = threading.Lock()
+        # ── Intent-level dedup (prevents re-triggering same intent within 60s) ──
+        self._processed_intents: set[str] = set()
+        self._intent_lock = threading.Lock()
 
     def on_created(self, event):
         self._handle_event(event)
@@ -68,69 +73,97 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
     def _handle_event(self, event, is_move=False):
         if event.is_directory:
             return
-            
+
         filepath = Path(event.dest_path) if is_move else Path(event.src_path)
-        if not (filepath.suffix.lower() in ['.md', '.txt']):
+        if filepath.suffix.lower() not in ('.md', '.txt'):
             return
-            
-        with self._processed_lock:
-            if str(filepath) in self._processed_files:
-                return
-            self._processed_files.add(str(filepath))
-            
-        threading.Timer(10.0, self._remove_from_processed, args=[str(filepath)]).start()
-        
-        # Debounce
+
+        # Small delay for filesystem stability
         time.sleep(1)
-        
+
         if not filepath.exists():
             return
-            
-        # Check for KB Lock
-        if LOCK_FILE.exists():
-            ui.info(f"系統鎖定中 (.kb_lock)。跳過處理：{filepath.name}")
-            return
 
-        # Respect global busy state — file stays in toLingLing/ for re-scan on idle
-        if not global_busy_state.try_set_busy():
-            ui.info(f"⏳ 系統忙碌中，指令已排隊等待：{filepath.name}")
-            return
+        self._enqueue(filepath)
+        self._drain_queue()
 
-        ui.cmd_received(filepath.name)
+    # ── Job queue internals ──────────────────────────────────────────
+
+    def _enqueue(self, filepath: Path) -> bool:
+        """Add *filepath* to the processing queue.  Returns True if newly enqueued."""
+        key = str(filepath)
+        with self._queue_lock:
+            if key in self._queued_paths:
+                return False
+            self._queued_paths.add(key)
+        self._job_queue.put(filepath)
+        return True
+
+    def _dequeue(self) -> Path | None:
         try:
-            ui.set_status(f"正在處理指令：{filepath.name}")
-            self.process_prompt(filepath)
-            ui.success(f"任務完成：{filepath.name}")
-        except Exception as e:
-            ui.error(f"指令執行失敗：{e}")
+            return self._job_queue.get_nowait()
+        except queue.Empty:
+            return None
+
+    def _mark_done(self, filepath: Path):
+        with self._queue_lock:
+            self._queued_paths.discard(str(filepath))
+
+    def _clear_intent(self, intent_key: str):
+        with self._intent_lock:
+            self._processed_intents.discard(intent_key)
+
+    def _drain_queue(self):
+        """Acquire global busy state and process every queued prompt file.
+
+        If the system is busy the files stay in the queue — they will be
+        picked up by the ``scan_existing`` idle callback.
+        """
+        if not global_busy_state.try_set_busy():
+            return
+        try:
+            self._process_queue_items()
         finally:
-            ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)
             global_busy_state.set_busy(False)
-            
-    def scan_existing(self):
-        """Scan for prompts already in the directory at startup or after idle."""
-        from core.config import TO_LLM_DIR
+
+    def _process_queue_items(self) -> int:
+        """Drain the queue.  Caller must hold busy state.  Returns processed count."""
         processed = 0
+        while True:
+            if LOCK_FILE.exists():
+                ui.info("系統鎖定中 (.kb_lock)，暫停處理指令")
+                break
+            filepath = self._dequeue()
+            if filepath is None:
+                break
+            try:
+                if not filepath.exists():
+                    continue
+                ui.cmd_received(filepath.name)
+                ui.set_status(f"正在處理指令：{filepath.name}")
+                self.process_prompt(filepath)
+                if not filepath.exists():
+                    processed += 1
+                ui.success(f"任務完成：{filepath.name}")
+            except Exception as e:
+                ui.error(f"指令執行失敗：{e}")
+            finally:
+                self._mark_done(filepath)
+        return processed
+
+    def scan_existing(self):
+        """Scan toLingLing/ for un-processed prompts and drain the queue.
+
+        Called during startup (busy state held by caller) and as an idle
+        callback (busy state held by the callback mechanism).
+        """
+        from core.config import TO_LLM_DIR
         if TO_LLM_DIR.exists():
             for f in sorted(TO_LLM_DIR.iterdir()):
-                if f.is_file() and f.suffix.lower() in ['.md', '.txt']:
-                    ui.info(f"Startup scan found prompt: {f.name}")
-                    ui.cmd_received(f.name)
-                    try:
-                        ui.set_status(f"正在處理指令：{f.name}")
-                        self.process_prompt(f)
-                        if not f.exists():
-                            processed += 1
-                            ui.success(f"任務完成：{f.name}")
-                    except Exception as e:
-                        ui.error(f"指令執行失敗：{e}")
-                    finally:
-                        ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)
-        return processed
-            
-    def _remove_from_processed(self, path_str):
-        with self._processed_lock:
-            self._processed_files.discard(path_str)
+                if f.is_file() and f.suffix.lower() in ('.md', '.txt'):
+                    if self._enqueue(f):
+                        ui.info(f"Found pending prompt: {f.name}")
+        return self._process_queue_items()
 
     def _detect_intent(self, lower_name: str, lower_query: str) -> str | None:
         """Walk the INTENT_ROUTES table and return the first matching intent key."""
@@ -189,14 +222,14 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             intent_key = self._detect_intent(lower_name, lower_query)
 
             
-            # Deduplication
+            # Intent-level deduplication (prevents re-triggering same intent within 60s)
             if intent_key:
-                with self._processed_lock:
-                    if intent_key in self._processed_files:
+                with self._intent_lock:
+                    if intent_key in self._processed_intents:
                         logging.info(f"Ignored duplicate intent: {intent_key}")
                         return
-                    self._processed_files.add(intent_key)
-                threading.Timer(60.0, self._remove_from_processed, args=[intent_key]).start()
+                    self._processed_intents.add(intent_key)
+                threading.Timer(60.0, self._clear_intent, args=[intent_key]).start()
             
             run_context = (
                 self.llm.trace_run(
