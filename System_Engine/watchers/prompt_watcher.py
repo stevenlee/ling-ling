@@ -56,9 +56,6 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
         self._job_queue: queue.Queue[Path] = queue.Queue()
         self._queued_paths: set[str] = set()
         self._queue_lock = threading.Lock()
-        # ── Intent-level dedup (prevents re-triggering same intent within 60s) ──
-        self._processed_intents: set[str] = set()
-        self._intent_lock = threading.Lock()
 
     def on_created(self, event):
         self._handle_event(event)
@@ -109,9 +106,6 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
         with self._queue_lock:
             self._queued_paths.discard(str(filepath))
 
-    def _clear_intent(self, intent_key: str):
-        with self._intent_lock:
-            self._processed_intents.discard(intent_key)
 
     def _drain_queue(self):
         """Acquire global busy state and process every queued prompt file.
@@ -221,16 +215,6 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             
             intent_key = self._detect_intent(lower_name, lower_query)
 
-            
-            # Intent-level deduplication (prevents re-triggering same intent within 60s)
-            if intent_key:
-                with self._intent_lock:
-                    if intent_key in self._processed_intents:
-                        logging.info(f"Ignored duplicate intent: {intent_key}")
-                        return
-                    self._processed_intents.add(intent_key)
-                threading.Timer(60.0, self._clear_intent, args=[intent_key]).start()
-            
             run_context = (
                 self.llm.trace_run(
                     intent=intent_key or "chat",
