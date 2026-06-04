@@ -286,8 +286,8 @@ class TestBoldSpacingRepair:
         assert cleaned == "這是 **重點** 內容"
         assert fixes[0]["type"] == "repaired_bold_spacing"
         assert fixes[0]["line"] == 1
-        assert fixes[0]["before"] == "是**重點**內"
-        assert fixes[0]["after"] == "是 **重點** 內"
+        assert fixes[0]["before"] == "**重點**"
+        assert fixes[0]["after"] == " **重點** "
 
     def test_preserves_already_spaced_bold(self):
         text = "這是 **重點** 內容"
@@ -395,3 +395,34 @@ class TestLatexEscapeCollisions:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+# ── Table Repair ───────────────────────────────────────────────────
+
+class TestTableRepair:
+    def test_realigns_separator_columns(self):
+        from core.parser import repair_markdown_tables
+        text = "| H1 | H2 | H3 |\n| --- |\n| D1 | D2 | D3 |"
+        res, fixes = repair_markdown_tables(text)
+        assert "| --- | --- | --- |" in res
+        assert any(f["type"] == "repaired_table_separator_columns" for f in fixes)
+
+    def test_pads_missing_data_columns(self):
+        from core.parser import repair_markdown_tables
+        text = "| H1 | H2 | H3 |\n| --- | --- | --- |\n| D1 | D2 |"
+        res, fixes = repair_markdown_tables(text)
+        assert "| D1 | D2 |   |" in res
+        assert any(f["type"] == "repaired_table_data_columns" for f in fixes)
+
+    def test_hides_interspersed_text(self):
+        from core.parser import repair_markdown_tables
+        text = "| H1 | H2 |\n| --- | --- |\n| D1 | D2 |\nThis is an explanation.\n| D3 | D4 |"
+        res, fixes = repair_markdown_tables(text)
+        assert "<!-- This is an explanation. -->" in res
+        assert any(f["type"] == "hidden_interspersed_table_text" for f in fixes)
+
+    def test_leaves_valid_table_alone(self):
+        from core.parser import repair_markdown_tables
+        text = "| H1 | H2 |\n| --- | --- |\n| D1 | D2 |"
+        res, fixes = repair_markdown_tables(text)
+        assert res == text
+        assert not fixes

@@ -140,6 +140,18 @@ class BaseAgent:
         """Heuristic: brackets unbalanced *outside* quoted labels and comments."""
         if not block.strip():
             return True
+
+        # Catch spurious double quotes inside labels `[""label""]`
+        if '""' in block:
+            return True
+
+        # Catch truncated subgraph: `sub` followed by a non-ASCII string
+        if re.search(r'^\s*sub[^\x00-\x7F]+\s+', block, flags=re.IGNORECASE | re.MULTILINE):
+            return True
+
+        # Catch quoted node IDs: `"NodeA"[`
+        if re.search(r'"[A-Za-z_]\w*(?:-\w+)*"(?=[\[\(\{>])', block):
+            return True
         scrubbed = _MERMAID_QUOTED_RE.sub("", block)
         scrubbed = _MERMAID_COMMENT_RE.sub("", scrubbed)
         if scrubbed.count("[") != scrubbed.count("]"):

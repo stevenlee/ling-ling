@@ -457,6 +457,166 @@ def _quote_labels_in_line(line: str) -> tuple[str, bool]:
     return "".join(out) + comment_part, changed
 
 
+# ─── Mermaid: subgraph keyword repair ─────────────────────────────────
+
+# Matches lines like `sub定的 "title"` or `sub動 "title"` — the LLM truncated
+# `subgraph` and glued CJK (or other non-ASCII) text after `sub`.
+_SUBGRAPH_BROKEN_RE = re.compile(
+    r'^(\s*)sub([^\x00-\x7F]+)\s+(.*)',
+    re.IGNORECASE,
+)
+
+
+def repair_mermaid_subgraph_keyword(text: str) -> tuple[str, list[dict]]:
+    """Fix truncated ``subgraph`` keywords inside mermaid fences.
+
+    LLMs sometimes replace the ``graph`` part of ``subgraph`` with CJK or
+    other text when generating bilingual diagrams:
+    ``sub定的 "title"`` → ``subgraph "title"``.
+    """
+    if not text or "sub" not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+            out.append(line)
+            continue
+        if in_mermaid and stripped == "```":
+            in_mermaid = False
+            out.append(line)
+            continue
+
+        if in_mermaid:
+            m = _SUBGRAPH_BROKEN_RE.match(line)
+            if m:
+                new_line = f"{m.group(1)}subgraph {m.group(3)}"
+                fixes.append(_make_fix(
+                    "repaired_mermaid_subgraph_keyword",
+                    line=idx + 1,
+                    before=line,
+                    after=new_line,
+                ))
+                out.append(new_line)
+            else:
+                out.append(line)
+        else:
+            out.append(line)
+
+    return "\n".join(out), fixes
+
+
+# ─── Mermaid: quoted node-ID repair ───────────────────────────────────
+
+# `"NodeId"[` — the LLM wrapped a valid ASCII node identifier in quotes.
+# Mermaid requires bare identifiers: `NodeId["label"]`, not `"NodeId"["label"]`.
+_QUOTED_NODE_ID_SHAPE_RE = re.compile(
+    r'"([A-Za-z_]\w*(?:-\w+)*)"'    # "varName" or "my-node"
+    r'(?=[\[\(\{>])'                 # lookahead: immediately followed by shape opener
+)
+
+
+def repair_mermaid_quoted_node_ids(text: str) -> tuple[str, list[dict]]:
+    """Strip spurious quotes from node identifiers before shape openers.
+
+    LLMs sometimes emit ``"A"["Label (X)"]`` instead of ``A["Label (X)"]``.
+    The char-by-char label-quoting walker sees ``"A"`` as a completed quoted
+    string and skips it, so the error passes through untouched.
+    """
+    if not text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+            out.append(line)
+            continue
+        if in_mermaid and stripped == "```":
+            in_mermaid = False
+            out.append(line)
+            continue
+
+        if in_mermaid:
+            new_line = _QUOTED_NODE_ID_SHAPE_RE.sub(r'\1', line)
+            if new_line != line:
+                fixes.append(_make_fix(
+                    "stripped_mermaid_quoted_node_id",
+                    line=idx + 1,
+                    before=line,
+                    after=new_line,
+                ))
+            out.append(new_line)
+        else:
+            out.append(line)
+
+    return "\n".join(out), fixes
+
+
+# ─── Mermaid: double-quote repair ─────────────────────────────────────
+
+# `[""label""]` or `(""label"")` — LLM emitted two layers of quotes inside
+# a shape, which breaks the mermaid parser completely.
+_DOUBLE_QUOTE_SHAPE_RE = re.compile(
+    r'([\[\(\{>])""'    # shape opener + ""
+    r'(.*?)'            # label content (non-greedy)
+    r'""([\]\)\}])'     # "" + shape closer
+)
+
+
+def repair_mermaid_double_quotes(text: str) -> tuple[str, list[dict]]:
+    """Collapse ``[""label""]`` to ``["label"]`` inside mermaid fences.
+
+    LLMs occasionally double the quotes inside node shapes, producing
+    invalid syntax that the bracket-balance heuristic doesn't catch
+    (the quotes cancel out).
+    """
+    if not text or '""' not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+            out.append(line)
+            continue
+        if in_mermaid and stripped == "```":
+            in_mermaid = False
+            out.append(line)
+            continue
+
+        if in_mermaid and '""' in line:
+            new_line = _DOUBLE_QUOTE_SHAPE_RE.sub(r'\1"\2"\3', line)
+            if new_line != line:
+                fixes.append(_make_fix(
+                    "repaired_mermaid_double_quotes",
+                    line=idx + 1,
+                    before=line,
+                    after=new_line,
+                ))
+            out.append(new_line)
+        else:
+            out.append(line)
+
+    return "\n".join(out), fixes
+
+
 def repair_mermaid_label_quotes(text: str) -> tuple[str, list[dict]]:
     """Quote bare labels inside mermaid node shapes within fenced blocks."""
     if not text:
@@ -772,9 +932,117 @@ def strip_body_frontmatter(text: str) -> tuple[str, list[dict]]:
     )]
 
 
+# ─── Markdown: Table formatting ──────────────────────────────────────────
+
+# Match table separator row: e.g. `|---|`, `|:--|--:|`, etc.
+_TABLE_SEP_RE = re.compile(r'^\|?[\s\-\:\.\|]+\|?$')
+
+def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
+    """Fix common LLM markdown table errors.
+    
+    1. Align separator column counts with the header.
+    2. Align data row column counts with the header (append empty columns).
+    3. Hide interspersed non-table text that breaks table rendering using HTML comments.
+    """
+    if not text or "|" not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out = []
+    fixes = []
+    
+    in_table = False
+    expected_pipes = 0
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        
+        # If we are not in a table
+        if not in_table:
+            if stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2:
+                # Lookahead to see if next line is a separator
+                if i + 1 < len(lines):
+                    next_stripped = lines[i+1].strip()
+                    if next_stripped.startswith("|") and _TABLE_SEP_RE.match(next_stripped):
+                        in_table = True
+                        expected_pipes = stripped.count("|")
+                        out.append(line)
+                        i += 1
+                        continue
+            out.append(line)
+            i += 1
+            continue
+            
+        # If we ARE in a table
+        if stripped.startswith("|") and stripped.endswith("|"):
+            pipes = stripped.count("|")
+            
+            # Separator row
+            if _TABLE_SEP_RE.match(stripped) and not any(c.isalnum() for c in stripped):
+                if pipes != expected_pipes:
+                    cols = expected_pipes - 1
+                    new_line = "|" + "|".join([" --- " for _ in range(cols)]) + "|"
+                    fixes.append(_make_fix(
+                        "repaired_table_separator_columns",
+                        line=i+1,
+                        before=line,
+                        after=new_line,
+                    ))
+                    out.append(new_line)
+                else:
+                    out.append(line)
+            # Data row
+            else:
+                if pipes < expected_pipes:
+                    diff = expected_pipes - pipes
+                    new_line = line.rstrip() + "".join(["   |" for _ in range(diff)])
+                    fixes.append(_make_fix(
+                        "repaired_table_data_columns",
+                        line=i+1,
+                        before=line,
+                        after=new_line,
+                    ))
+                    out.append(new_line)
+                else:
+                    out.append(line)
+            i += 1
+        elif not stripped:
+            in_table = False
+            out.append(line)
+            i += 1
+        else:
+            # Interspersed text detection
+            table_continues = False
+            for look in range(i+1, min(i+6, len(lines))):
+                if lines[look].strip().startswith("|") and lines[look].strip().endswith("|"):
+                    table_continues = True
+                    break
+                if not lines[look].strip():
+                    break
+                    
+            if table_continues:
+                fixes.append(_make_fix(
+                    "hidden_interspersed_table_text",
+                    line=i+1,
+                    before=line,
+                    after=f"<!-- {line} -->",
+                ))
+                # To prevent breaking blockquotes or lists inside HTML comments, we just wrap it simply
+                out.append(f"<!-- {line} -->")
+                i += 1
+            else:
+                in_table = False
+                out.append(line)
+                i += 1
+
+    return "\n".join(out), fixes
+
+
 # ─── Markdown: bold spacing ────────────────────────────────────────────
 
-_BOLD_BLOCK_RE = re.compile(r'([^\s*])?\*\*(.*?)\*\*([^\s*])?')
+_BOLD_BLOCK_RE = re.compile(r'(?<!\*)\*\*(.+?)\*\*(?!\*)')
 
 def repair_markdown_bold_spacing(text: str) -> tuple[str, list[dict]]:
     """Ensure spaces around bold **text** for Obsidian compatibility.
@@ -791,30 +1059,40 @@ def repair_markdown_bold_spacing(text: str) -> tuple[str, list[dict]]:
     last_end = 0
     
     for match in _BOLD_BLOCK_RE.finditer(text):
-        g1, g2, g3 = match.groups()
-        before_str = match.group(0)
+        start = match.start()
+        end = match.end()
+        inner = match.group(1)
         
-        needs_space_before = (g1 is not None)
-        needs_space_after = (g3 is not None)
+        if not inner.strip():
+            continue
+            
+        char_before = text[start-1] if start > 0 else " "
+        char_after = text[end] if end < len(text) else " "
+        
+        needs_space_before = char_before not in (" ", "\n", "\t", "*", "「", "『", "(", "[")
+        needs_space_after = char_after not in (" ", "\n", "\t", "*", "」", "』", ")", "]", "，", "。", "！", "？", ",", ".", "!", "?", "：", ":", "；", ";")
         
         if not needs_space_before and not needs_space_after:
             continue
             
-        res = ''
-        if g1: res += g1 + ' '
-        res += '**' + g2 + '**'
-        if g3: res += ' ' + g3
-        
-        new_text.append(text[last_end:match.start()])
+        res = ""
+        if needs_space_before:
+            res += " "
+        res += f"**{inner}**"
+        if needs_space_after:
+            res += " "
+            
+        new_text.append(text[last_end:start])
         new_text.append(res)
-        line_no = text.count("\n", 0, match.start()) + 1
+        
+        line_no = text.count("\n", 0, start) + 1
         fixes.append(_make_fix(
             "repaired_bold_spacing",
             line=line_no,
-            before=before_str,
+            before=match.group(0),
             after=res,
         ))
-        last_end = match.end()
+        last_end = end
         
     if not fixes:
         return text, []
@@ -843,8 +1121,12 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
         repair_latex_carriage_returns,
         repair_latex_escape_collisions,
         repair_mermaid_fences,
+        repair_mermaid_subgraph_keyword,
+        repair_mermaid_quoted_node_ids,
+        repair_mermaid_double_quotes,
         repair_mermaid_label_quotes,
         repair_mermaid_latex_labels,
+        repair_markdown_tables,
         repair_markdown_bold_spacing,
     ])
 
