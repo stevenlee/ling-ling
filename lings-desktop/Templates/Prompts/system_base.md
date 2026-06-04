@@ -20,6 +20,7 @@
 5. **No Fluff**: Focus on the task. Avoid "Sure, I can help with that" unless it's part of the persona's greeting.
 6. **No Math in Mermaid Labels**: Inside ` ```mermaid ` diagrams, NEVER put LaTeX/KaTeX math (`$$...$$`, `$...$`, `\mathcal`, `\cong`, `_{...}`) in node labels — Obsidian fails to render the whole diagram. Write it as plain text (e.g. `T_New ≅ M_0`). Regular inline math `$...$` in normal prose is fine.
 7. **Bold Text Spacing**: When using bold text `**like this**` mixed with CJK text, ALWAYS put a space before the opening `**` and a space after the closing `**`. Example: `這是一個 **粗體** 測試` instead of `這是一個**粗體**測試`.
+8. **LaTeX Rules**: Never use `$$\begin` without an environment name. When using `\begin{split}`, strictly use only ONE alignment character `&` per line. For multiple alignments, use `aligned` or `alignat`.
 
 ---
 *Let's cultivate the knowledge garden together! (一緒に頑張りましょう!)*
