@@ -154,7 +154,7 @@ _MERMAID_SHAPES: tuple[tuple[str, str], ...] = (
 # node ids, which combined with the `>...]` asymmetric shape silently
 # corrupts `A[X] --> B[Y]` into `A["X"] -->"B[Y"]`.
 _MERMAID_NODE_HEAD_RE = re.compile(r'[\w一-鿿][\w\-一-鿿]*')
-_QUOTED_NODE_DEF_RE = re.compile(r'^(\s*)\"([\w\-一-鿿]+)\s*([\[\({>].*[\]\)}])\"(\s*)$')
+_QUOTED_NODE_DEF_RE = re.compile(r'^(\s*)\"([\w\-一-鿿]+)\s*([\[\({>][^"]*[\]\)}])\"(\s*)$')
 _MERMAID_CONN_ARROW_PAT = r'(?:-->|---|-.->|==>|--[xo]|-\.-|==)'
 _MERMAID_CONN_START_QUOTED_ID_RE = re.compile(
     r'^(\s*)\"([\w\-一-鿿]+)\"\s*(' + _MERMAID_CONN_ARROW_PAT + r')'

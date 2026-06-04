@@ -356,3 +356,9 @@ class TestSubgraphRepair:
         assert result == text
         assert not fixes
 
+
+    def test_does_not_corrupt_quoted_connection_lines(self):
+        from core.parser import repair_mermaid_label_quotes
+        text = '    "Node A("Label A")" --> "Node B (Label B)"'
+        res, fixes = repair_mermaid_label_quotes(text)
+        assert res == text
