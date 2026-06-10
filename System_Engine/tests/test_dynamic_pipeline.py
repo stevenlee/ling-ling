@@ -84,9 +84,13 @@ class FakeLLM:
 class FakeRAG:
     def __init__(self):
         self.docs = []
+        self.facets = []
 
     def add_document(self, path, title, markdown, tags=None, section_path=None):
         self.docs.append((path, title, tags))
+
+    def add_facets(self, path, title, facets, tags=None):
+        self.facets.append((title, facets))
 
 
 @pytest.fixture
@@ -312,6 +316,58 @@ class TestRoutingTraceAndTemplateStamp:
         meta = parse_markdown_metadata(pages[0].read_text(encoding="utf-8"))
         assert meta["template"] == "patent-rpt"
         assert meta["template_version"] == 3
+
+
+class TestFacetIndexWiring:
+    def test_short_doc_gets_phase_b_facets(self, monkeypatch, tmp_path, fake_services):
+        llm, rag = fake_services
+        pipeline = IngestionPipeline(llm, rag)
+        monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
+        _setup_vault(monkeypatch, tmp_path)
+
+        content = "Claims\nPrior Art\nAn invention."
+        source_file = tmp_path / "MyPatent.md"
+        source_file.write_text(content)
+
+        pipeline.ingest_markdown(content, source_file)
+
+        # FakeLLM.generate_part_digest returns thesis "Thesis description".
+        assert len(rag.facets) == 1
+        title, facets = rag.facets[0]
+        assert "(Synthesis)" in title
+        assert facets == ["Thesis description"]
+
+    def test_long_doc_gets_phase_a_facets_per_part(self, monkeypatch, tmp_path, fake_services):
+        llm, rag = fake_services
+        pipeline = IngestionPipeline(llm, rag)
+        monkeypatch.setattr(pipeline.splitter, "chunk_size", 20)
+        _setup_vault(monkeypatch, tmp_path)
+        monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", False)
+
+        content = "US Patent Document\n\nClaims\nPrior Art\n" + ("Part content section. " * 100)
+        source_file = tmp_path / "US_Patent_Long.md"
+        source_file.write_text(content)
+
+        pipeline.ingest_markdown(content, source_file)
+
+        # One facet batch per part, each pointing at its part page.
+        assert len(rag.facets) == len(llm.generate_entity_page_calls)
+        assert all("(Part" in title for title, _ in rag.facets)
+
+    def test_facet_flag_off_disables_indexing(self, monkeypatch, tmp_path, fake_services):
+        llm, rag = fake_services
+        pipeline = IngestionPipeline(llm, rag)
+        monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
+        _setup_vault(monkeypatch, tmp_path)
+        monkeypatch.setattr("services.ingestion_pipeline.FACET_INDEX_ENABLED", False)
+
+        content = "Claims\nPrior Art\nAn invention."
+        source_file = tmp_path / "MyPatent.md"
+        source_file.write_text(content)
+
+        pipeline.ingest_markdown(content, source_file)
+
+        assert rag.facets == []
 
 
 class TestDocTypeMigrationInPipeline:

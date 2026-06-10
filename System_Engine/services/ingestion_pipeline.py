@@ -15,6 +15,8 @@ from datetime import datetime
 from pathlib import Path
 
 from core.config import (
+    FACET_INDEX_ENABLED,
+    FACET_MAX_PER_DOC,
     FROM_LLM_DIR,
     INDEX_FILE,
     PAGES_DIR,
@@ -98,7 +100,73 @@ class IngestionPipeline:
         if len(content) > self.splitter.chunk_size + 1000:
             self._ingest_long_document(content, source_filepath, source_filepath.stem, doc_config=doc_config)
         else:
-            self.ingest_to_wiki(content, source_filepath, doc_config=doc_config)
+            result = self.ingest_to_wiki(content, source_filepath, doc_config=doc_config)
+            self._index_short_doc_facets(content, result)
+
+    # ── Facet index (summary-as-pointer retrieval) ───────────────────
+
+    @staticmethod
+    def _facets_from_digest(digest) -> list[str]:
+        """Extract facet sentences (thesis + key points) from a part digest.
+
+        Facets are the retrieval pointers for the facet index — short,
+        clean, query-shaped sentences. Non-dict digests (fallback strings,
+        mocks) yield nothing.
+        """
+        if not isinstance(digest, dict):
+            return []
+        facets: list[str] = []
+        thesis = digest_value_to_text(digest.get("thesis"))
+        if thesis:
+            facets.append(thesis)
+        key_points = digest.get("key_points") or []
+        if isinstance(key_points, str):
+            key_points = [key_points]
+        if isinstance(key_points, (list, tuple)):
+            for point in key_points:
+                text = digest_value_to_text(point)
+                if text:
+                    facets.append(text)
+        # Dedup (preserving order), drop fragments, cap per document.
+        seen = set()
+        out = []
+        for f in facets:
+            f = f.strip()
+            if len(f) < 8 or f in seen:
+                continue
+            seen.add(f)
+            out.append(f)
+        return out[:FACET_MAX_PER_DOC]
+
+    def _index_digest_facets(self, page_path_value, title, digest, tags=None) -> None:
+        """Phase A: register a page's digest facets as retrieval pointers."""
+        if not FACET_INDEX_ENABLED or not page_path_value or not title:
+            return
+        facets = self._facets_from_digest(digest)
+        if not facets:
+            return
+        try:
+            self.rag.add_facets(Path(page_path_value), title, facets, tags=tags)
+        except Exception as e:
+            logging.warning(f"Facet indexing failed for {title}: {e}")
+
+    def _index_short_doc_facets(self, raw_content: str, ingest_result: dict | None) -> None:
+        """Phase B: short docs have no part digests, so spend one light LLM
+        call to produce one — then index its facets. Fail-soft throughout."""
+        if not FACET_INDEX_ENABLED or not isinstance(ingest_result, dict):
+            return
+        page_path = ingest_result.get("_page_path")
+        title = ingest_result.get("_title")
+        if not page_path or not title:
+            return
+        try:
+            digest = self.llm.generate_part_digest(
+                title, 1, 1, raw_content, ingest_result.get("content", ""), "",
+            )
+        except Exception as e:
+            logging.warning(f"Short-doc digest for facets failed for {title}: {e}")
+            return
+        self._index_digest_facets(page_path, title, digest, tags=ingest_result.get("_tags"))
 
     # ── Profile routing ──────────────────────────────────────────────
 
@@ -533,6 +601,10 @@ class IngestionPipeline:
             part_digests.append(digest)
             self._append_part_digest_to_note(
                 result, digest, section_path=part_info.get("section_path"),
+            )
+            self._index_digest_facets(
+                result.get("_page_path"), result.get("_title"), digest,
+                tags=master_tags,
             )
 
             nav_summary = digest_value_to_text(digest.get("thesis")) if isinstance(digest, dict) else ""

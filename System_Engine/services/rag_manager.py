@@ -371,20 +371,26 @@ class RAGManager:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _get_existing_content_hash(self, doc_id: str) -> str | None:
-        """Return the content_hash of any existing chunk for this doc_id, or None."""
+        """Return the content_hash of any existing chunk for this doc_id, or None.
+
+        Skips facet entries (they share the doc_id but carry no
+        content_hash); fetches a few rows so a facet landing first doesn't
+        defeat the unchanged-content short-circuit.
+        """
         try:
             results = self.collection.get(
                 where={"doc_id": doc_id},
-                limit=1,
+                limit=10,
                 include=["metadatas"],
             )
         except Exception as e:
             logging.debug(f"content_hash lookup failed for {doc_id[:8]}: {e}")
             return None
-        metadatas = results.get("metadatas") or []
-        if not metadatas:
-            return None
-        return (metadatas[0] or {}).get("content_hash")
+        for meta in results.get("metadatas") or []:
+            content_hash = (meta or {}).get("content_hash")
+            if content_hash:
+                return content_hash
+        return None
 
     def add_document(
         self,
@@ -705,6 +711,12 @@ class RAGManager:
             else:
                 candidates = [by_id[cid] for cid in vec_ids if cid in by_id]
 
+            # Facet hits are pointers, not content: swap each for its
+            # parent's real chunk BEFORE reranking, so the cross-encoder
+            # scores actual content and downstream consumers never see
+            # summary text masquerading as source material.
+            candidates = self._dereference_facets(candidates, candidate_info, need_embeddings)
+
             if use_rerank and candidates:
                 scores = reranker.score(query_text, [c["text"] for c in candidates])
                 for c, s in zip(candidates, scores):
@@ -885,6 +897,140 @@ class RAGManager:
     @retry_on_db_lock()
     def _upsert_with_retry(self, **kwargs):
         self.collection.upsert(**kwargs)
+
+    @retry_on_db_lock()
+    def add_facets(self, filepath: Path, title: str, facets: list[str], tags: list[str] = None):
+        """Index LLM-generated facet sentences (thesis / key points) as
+        retrieval pointers for a document.
+
+        Facets share the parent's doc_id (so deletion paths and the orphan
+        sweep cover them automatically) and carry role="facet". At query
+        time a facet hit is dereferenced to the parent's real chunk — facet
+        text itself is never returned as content. Stale facets for the doc
+        are dropped first, so re-ingestion stays idempotent.
+        """
+        facets = [f.strip() for f in (facets or []) if isinstance(f, str) and f.strip()]
+        if not facets:
+            return
+        try:
+            doc_id = self._get_doc_id(filepath)
+            self._delete_facets(doc_id)
+
+            timestamp = datetime.now().isoformat()
+            norm_tags = TagManager.normalize_list(tags)
+            tags_display = f",{','.join(norm_tags)}," if norm_tags else ""
+
+            ids, documents, metadatas = [], [], []
+            for i, facet_text in enumerate(facets):
+                facet_hash = hashlib.sha256(facet_text.encode("utf-8")).hexdigest()[:16]
+                ids.append(f"{doc_id}_facet_{facet_hash}")
+                documents.append(facet_text)
+                metadatas.append({
+                    "role": "facet",
+                    "doc_id": doc_id,
+                    "title": title,
+                    "source": Path(filepath).name,
+                    "facet_index": i,
+                    "timestamp": timestamp,
+                    "tags": tags_display,
+                })
+
+            self._upsert_with_retry(documents=documents, metadatas=metadatas, ids=ids)
+            self._bm25.mark_dirty()
+            logging.info(f"Indexed {len(ids)} facets for '{title}' ({doc_id[:8]})")
+        except Exception as e:
+            logging.error(f"Failed to add facets for '{title}': {e}")
+
+    def _delete_facets(self, doc_id: str) -> None:
+        """Remove existing facet entries for one doc (python-side filter —
+        legacy chunks have no `role` key, and Chroma's $ne semantics on
+        missing keys are unreliable)."""
+        try:
+            results = self.collection.get(where={"doc_id": doc_id}, include=["metadatas"])
+            facet_ids = [
+                cid for cid, meta in zip(results.get("ids") or [], results.get("metadatas") or [])
+                if (meta or {}).get("role") == "facet"
+            ]
+            if facet_ids:
+                self.collection.delete(ids=facet_ids)
+        except Exception as e:
+            logging.debug(f"Facet cleanup failed for {doc_id[:8]}: {e}")
+
+    def _first_chunk_of_doc(self, doc_id: str | None, need_embeddings: bool = False) -> dict | None:
+        """Fetch the parent document's leading real chunk (for facet
+        dereferencing). Returns the same candidate shape query_notes uses."""
+        if not doc_id:
+            return None
+        try:
+            include = ["documents", "metadatas"]
+            if need_embeddings:
+                include.append("embeddings")
+            results = self.collection.get(where={"doc_id": doc_id}, include=include)
+        except Exception as e:
+            logging.debug(f"Facet parent fetch failed for {doc_id[:8]}: {e}")
+            return None
+
+        ids = results.get("ids") or []
+        documents = results.get("documents") or []
+        metadatas = results.get("metadatas") or []
+        embeddings = results.get("embeddings") if need_embeddings else None
+
+        best = None
+        for i, cid in enumerate(ids):
+            meta = metadatas[i] if i < len(metadatas) else {}
+            if (meta or {}).get("role") == "facet":
+                continue
+            start = (meta or {}).get("start_offset", 0) or 0
+            if best is None or start < best[0]:
+                candidate = {
+                    "text": documents[i] if i < len(documents) else "",
+                    "metadata": meta or {},
+                    "distance": 0.0,
+                    "id": cid,
+                }
+                if embeddings is not None and i < len(embeddings):
+                    candidate["embedding"] = embeddings[i]
+                best = (start, candidate)
+        return best[1] if best else None
+
+    def _dereference_facets(
+        self,
+        candidates: list[dict],
+        candidate_info: dict,
+        need_embeddings: bool = False,
+    ) -> list[dict]:
+        """Swap facet hits for their parent's real chunk, dedup by chunk id.
+
+        Order is preserved (candidates arrive best-first), so when both a
+        facet and its parent chunk are in the pool, the better-ranked
+        occurrence wins. Dangling facets (parent vanished) are dropped.
+        """
+        out: list[dict] = []
+        seen: set[str] = set()
+        for c in candidates:
+            meta = c.get("metadata") or {}
+            if meta.get("role") != "facet":
+                if c["id"] not in seen:
+                    seen.add(c["id"])
+                    out.append(c)
+                continue
+
+            parent = self._first_chunk_of_doc(meta.get("doc_id"), need_embeddings)
+            if parent is None or parent["id"] in seen:
+                continue
+            parent["distance"] = c.get("distance", 0.0)
+            parent["matched_facet"] = c.get("text", "")
+            seen.add(parent["id"])
+            out.append(parent)
+
+            # Carry the facet's retrieval signals over to the parent id so
+            # the trace breakdown survives the swap.
+            facet_info = candidate_info.get(c["id"])
+            if facet_info is not None and parent["id"] not in candidate_info:
+                swapped = dict(facet_info)
+                swapped["passed_layers"] = list(facet_info.get("passed_layers", [])) + ["facet_deref"]
+                candidate_info[parent["id"]] = swapped
+        return out
 
     @retry_on_db_lock()
     def prune_orphan_chunks(self, roots: list[Path] | None = None) -> dict:

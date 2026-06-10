@@ -60,6 +60,13 @@ RERANKER_MULTIPLIER             = int(os.getenv("RERANKER_MULTIPLIER", "5"))
 HYBRID_RETRIEVAL_ENABLED        = os.getenv("HYBRID_RETRIEVAL_ENABLED", "false").lower() == "true"
 BM25_MULTIPLIER                 = int(os.getenv("BM25_MULTIPLIER", "3"))
 
+# ─── Facet Index (summary-as-pointer retrieval) ───────────────────────
+# Part digests (thesis/key_points) are embedded as "facet" entries that
+# point back to their source page. A facet hit is dereferenced to the real
+# chunk before reranking — facets are retrieval pointers, never content.
+FACET_INDEX_ENABLED             = os.getenv("FACET_INDEX_ENABLED", "true").lower() == "true"
+FACET_MAX_PER_DOC               = int(os.getenv("FACET_MAX_PER_DOC", "8"))
+
 # ─── Paths ────────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()

@@ -173,6 +173,14 @@ lings-desktop/
 - **`@ling-profiles` 指令**（[agents/profiles_agent.py](System_Engine/agents/profiles_agent.py)）：`@ling-profiles` 總覽、`pending` 草稿明細、`approve <名稱>` 一鍵把審核通過的草稿搬入正式位置（拒絕覆寫既有檔案）。
 - **Skill 前置條件強制檢查**：`Skills/*.md` 的 `applicable_when`（`database_populated` / `min_documents` / `has_tag_graph`）在執行前對照實際 vault 狀態驗證，不滿足就明確拒跑（例如知識庫只有 5 份文件時擋下 montecarlo）。RAG 失效時 fail-open，不會反過來癱瘓 insight。
 
+### 2026-06-10 Facet Index（摘要向量指標檢索，Phase A+B）
+
+- **概念**：LLM digest 的 `thesis` 與 `key_points` 被 embed 成「facet」條目存入同一個 collection（`role: facet`，共用母文件 doc_id）。Facet 是**檢索指標不是內容**——query 命中 facet 後，rerank 之前就解參照回母頁面的真實 chunk，下游永遠拿到原文。解決 query（問句）與 chunk（散文）的語意落差與跨語言落差。
+- **Phase A（零新增 LLM 成本）**：長文 pipeline 既有的 part digests 直接轉成 facets，每個 part 頁面一批。
+- **Phase B（每篇短文 +1 次輕量 LLM call）**：短文 ingest 後補跑一次 `generate_part_digest`（1/1），同樣轉 facets。
+- **安全設計**：facet 共用母文件 doc_id，刪除路徑與 orphan sweep 自動涵蓋；重新 ingest 會先清舊 facets（冪等）；母 chunk 已在候選池時以較高排名者優先、不重複；幻覺風險被「只當指標、不當內容」的設計隔離。
+- **控制**：`FACET_INDEX_ENABLED`（預設 true）、`FACET_MAX_PER_DOC`（預設 8）。建議用 `scratch/retrieval_bench.yml` 前後對比驗證檢索品質。
+
 ### 2026-06-10 RAG Orphan Sweep（殘留 chunk 清理）
 
 - **問題**：刪除整個文章資料夾（`pages/<標題>/`）只發 directory 事件，舊 watcher 直接忽略；改名/搬移完全沒有 handler——兩者都讓 chunks 永久殘留在 ChromaDB。
