@@ -221,3 +221,42 @@ def test_llm_client_refute_regex(monkeypatch):
     check_verdict("Some notes.\nVerdict: survived\n", "survived")
     check_verdict("Verdict :   REFUTED", "refuted")
     check_verdict("Just random text without verdict", None)
+
+
+# -- Takeover addition (review R2): frontmatter block + mirror identity --
+
+def test_signals_block_in_frontmatter_and_mirror_identity(patch_env, tmp_path, monkeypatch):
+    """With signals enabled, the report frontmatter carries the signals
+    block, and the Insights/ mirror stays byte-identical (brief §2.2)."""
+    from agents.insight_agent import InsightAgent
+    import agents.base_agent as base_agent_mod
+    from core.parser import parse_markdown_metadata
+
+    from_llm_dir = tmp_path / "fromLingLing"
+    insights_dir = tmp_path / "Insights"
+    from_llm_dir.mkdir()
+    insights_dir.mkdir()
+    monkeypatch.setattr(base_agent_mod, "FROM_LLM_DIR", from_llm_dir)
+
+    class _StubLLM:
+        model = "stub"
+
+    agent = InsightAgent.__new__(InsightAgent)
+    agent.llm = _StubLLM()
+    agent.rag = None          # signals fail-open to None values, block still present
+    agent.stats = {"input_chars": 0, "output_chars": 0}
+    agent.insights_dir = insights_dir
+    agent.strategies = {
+        "recency": {"name": "Recency", "description": "d", "pipeline": "single"},
+    }
+    monkeypatch.setattr(agent, "_run_single", lambda *a, **k: "## Insight body\n\nText.")
+
+    full_markdown = agent.generate_insight("recency", target_titles=["Test Source"])
+
+    meta = parse_markdown_metadata(full_markdown)
+    assert "signals" in meta and meta["signals_version"] == 1
+    assert set(meta["signals"]) == {"groundedness", "novelty", "bridging", "refute_verdict"}
+
+    mirrored = list(insights_dir.glob("*.md"))
+    assert len(mirrored) == 1
+    assert mirrored[0].read_text(encoding="utf-8") == full_markdown
