@@ -1,7 +1,9 @@
 # Cortex Memory — 洞察鞏固與長期記憶層
 
-> Status: **design approved 2026-06-10, not yet implemented**.
-> 與 Steven 逐項討論定案；實作前請先讀完「核心不變量」與「分相計畫」。
+> Status: **Phase 1 landed 2026-06-11**（Gemini 實作、兩輪審查後
+> merge：01e92b0，見 CortexMemory_phase1_review_r1.md）。
+> Phase 2–4 未實作。與 Steven 逐項討論定案；實作前請先讀完
+> 「核心不變量」與「分相計畫」。
 
 ## Problem
 

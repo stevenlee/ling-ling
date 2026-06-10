@@ -71,3 +71,26 @@ sources 實際只是標題清單——反駁者無材料可查證，verdict 不�
 修正交付需重新滿足 brief §2 全部條款；尤其 M1 的 flag-off
 byte-identical 與 M2 的解析測試是這輪的硬門檻。下一輪是最後一輪
 （第 2/2），未收斂部分將由 reviewer 直接接手。
+
+---
+
+## Round 2 裁定（2026-06-11，commit c0bb596）：**接受並 merge**
+
+- M1–M4 全數驗證修復：agent 層 flag gating（off 時 meta 無 signals
+  key）；verdict regex 放寬並以 mock `_complete_text` 直測解析路徑
+  （含全形冒號、大小寫、裝飾符）；bridging 與 refute 改讀來源頁
+  **內容**（`_load_source_contents`：strip frontmatter、截 2000 字、
+  讀不到跳過）；無內容時 refute 跳過並註記。
+- S1–S3 完成：fail-open 改 None 缺值、sidecar 500 上限與損毀重建
+  測試補齊、`expected_inputs` 改字串 list。S4：本輪在
+  `cortex/phase-1` 分支交付 ✅。
+- **Reviewer 接手項（2 件）**：① 修正輪誤把使用者個人 vault 檔案
+  （Excalidraw、Kanban）commit 進交付——已移出追蹤（8915b8e）；
+  ② brief §2.2 最後一個缺漏測試（frontmatter signals block +
+  鏡像 byte-identity）由 reviewer 補上（b7d33f2）。
+- 全套 737 passed。Merge：01e92b0。
+
+**給下一個 Phase 的委外教訓**：(1) brief 應明文「只准 commit 交付
+範圍內的檔案；commit 前 `git status` 自查」；(2) 規格中「來源頁」
+這類指涉物，下次直接附上解析範例程式碼，杜絕「標題代替內容」式
+的便宜實作。
