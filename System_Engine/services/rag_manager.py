@@ -565,6 +565,7 @@ class RAGManager:
         diversity: float = 0.0,
         rerank: bool | None = None,
         hybrid: bool | None = None,
+        use_facets: bool | None = None,
     ) -> list[dict]:
         """Query RAG returning structured dict lists.
 
@@ -715,7 +716,15 @@ class RAGManager:
             # parent's real chunk BEFORE reranking, so the cross-encoder
             # scores actual content and downstream consumers never see
             # summary text masquerading as source material.
-            candidates = self._dereference_facets(candidates, candidate_info, need_embeddings)
+            # use_facets=False drops facet hits instead (the A/B baseline
+            # the retrieval bench uses to measure facet lift).
+            if use_facets is False:
+                candidates = [
+                    c for c in candidates
+                    if (c.get("metadata") or {}).get("role") != "facet"
+                ]
+            else:
+                candidates = self._dereference_facets(candidates, candidate_info, need_embeddings)
 
             if use_rerank and candidates:
                 scores = reranker.score(query_text, [c["text"] for c in candidates])
@@ -776,6 +785,7 @@ class RAGManager:
                 "diversity": diversity,
                 "rerank": use_rerank,
                 "hybrid": use_hybrid,
+                "use_facets": use_facets,
             }
             recorded_results = []
             for c in final_returned:
@@ -955,6 +965,30 @@ class RAGManager:
                 self.collection.delete(ids=facet_ids)
         except Exception as e:
             logging.debug(f"Facet cleanup failed for {doc_id[:8]}: {e}")
+
+    def get_facet_entries(self) -> list[dict]:
+        """All facet entries: [{title, text, facet_index, timestamp}].
+
+        Powers the bench builder — facet theses are the raw material for
+        auto-generated regression queries.
+        """
+        try:
+            results = self.collection.get(where={"role": "facet"}, include=["documents", "metadatas"])
+        except Exception as e:
+            logging.debug(f"Facet listing failed: {e}")
+            return []
+        out = []
+        documents = results.get("documents") or []
+        metadatas = results.get("metadatas") or []
+        for i, meta in enumerate(metadatas):
+            meta = meta or {}
+            out.append({
+                "title": meta.get("title"),
+                "text": documents[i] if i < len(documents) else "",
+                "facet_index": meta.get("facet_index", 0),
+                "timestamp": meta.get("timestamp", ""),
+            })
+        return out
 
     def _first_chunk_of_doc(self, doc_id: str | None, need_embeddings: bool = False) -> dict | None:
         """Fetch the parent document's leading real chunk (for facet

@@ -61,5 +61,26 @@ embedding 也來自母 chunk（need_embeddings 時 parent fetch 帶 embeddings�
 - 單元：`tests/test_facet_index.py`（add/replace/dereference/dedup/
   dangling/content-hash 防護）、`tests/test_dynamic_pipeline.py`
   （Phase A 每 part 一批、Phase B 短文一批、flag off 全關）。
-- 品質：上線前後各跑一次 `maintenance/retrieval_bench.py`（bench cases 在
-  `scratch/retrieval_bench.yml`），分數沒上升就把 flag 關回去。
+- 品質：由下述自我改進迴路持續驗證，不靠一次性人工對比。
+
+## Self-improving bench loop（2026-06-10 同日落地）
+
+驗證不該是一次性的——迴路設計成隨 vault 自動進步：
+
+1. **評測集自動生長**（`maintenance/bench_builder.py`，週任務）：
+   每篇有 facet 的未覆蓋頁面，由 `llm.generate_bench_question()` 把 thesis
+   改寫成自然問句（禁止逐字抄 thesis——抄了等於測 facet 自己）。候選 case
+   必須通過品質閘門：**當下系統答得對才收錄**。哲學是 regression guard：
+   auto case 鎖定今天可用的能力，未來任何改動讓它失敗＝退步。
+   寫入獨立的 `scratch/retrieval_bench_auto.yml`（原子寫入，手寫檔與其
+   註解永不被改寫；auto 檔可隨時整檔刪除重來）。上限
+   `BENCH_AUTO_MAX_CASES`（30）、每輪 `BENCH_AUTO_PER_RUN`（5）。
+2. **Facet A/B**：每日 bench 每條 case 跑兩次——`use_facets` 預設 vs
+   `False`（後者把 facet 命中直接丟棄，不解參照）——回報 facet lift。
+   lift 持續為負時，告警會建議關閉 `FACET_INDEX_ENABLED`。
+3. **歷史與退步告警**：每次 bench 結果 append 進
+   `Database/bench_history.json`（保留 365 筆，原子寫入）。pass rate 低於
+   上一次 → status 升級為 `regressed` 並寫 `fromLingLing/` 告警，列出
+   失敗查詢與嫌疑變更方向。
+
+對應測試：`tests/test_bench_loop.py`。

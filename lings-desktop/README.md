@@ -173,6 +173,13 @@ lings-desktop/
 - **`@ling-profiles` 指令**（[agents/profiles_agent.py](System_Engine/agents/profiles_agent.py)）：`@ling-profiles` 總覽、`pending` 草稿明細、`approve <名稱>` 一鍵把審核通過的草稿搬入正式位置（拒絕覆寫既有檔案）。
 - **Skill 前置條件強制檢查**：`Skills/*.md` 的 `applicable_when`（`database_populated` / `min_documents` / `has_tag_graph`）在執行前對照實際 vault 狀態驗證，不滿足就明確拒跑（例如知識庫只有 5 份文件時擋下 montecarlo）。RAG 失效時 fail-open，不會反過來癱瘓 insight。
 
+### 2026-06-10 Self-Improving Bench Loop（檢索品質自動進步迴路）
+
+- **評測集自動生長**（[maintenance/bench_builder.py](System_Engine/maintenance/bench_builder.py)，週任務）：每篇有 facet 的未覆蓋頁面，LLM 把 thesis 改寫成自然問句（禁止逐字抄），且**當下系統答得對才收錄**（品質閘門）。哲學是 regression guard：auto case 鎖定今天可用的能力，未來改動讓它失敗＝退步。寫入獨立的 `scratch/retrieval_bench_auto.yml`，手寫 bench 檔永不被改寫，auto 檔可隨時刪除重來。上限 `BENCH_AUTO_MAX_CASES`（30）、每輪 `BENCH_AUTO_PER_RUN`（5）。
+- **Facet A/B lift**：每日 retrieval bench 每條 case 跑兩次（`use_facets` 開/關），量化 facet 淨貢獻。lift 持續為負時告警會建議關閉 `FACET_INDEX_ENABLED`。
+- **歷史趨勢＋退步告警**：每次 bench 結果存入 `Database/bench_history.json`（365 筆、原子寫入）；pass rate 低於上次 → status 升為 `regressed` 並寫 `fromLingLing/` 告警，列出失敗查詢。
+- 迴路全貌：**ingest（facet 自動產生）→ bench builder（評測集跟著長）→ daily bench（A/B 測量）→ history（趨勢）→ alert（退步立即可見）**——vault 越大，評測越完整，系統越知道自己哪裡退步。
+
 ### 2026-06-10 Facet Index（摘要向量指標檢索，Phase A+B）
 
 - **概念**：LLM digest 的 `thesis` 與 `key_points` 被 embed 成「facet」條目存入同一個 collection（`role: facet`，共用母文件 doc_id）。Facet 是**檢索指標不是內容**——query 命中 facet 後，rerank 之前就解參照回母頁面的真實 chunk，下游永遠拿到原文。解決 query（問句）與 chunk（散文）的語意落差與跨語言落差。

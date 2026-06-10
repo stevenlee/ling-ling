@@ -79,7 +79,18 @@ class MaintenanceScheduler(threading.Thread):
             return MaintenanceResult("succeeded", "Scheduled full insight generated.")
 
         def retrieval_bench() -> MaintenanceResult:
-            result = run_retrieval_bench(self.rag)
+            from core.config import BENCH_HISTORY_FILE, FACET_INDEX_ENABLED, FROM_LLM_DIR
+            result = run_retrieval_bench(
+                self.rag,
+                ab_facets=FACET_INDEX_ENABLED,
+                history_path=BENCH_HISTORY_FILE,
+                report_dir=FROM_LLM_DIR,
+            )
+            return MaintenanceResult(result.status, result.message)
+
+        def bench_builder() -> MaintenanceResult:
+            from maintenance.bench_builder import build_bench_cases
+            result = build_bench_cases(self.rag, self.llm)
             return MaintenanceResult(result.status, result.message)
 
         def trace_prune() -> MaintenanceResult:
@@ -141,6 +152,14 @@ class MaintenanceScheduler(threading.Thread):
                 idle_required=False,
                 intent="maintenance.trace_prune",
                 agent="TraceStore",
+            ),
+            MaintenanceTask(
+                name="bench_builder_weekly",
+                action=bench_builder,
+                interval_seconds=7 * 86400,
+                idle_required=True,
+                intent="maintenance.bench_builder",
+                agent="BenchBuilder",
             ),
             MaintenanceTask(
                 name="rag_orphan_sweep_daily",

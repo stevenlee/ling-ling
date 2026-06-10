@@ -1382,6 +1382,42 @@ class LLMClient:
             logging.warning(f"select_profile LLM call failed: {e}")
             return "none"
 
+    def generate_bench_question(self, title: str, thesis: str) -> str:
+        """Turn a page's thesis into one natural retrieval question.
+
+        Used by the bench builder to auto-grow the regression suite: the
+        question must be answerable by the page but NOT quote the thesis
+        verbatim (a verbatim copy would test nothing — its embedding is
+        already near-identical to the facet's).
+        """
+        system_prompt = (
+            "You write retrieval test queries for a personal knowledge base.\n"
+            "Given a document title and its thesis, write ONE natural question a user "
+            "might ask that this document should answer.\n"
+            "Rules:\n"
+            "- Same language as the thesis.\n"
+            "- Do NOT copy the thesis verbatim; paraphrase into a question.\n"
+            "- Do NOT mention the document title.\n"
+            "- Return ONLY the question, one line, no quotes or commentary."
+        )
+        user_msg = f"Title: {title}\nThesis: {thesis}"
+        try:
+            raw = self._complete_text(
+                system_prompt=system_prompt,
+                user_msg=user_msg,
+                temperature=0.3,
+                max_tokens=100,
+                trace_context={
+                    "stage": "generate_bench_question",
+                    "metadata": {"title": title},
+                },
+            )
+            question = raw.strip().splitlines()[0].strip().strip('"').strip()
+            return question if len(question) >= 8 else ""
+        except Exception as e:
+            logging.warning(f"generate_bench_question failed for {title}: {e}")
+            return ""
+
     def generate_persona_and_template(self, category: str) -> dict:
         """Dynamically generate a Persona note and a Markdown Template for a new document category.
 

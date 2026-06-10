@@ -104,6 +104,12 @@ DATABASE_DIR = WIKI_VAULT_DIR / "Database"
 MAINTENANCE_STATE_FILE = DATABASE_DIR / "maintenance_state.json"
 PLANS_DIR = DATABASE_DIR / "plans"
 RETRIEVAL_BENCH_FILE = SCRATCH_DIR / "retrieval_bench.yml"
+# Auto-grown regression cases live separately so rewrites never clobber the
+# hand-written file (or its comments). Wipe the auto file freely to reset.
+RETRIEVAL_BENCH_AUTO_FILE = SCRATCH_DIR / "retrieval_bench_auto.yml"
+BENCH_HISTORY_FILE = DATABASE_DIR / "bench_history.json"
+BENCH_AUTO_MAX_CASES = int(os.getenv("BENCH_AUTO_MAX_CASES", "30"))
+BENCH_AUTO_PER_RUN = int(os.getenv("BENCH_AUTO_PER_RUN", "5"))
 RAW_DIR = WIKI_VAULT_DIR / "raw"
 RAW_CONSOLIDATE_DIR = RAW_DIR / "consolidate"
 RAW_PROMPTS_DIR = RAW_DIR / "prompts"

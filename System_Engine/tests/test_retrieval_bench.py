@@ -43,7 +43,7 @@ queries:
         "beta": [result("Other"), result("Beta Doc", cid="chunk_2")],
     })
 
-    out = run_retrieval_bench(rag, bench_path=bench, log_path=log, min_pass_rate=1.0)
+    out = run_retrieval_bench(rag, bench_path=bench, auto_path=None, log_path=log, min_pass_rate=1.0)
 
     assert out.status == "passed"
     assert out.passed == 2
@@ -67,7 +67,7 @@ def test_retrieval_bench_fails_below_threshold(tmp_path):
     )
     rag = FakeRAG({"alpha": [result("Alpha Doc")]})
 
-    out = run_retrieval_bench(rag, bench_path=bench, log_path=log, min_pass_rate=0.8)
+    out = run_retrieval_bench(rag, bench_path=bench, auto_path=None, log_path=log, min_pass_rate=0.8)
 
     assert out.status == "failed"
     assert out.pass_rate == 0.0
@@ -78,6 +78,7 @@ def test_retrieval_bench_skips_without_cases(tmp_path):
     out = run_retrieval_bench(
         FakeRAG({}),
         bench_path=tmp_path / "missing.yml",
+        auto_path=None,
         log_path=tmp_path / "maintenance.log.md",
     )
 
