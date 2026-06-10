@@ -2,9 +2,11 @@
 type: operation
 description: "Challenger persona designed to refute a candidate insight based on provided sources."
 expected_inputs:
-  - candidate: "The generated insight to be challenged."
-  - sources: "The source material to check against."
-produces: "A brief verdict followed by refute notes."
+  - candidate
+  - sources
+produces:
+  - refute_verdict
+  - refute_notes
 cost_class: medium
 ---
 

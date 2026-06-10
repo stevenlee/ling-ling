@@ -2,11 +2,13 @@ import sys
 import json
 import numpy as np
 from pathlib import Path
+import re
 
 sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import pytest
 from services.insight_signals import compute_signals, InsightSignals
+from services.llm_client import LLMClient
 
 class FakeRAG:
     def __init__(self, indexed_titles):
@@ -18,9 +20,9 @@ class FakeRAG:
     def ef(self, texts):
         embs = []
         for t in texts:
-            if "TargetA" in t:
+            if "TargetA content" in t:
                 embs.append([1.0, 0.0])
-            elif "TargetB" in t:
+            elif "TargetB content" in t:
                 embs.append([0.0, 1.0])
             elif "novel" in t:
                 embs.append([-1.0, 0.0])
@@ -57,8 +59,11 @@ def patch_env(tmp_path, monkeypatch):
     notes_dir = tmp_path / "Notes"
     notes_dir.mkdir()
     
-    (pages_dir / "ExistingPage.md").write_text("")
-    (notes_dir / "ExistingNote.md").write_text("")
+    (pages_dir / "ExistingPage.md").write_text("Existing content")
+    (notes_dir / "ExistingNote.md").write_text("Existing note content")
+    
+    (pages_dir / "TargetA.md").write_text("TargetA content")
+    (pages_dir / "TargetB.md").write_text("TargetB content")
     
     monkeypatch.setattr(core.config, "INSIGHT_SIGNALS_FILE", signals_file)
     monkeypatch.setattr(services.insight_signals, "INSIGHT_SIGNALS_FILE", signals_file)
@@ -75,6 +80,8 @@ def patch_env(tmp_path, monkeypatch):
     monkeypatch.setattr(services.insight_signals, "INSIGHT_REFUTE_ENABLED", True)
 
     return signals_file
+
+# -- tests --
 
 def test_groundedness_and_broken_links(patch_env):
     rag = FakeRAG(["IndexedDoc"])
@@ -112,6 +119,7 @@ def test_bridging(patch_env):
     rag = FakeRAG([])
     llm = FakeLLM()
     
+    # TargetA and TargetB exist in pages_dir
     signals = compute_signals("report", ["TargetA", "TargetB"], rag, llm)
     assert signals.bridging == 1.0
     
@@ -122,7 +130,7 @@ def test_refute(patch_env):
     rag = FakeRAG([])
     llm = FakeLLM(verdict="refuted")
     
-    signals = compute_signals("report", [], rag, llm, run_refute=True)
+    signals = compute_signals("report", ["TargetA"], rag, llm, run_refute=True)
     assert signals.refute_verdict == "refuted"
     assert llm.called
     
@@ -136,4 +144,80 @@ def test_fail_open(patch_env):
     llm.raise_err = True
     
     signals = compute_signals("report", [], None, llm)
+    # Fail open semantics: should be None, not 0.0
     assert signals.refute_verdict is None
+    assert signals.groundedness == 1.0 # no links = 1.0
+    assert signals.bridging is None
+
+# -- S2 Tests --
+
+def test_sidecar_limit_500(patch_env):
+    rag = FakeRAG([])
+    llm = FakeLLM()
+    import json
+    
+    # create 500 fake records
+    data = {}
+    for i in range(500):
+        data[f"id_{i}"] = {"embedding": [0.0, 1.0], "ts": f"2000-01-01T00:00:{i%60:02d}"}
+    patch_env.write_text(json.dumps(data))
+    
+    # Add 1 more via compute_signals
+    compute_signals("new stuff", [], rag, llm)
+    
+    history = json.loads(patch_env.read_text())
+    assert len(history) == 500
+    assert "id_0" not in history  # Oldest is evicted
+
+def test_sidecar_corruption_recovery(patch_env):
+    patch_env.write_text("invalid json { {[")
+    rag = FakeRAG([])
+    llm = FakeLLM()
+    
+    # Should not crash, and should rebuild file
+    compute_signals("novel stuff here", [], rag, llm)
+    import json
+    history = json.loads(patch_env.read_text())
+    assert len(history) == 1
+
+def test_flag_off(patch_env, monkeypatch):
+    import core.config
+    import services.insight_signals
+    monkeypatch.setattr(core.config, "INSIGHT_SIGNALS_ENABLED", False)
+    monkeypatch.setattr(services.insight_signals, "INSIGHT_SIGNALS_ENABLED", False)
+    
+    rag = FakeRAG([])
+    llm = FakeLLM()
+    
+    signals = compute_signals("report", ["TargetA", "TargetB"], rag, llm)
+    assert signals.groundedness is None
+    assert signals.novelty is None
+    assert signals.bridging is None
+    assert signals.refute_verdict is None
+
+# -- M2 Tests --
+
+def test_llm_client_refute_regex(monkeypatch):
+    client = LLMClient()
+    
+    class FakeResponse:
+        def __init__(self, text):
+            self.text = text
+            
+    def mock_complete_text(*args, **kwargs):
+        return kwargs.get("mock_response_text", "")
+        
+    monkeypatch.setattr(client, "_complete_text", mock_complete_text)
+    
+    # Helper to test different formatting
+    def check_verdict(text, expected):
+        monkeypatch.setattr(client, "_complete_text", lambda *a, **kw: text)
+        res = client.refute_insight("c", ["s"])
+        assert res["verdict"] == expected
+        
+    check_verdict("**Verdict:** refuted", "refuted")
+    check_verdict("*Verdict*: refuted", "refuted")
+    check_verdict("Verdict：survived", "survived")
+    check_verdict("Some notes.\nVerdict: survived\n", "survived")
+    check_verdict("Verdict :   REFUTED", "refuted")
+    check_verdict("Just random text without verdict", None)
