@@ -112,6 +112,16 @@ class InsightAgent(BaseAgent):
             strategy_id = random.choice(list(self.strategies.keys()))
 
         config = self.strategies[strategy_id]
+
+        blockers = self._check_skill_preconditions(config.get("applicable_when") or {})
+        if blockers:
+            from core.ui import ui
+            reasons = "；".join(blockers)
+            message = f"⏸️ 技能「{strategy_id}」前置條件未滿足：{reasons}"
+            ui.error(message)
+            logging.warning(f"Insight skill '{strategy_id}' skipped: {reasons}")
+            return message
+
         pipeline = config.get("pipeline", "single")
         resolved_template = forced_template or config.get("template")
 
@@ -135,6 +145,41 @@ class InsightAgent(BaseAgent):
             related_titles=target_titles,
         )
         return full_markdown
+
+    def _check_skill_preconditions(self, applicable_when: dict) -> list[str]:
+        """Validate a skill's `applicable_when` frontmatter against the live
+        vault. Returns a list of human-readable blockers (empty = runnable).
+
+        Supported keys: `database_populated` (bool), `min_documents` (int,
+        compared against indexed chunk count), `has_tag_graph` (bool).
+        Unknown keys are ignored so skills can carry forward-compatible
+        conditions without breaking older engines. Fail-open on RAG errors —
+        a broken precondition check must not disable insights entirely.
+        """
+        if not applicable_when or not isinstance(applicable_when, dict) or self.rag is None:
+            return []
+
+        blockers: list[str] = []
+        try:
+            needs_count = applicable_when.get("database_populated") or (
+                applicable_when.get("min_documents") is not None
+            )
+            count = self.rag.get_total_chunks_count() if needs_count else None
+
+            if applicable_when.get("database_populated") and not count:
+                blockers.append("知識庫是空的，請先 ingest 一些文件")
+
+            min_docs = applicable_when.get("min_documents")
+            if isinstance(min_docs, int) and count is not None and count < min_docs:
+                blockers.append(f"需要至少 {min_docs} 份索引文件，目前只有 {count}")
+
+            if applicable_when.get("has_tag_graph") and hasattr(self.rag, "has_tagged_documents"):
+                if not self.rag.has_tagged_documents():
+                    blockers.append("沒有任何帶標籤的文件，無法建立 tag graph")
+        except Exception as e:
+            logging.warning(f"Skill precondition check failed (allowing run): {e}")
+            return []
+        return blockers
 
     def generate_full_insight(
         self,

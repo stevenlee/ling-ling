@@ -271,6 +271,78 @@ class ProfileManager:
     def has_pending(self, profile_name: str) -> bool:
         return (self.pending_dir / profile_name).exists()
 
+    def list_pending(self) -> list[str]:
+        if not self.pending_dir.exists():
+            return []
+        return sorted(p.name for p in self.pending_dir.iterdir() if p.is_dir())
+
+    def approve_pending(
+        self,
+        profile_name: str,
+        *,
+        personas_dir: Path,
+        templates_dir: Path,
+        notify_dir: Path | None = None,
+    ) -> dict:
+        """Activate a reviewed _pending/ bundle: move persona → Personas/,
+        template → Templates/, profile → Profiles/, then clean up.
+
+        Returns {"ok": bool, "moved": [paths], "errors": [messages]}.
+        Existing target files are never overwritten — that's reported as an
+        error so a human resolves the conflict deliberately.
+        """
+        bundle_dir = self.pending_dir / profile_name
+        result: dict = {"ok": False, "moved": [], "errors": []}
+
+        profile_file = bundle_dir / f"{profile_name}.md"
+        if not bundle_dir.is_dir() or not profile_file.exists():
+            result["errors"].append(f"No pending bundle found for '{profile_name}'.")
+            return result
+
+        spec = _parse_profile_file(profile_file)
+        if spec is None:
+            result["errors"].append(f"Pending profile file for '{profile_name}' is invalid.")
+            return result
+
+        moves = [
+            (bundle_dir / f"{spec.persona}.md", Path(personas_dir) / f"{spec.persona}.md"),
+            (bundle_dir / f"{spec.template}.md", Path(templates_dir) / f"{spec.template}.md"),
+            (profile_file, self.profiles_dir / f"{profile_name}.md"),
+        ]
+        for src, dst in moves:
+            if not src.exists():
+                result["errors"].append(f"Missing file in bundle: {src.name}")
+            elif dst.exists():
+                result["errors"].append(f"Target already exists, not overwriting: {dst}")
+        if result["errors"]:
+            return result
+
+        for src, dst in moves:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            src.replace(dst)
+            result["moved"].append(str(dst))
+
+        # Bundle should be empty now; remove leftovers conservatively.
+        try:
+            for leftover in bundle_dir.iterdir():
+                logging.warning(f"ProfileManager: unexpected leftover in bundle: {leftover.name}")
+                break
+            else:
+                bundle_dir.rmdir()
+        except Exception as e:
+            logging.debug(f"ProfileManager: bundle cleanup skipped: {e}")
+
+        if notify_dir is not None:
+            notice = Path(notify_dir) / f"[review] new profile - {profile_name}.md"
+            try:
+                notice.unlink(missing_ok=True)
+            except Exception as e:
+                logging.debug(f"ProfileManager: notice cleanup skipped: {e}")
+
+        self.reload()
+        result["ok"] = True
+        return result
+
     @staticmethod
     def _write_review_notice(
         notify_dir: Path,

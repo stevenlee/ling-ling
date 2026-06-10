@@ -1,3 +1,8 @@
+---
+version: 1
+description: Universal fallback document structure (default profile)
+---
+
 # [Document Title]
 
 ## Metadata

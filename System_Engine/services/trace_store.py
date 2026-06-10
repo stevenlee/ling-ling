@@ -379,6 +379,58 @@ class TraceStore:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    @staticmethod
+    def _since_cutoff(days: int) -> str:
+        return (datetime.now(UTC) - timedelta(days=days)).isoformat(
+            timespec="milliseconds"
+        ).replace("+00:00", "Z")
+
+    def query_artifacts(self, artifact_type: str, since_days: int = 7) -> list[dict]:
+        """Fetch artifacts of one type within the window, metadata parsed.
+
+        Powers maintenance analytics (e.g. routing reports over
+        `routing_decision` artifacts). Returns newest first.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM artifacts WHERE artifact_type = ? AND ts >= ? ORDER BY ts DESC",
+                (artifact_type, self._since_cutoff(since_days)),
+            ).fetchall()
+        out = []
+        for row in rows:
+            record = dict(row)
+            try:
+                record["metadata"] = json.loads(record.get("metadata_json") or "{}")
+            except Exception:
+                record["metadata"] = {}
+            out.append(record)
+        return out
+
+    def query_llm_calls(self, stage: str, since_days: int = 7) -> list[dict]:
+        """Fetch llm_calls for one stage within the window, metadata parsed.
+
+        Excludes prompt/response bodies — analytics only needs the
+        envelope (status, latency, metadata). Returns newest first.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT trace_id, run_id, ts, stage, provider, model, status,
+                       error, latency_ms, total_tokens, metadata_json
+                FROM llm_calls WHERE stage = ? AND ts >= ? ORDER BY ts DESC
+                """,
+                (stage, self._since_cutoff(since_days)),
+            ).fetchall()
+        out = []
+        for row in rows:
+            record = dict(row)
+            try:
+                record["metadata"] = json.loads(record.get("metadata_json") or "{}")
+            except Exception:
+                record["metadata"] = {}
+            out.append(record)
+        return out
+
 
 
     def prune_old(self) -> None:

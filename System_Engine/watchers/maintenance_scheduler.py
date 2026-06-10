@@ -89,6 +89,19 @@ class MaintenanceScheduler(threading.Thread):
             trace_store.prune_old()
             return MaintenanceResult("succeeded", "SQLite trace logs pruned successfully.")
 
+        def template_audit() -> MaintenanceResult:
+            from maintenance.template_audit import run_template_audit
+            result = run_template_audit()
+            return MaintenanceResult(result.status, result.message)
+
+        def routing_report() -> MaintenanceResult:
+            trace_store = getattr(self.llm, "trace_store", None)
+            if trace_store is None:
+                return MaintenanceResult("skipped", "No trace store associated with LLM client.")
+            from maintenance.routing_report import run_routing_report
+            result = run_routing_report(trace_store)
+            return MaintenanceResult(result.status, result.message)
+
         return [
             MaintenanceTask(
                 name="insight_daily",
@@ -116,6 +129,22 @@ class MaintenanceScheduler(threading.Thread):
                 idle_required=False,
                 intent="maintenance.trace_prune",
                 agent="TraceStore",
+            ),
+            MaintenanceTask(
+                name="routing_report_weekly",
+                action=routing_report,
+                interval_seconds=7 * 86400,
+                idle_required=True,
+                intent="maintenance.routing_report",
+                agent="RoutingReport",
+            ),
+            MaintenanceTask(
+                name="template_audit_weekly",
+                action=template_audit,
+                interval_seconds=7 * 86400,
+                idle_required=True,
+                intent="maintenance.template_audit",
+                agent="TemplateAudit",
             ),
         ]
 

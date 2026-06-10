@@ -162,6 +162,14 @@ lings-desktop/
 - **統一資產契約**：Personas 與 Templates 改經 `_load_capability_body` 載入，frontmatter 一律剝除後才進 system prompt——之後可安全地替 persona/template 加上與 Operations 同款的 metadata。
 - **併發加固**：vault 刪檔搶不到鎖改為排程重試（不再無鎖裸跑 RAG）；`DynamicSettings.reload()` 加鎖並改為先解析再原子套用；MaintenanceScheduler 狀態檔改 temp-file + rename 原子寫入；watcher 同步/處理失敗改為 `ui.error` 浮出。
 
+### 2026-06-10 Routing Observability & Ops（Profile 制後續五件套）
+
+- **路由決策追蹤**：每次 ingestion 寫一筆 `routing_decision` artifact（profile、解析層 `frontmatter_override/frontmatter_profile/llm_selection/default_profile/settings_fallback`、是否 fallback、是否送審）。TraceStore 新增 `query_artifacts()` / `query_llm_calls()` 分析介面。
+- **路由健康報告**（[maintenance/routing_report.py](System_Engine/maintenance/routing_report.py)）：每週彙整 fallback 率、各層分佈、未被選用的 profile、待審草稿。摘要固定進 `maintenance.log.md`；有可行動項（fallback 超過 30%、有待審草稿、選擇器失敗）才寫完整報告到 `fromLingLing/`。
+- **Template 版本化**：template frontmatter 可宣告 `version:`；生成頁面 frontmatter 蓋上 `template` / `template_version` 戳記。每週 [maintenance/template_audit.py](System_Engine/maintenance/template_audit.py) 稽核 `pages/`，列出用舊版 template 渲染的頁面（不自動重渲染，只追蹤）。
+- **`@ling-profiles` 指令**（[agents/profiles_agent.py](System_Engine/agents/profiles_agent.py)）：`@ling-profiles` 總覽、`pending` 草稿明細、`approve <名稱>` 一鍵把審核通過的草稿搬入正式位置（拒絕覆寫既有檔案）。
+- **Skill 前置條件強制檢查**：`Skills/*.md` 的 `applicable_when`（`database_populated` / `min_documents` / `has_tag_graph`）在執行前對照實際 vault 狀態驗證，不滿足就明確拒跑（例如知識庫只有 5 份文件時擋下 montecarlo）。RAG 失效時 fail-open，不會反過來癱瘓 insight。
+
 ### 2026-05-24 Capability Layer & Lens Dual-Link (Phase 4)
 
 - **Capability metadata**：`Templates/Operations/*.md` 與 `Skills/*.md` 加上 frontmatter（`type / expected_inputs / produces / cost_class / applicable_when`）。新的 [services/capability_manager.py](System_Engine/services/capability_manager.py) 在 daemon 啟動時掃描並建索引；`LLMClient._build_system_prompt` 改回傳 `(prompt, resolution)`，resolution 寫入 `llm_calls.metadata_json.capability_resolution`，**不會**注入到 system prompt。Operations 的 frontmatter 在組 system prompt 前由 `_load_capability_body` 剝除。

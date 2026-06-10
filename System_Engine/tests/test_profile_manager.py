@@ -120,6 +120,61 @@ class TestPendingQueue:
         notice_text = notices[0].read_text(encoding="utf-8")
         assert "diary" in notice_text and "_pending" in notice_text
 
+    def test_approve_pending_activates_bundle(self, tmp_path):
+        profiles_dir = tmp_path / "Profiles"
+        personas_dir = tmp_path / "Personas"
+        templates_dir = tmp_path / "Templates"
+        notify_dir = tmp_path / "fromLingLing"
+        pm = ProfileManager(profiles_dir)
+        pm.queue_pending(
+            profile_name="diary",
+            persona_name="diary-companion", persona_content="# P",
+            template_name="diary-entry", template_content="# T",
+            notify_dir=notify_dir,
+        )
+
+        result = pm.approve_pending(
+            "diary", personas_dir=personas_dir, templates_dir=templates_dir,
+            notify_dir=notify_dir,
+        )
+
+        assert result["ok"], result["errors"]
+        assert (personas_dir / "diary-companion.md").exists()
+        assert (templates_dir / "diary-entry.md").exists()
+        assert pm.get("diary") is not None              # active after reload
+        assert not (profiles_dir / "_pending" / "diary").exists()  # bundle removed
+        assert list(notify_dir.glob("*.md")) == []      # notice cleaned up
+
+    def test_approve_pending_refuses_overwrite(self, tmp_path):
+        profiles_dir = tmp_path / "Profiles"
+        personas_dir = tmp_path / "Personas"
+        personas_dir.mkdir()
+        (personas_dir / "diary-companion.md").write_text("existing", encoding="utf-8")
+        pm = ProfileManager(profiles_dir)
+        pm.queue_pending(
+            profile_name="diary",
+            persona_name="diary-companion", persona_content="# P",
+            template_name="diary-entry", template_content="# T",
+        )
+
+        result = pm.approve_pending(
+            "diary", personas_dir=personas_dir, templates_dir=tmp_path / "Templates",
+        )
+
+        assert not result["ok"]
+        assert any("not overwriting" in e for e in result["errors"])
+        # Nothing moved; bundle intact; existing file untouched.
+        assert pm.has_pending("diary")
+        assert (personas_dir / "diary-companion.md").read_text(encoding="utf-8") == "existing"
+
+    def test_approve_missing_bundle_reports_error(self, tmp_path):
+        pm = ProfileManager(tmp_path / "Profiles")
+        result = pm.approve_pending(
+            "ghost", personas_dir=tmp_path / "P", templates_dir=tmp_path / "T",
+        )
+        assert not result["ok"]
+        assert "No pending bundle" in result["errors"][0]
+
     def test_pending_bundle_is_not_active(self, tmp_path):
         profiles_dir = tmp_path / "Profiles"
         pm = ProfileManager(profiles_dir)

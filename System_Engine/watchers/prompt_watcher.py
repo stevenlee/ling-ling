@@ -39,6 +39,7 @@ INTENT_ROUTES = [
     (["patrol"],                             ["patrol"],      "patrol"),
     (["repair-db"],                          ["repair-db"],   "linter"),
     (["insight"],                            ["insight"],     "insight"),
+    (["profiles", "profile"],                ["profiles", "profile"], "profiles"),
     (["plan"],                               ["plan"],        "plan"),
     (["do"],                                 ["do"],          "do"),
     (["zip"],                                ["zip"],         "kb_zip"),

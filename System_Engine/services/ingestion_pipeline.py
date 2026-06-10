@@ -23,6 +23,7 @@ from core.config import (
     SYNTHESIS_CRITIQUE_ENABLED,
     THOUGHTFUL_EMIT_SUMMARY,
     THOUGHTFUL_USE_LLM_FOR_INGEST,
+    TEMPLATES_DIR,
     USE_THOUGHTFUL_SPLITTER,
     settings,
     SCRIPTURE_DIR,
@@ -119,12 +120,15 @@ class IngestionPipeline:
 
         pm = self.load_profiles()
         profile = None
+        layer = "frontmatter_override"
+        pending_queued = False
         doc_type = meta.get("document_type") or meta.get("type")
         doc_type = doc_type.lower().strip() if isinstance(doc_type, str) else None
 
         if not (synthesis_persona and synthesis_template):
             # Layer 1b: explicit profile name in frontmatter.
             profile = pm.get(meta.get("profile")) or pm.get(doc_type)
+            layer = "frontmatter_profile"
 
             # Layer 2: closed-choice LLM selection among registered profiles.
             if profile is None:
@@ -134,20 +138,24 @@ class IngestionPipeline:
                 )
                 if isinstance(choice, str) and choice != "none":
                     profile = pm.get(choice)
+                    layer = "llm_selection"
 
                 # No fit: draft a new bundle for review, then fall through to
                 # the default profile for this run (quality over immediacy).
                 if profile is None:
-                    self._queue_new_profile(pm, doc_type, source_filepath, content_prefix)
+                    pending_queued = self._queue_new_profile(
+                        pm, doc_type, source_filepath, content_prefix
+                    )
 
             # Layer 3: the default profile.
             if profile is None:
                 profile = pm.get("default")
+                layer = "default_profile" if profile else "settings_fallback"
             if profile is not None:
                 synthesis_persona = synthesis_persona or profile.persona
                 synthesis_template = synthesis_template or profile.template
 
-        return {
+        doc_config = {
             "ingest_persona": meta.get("ingest_persona") or "translator",
             "ingest_template": meta.get("ingest_template") or "translation-rpt",
             "synthesis_persona": synthesis_persona or settings.AGENT_ROLE or "none",
@@ -156,6 +164,66 @@ class IngestionPipeline:
             "profile": profile.name if profile else None,
             "operations": list(profile.operations) if profile else [],
         }
+        self._record_routing_decision(
+            source_filepath, doc_config, layer=layer, pending_queued=pending_queued
+        )
+        return doc_config
+
+    def _record_routing_decision(
+        self,
+        source_filepath: Path,
+        doc_config: dict,
+        *,
+        layer: str,
+        pending_queued: bool,
+    ) -> None:
+        """Persist the routing outcome as a `routing_decision` artifact.
+
+        Layers: frontmatter_override / frontmatter_profile / llm_selection /
+        default_profile / settings_fallback. The routing health report
+        aggregates these to surface fallback rates and unused profiles.
+        """
+        if not hasattr(self.llm, "trace_store"):
+            return
+        try:
+            self.llm.trace_store.record_artifact(
+                path=source_filepath,
+                artifact_type="routing_decision",
+                title=source_filepath.name,
+                metadata={
+                    "layer": layer,
+                    "profile": doc_config.get("profile"),
+                    "doc_type": doc_config.get("doc_type"),
+                    "synthesis_persona": doc_config.get("synthesis_persona"),
+                    "synthesis_template": doc_config.get("synthesis_template"),
+                    "fellback_to_default": layer in ("default_profile", "settings_fallback"),
+                    "pending_queued": pending_queued,
+                },
+            )
+        except Exception as e:
+            logging.debug(f"Routing decision trace write failed: {e}")
+
+    @staticmethod
+    def _template_stamp(template_name: str | None) -> dict:
+        """Page-frontmatter stamp recording which template (and version)
+        generated the page. Versions come from the template's own
+        frontmatter `version:` key; unversioned templates stamp name only.
+        The template audit task compares these stamps against current
+        template versions to find pages rendered with outdated layouts."""
+        if not template_name or template_name == "none":
+            return {}
+        stamp = {"template": template_name}
+        try:
+            name = template_name if template_name.endswith(".md") else f"{template_name}.md"
+            template_file = TEMPLATES_DIR / name
+            if template_file.exists():
+                meta = parse_markdown_metadata(template_file.read_text(encoding="utf-8"))
+                version = meta.get("version")
+                if version is not None:
+                    stamp["template_version"] = version
+        except Exception as e:
+            logging.debug(f"Template stamp failed for {template_name}: {e}")
+        return stamp
 
     @staticmethod
     def _classification_prefix(content: str) -> str:
@@ -173,22 +241,23 @@ class IngestionPipeline:
         doc_type: str | None,
         source_filepath: Path,
         content_prefix: str,
-    ) -> None:
+    ) -> bool:
         """Draft persona/template/profile for an unrecognized category into
-        _pending/. Fail-soft: routing falls back to `default` regardless."""
+        _pending/. Fail-soft: routing falls back to `default` regardless.
+        Returns True when a new bundle was queued."""
         try:
             category = doc_type or self.llm.classify_document(
                 source_filepath.name, content_prefix
             )
             if not isinstance(category, str):
-                return
+                return False
             category = re.sub(r'[^a-z0-9\-]', '', category.lower().strip())
             if not category or pm.get(category) or pm.has_pending(category):
-                return
+                return False
 
             gen = self.llm.generate_persona_and_template(category)
             if not isinstance(gen, dict) or "Mock" in type(gen).__name__:
-                return
+                return False
             persona_name = gen.get("persona_name")
             persona_content = gen.get("persona_content")
             template_name = gen.get("template_name")
@@ -197,7 +266,7 @@ class IngestionPipeline:
                 isinstance(v, str) and v
                 for v in (persona_name, persona_content, template_name, template_content)
             ):
-                return
+                return False
 
             persona_name = re.sub(r'[^a-zA-Z0-9\-]', '', persona_name.replace(".md", ""))
             template_name = re.sub(r'[^a-zA-Z0-9\-]', '', template_name.replace(".md", ""))
@@ -211,8 +280,10 @@ class IngestionPipeline:
                 notify_dir=FROM_LLM_DIR,
             )
             ui.info(f"🧾 新類型「{category}」的 Profile 草稿已送審 (fromLingLing)")
+            return True
         except Exception as e:
             logging.warning(f"Profile draft generation failed: {e}")
+            return False
 
     def ingest_to_wiki(
         self,
@@ -228,13 +299,14 @@ class IngestionPipeline:
         and wiki-index rebuild can be deferred to the driver so we don't
         rebuild the entire index N times for an N-part document.
         """
+        template_used = None
         try:
             if not llm_result:
                 context_hint = (part_info or {}).get("context_hint", "")
                 index_content = (part_info or {}).get("index_content")
                 if index_content is None:
                     index_content = INDEX_FILE.read_text(encoding="utf-8") if INDEX_FILE.exists() else ""
-                
+
                 # Resolve dynamic persona/template:
                 if part_info:
                     persona = part_info.get("ingest_persona", "translator")
@@ -242,6 +314,7 @@ class IngestionPipeline:
                 else:
                     persona = (doc_config or {}).get("synthesis_persona") or settings.AGENT_ROLE or "none"
                     template = (doc_config or {}).get("synthesis_template") or settings.USE_TEMPLATE or "wiki-note"
+                template_used = template
 
                 llm_result = self.llm.generate_entity_page(
                     raw_content,
@@ -267,6 +340,7 @@ class IngestionPipeline:
             body += self._build_navigation(base_title, part_info)
 
             wiki_meta = self._build_part_metadata(title, page_type, tags, part_info, quality_fixes)
+            wiki_meta.update(self._template_stamp(template_used))
             self._attach_trace_metadata(wiki_meta)
             wiki_markdown = dump_markdown_with_metadata(wiki_meta, body)
 
@@ -549,6 +623,7 @@ class IngestionPipeline:
             "digest_schema": "part-digest-v1",
             "quality_checker": "deterministic-markdown-v1",
         }
+        final_meta.update(self._template_stamp(syn_template))
         combined_fixes = self._dedupe_quality_fixes(
             (synthesis_fixes or []) + (final_fixes or [])
         )

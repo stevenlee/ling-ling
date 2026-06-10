@@ -941,6 +941,22 @@ class RAGManager:
             logging.error(f"Failed to count chunks: {e}")
             return 0
 
+    def has_tagged_documents(self, sample_limit: int = 200) -> bool:
+        """True if any indexed chunk carries tag metadata (`tag_*` keys).
+
+        Samples up to `sample_limit` chunks — enough to answer the skill
+        precondition `has_tag_graph` without a full collection scan.
+        """
+        try:
+            results = self.collection.get(limit=sample_limit, include=['metadatas'])
+            for meta in results.get('metadatas') or []:
+                if meta and any(k.startswith('tag_') for k in meta):
+                    return True
+            return False
+        except Exception as e:
+            logging.error(f"Failed to check tagged documents: {e}")
+            return False
+
     def wipe_collection(self):
         """Completely wipes the wiki_pages collection."""
         try:

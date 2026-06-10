@@ -114,6 +114,7 @@ def _setup_vault(monkeypatch, tmp_path, profiles: dict[str, tuple[str, str]] | N
     monkeypatch.setattr("services.ingestion_pipeline.update_wiki_index", MagicMock())
     monkeypatch.setattr("services.ingestion_pipeline.PAGES_DIR", tmp_path / "pages")
     monkeypatch.setattr("services.ingestion_pipeline.INDEX_FILE", tmp_path / "index.md")
+    monkeypatch.setattr("services.ingestion_pipeline.TEMPLATES_DIR", tmp_path / "Templates")
 
     if profiles is None:
         profiles = {
@@ -242,6 +243,75 @@ class TestProfileRouting:
         syn_call = llm.generate_synthesis_calls[0]
         assert syn_call["persona"] == "patent-expert"
         assert syn_call["template"] == "patent-rpt"
+
+
+class TestRoutingTraceAndTemplateStamp:
+    def test_routing_decision_recorded_as_artifact(self, monkeypatch, tmp_path, fake_services):
+        llm, rag = fake_services
+        pipeline = IngestionPipeline(llm, rag)
+        monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
+        _setup_vault(monkeypatch, tmp_path)
+
+        content = "Claims\nPrior Art\nAn invention."
+        source_file = tmp_path / "MyPatent.md"
+        source_file.write_text(content)
+
+        pipeline.ingest_markdown(content, source_file)
+
+        # llm.trace_store is a MagicMock — inspect the routing artifact call.
+        routing_calls = [
+            c for c in llm.trace_store.record_artifact.call_args_list
+            if c.kwargs.get("artifact_type") == "routing_decision"
+        ]
+        assert len(routing_calls) == 1
+        meta = routing_calls[0].kwargs["metadata"]
+        assert meta["layer"] == "llm_selection"
+        assert meta["profile"] == "patent"
+        assert meta["fellback_to_default"] is False
+
+    def test_fallback_layer_recorded(self, monkeypatch, tmp_path, fake_services):
+        llm, rag = fake_services
+        pipeline = IngestionPipeline(llm, rag)
+        monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
+        _setup_vault(monkeypatch, tmp_path)
+
+        content = "A story about nothing."
+        source_file = tmp_path / "misc.md"
+        source_file.write_text(content)
+
+        pipeline.ingest_markdown(content, source_file)
+
+        routing_calls = [
+            c for c in llm.trace_store.record_artifact.call_args_list
+            if c.kwargs.get("artifact_type") == "routing_decision"
+        ]
+        meta = routing_calls[0].kwargs["metadata"]
+        assert meta["layer"] == "default_profile"
+        assert meta["fellback_to_default"] is True
+
+    def test_generated_page_stamped_with_template_version(self, monkeypatch, tmp_path, fake_services):
+        llm, rag = fake_services
+        pipeline = IngestionPipeline(llm, rag)
+        monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
+        _setup_vault(monkeypatch, tmp_path)
+
+        templates_dir = tmp_path / "Templates"
+        templates_dir.mkdir(exist_ok=True)
+        (templates_dir / "patent-rpt.md").write_text(
+            "---\nversion: 3\n---\n\n# Patent Report Template\n", encoding="utf-8")
+
+        content = "Claims\nPrior Art\nAn invention."
+        source_file = tmp_path / "MyPatent.md"
+        source_file.write_text(content)
+
+        pipeline.ingest_markdown(content, source_file)
+
+        pages = list((tmp_path / "pages").rglob("*.md"))
+        assert len(pages) == 1
+        from core.parser import parse_markdown_metadata
+        meta = parse_markdown_metadata(pages[0].read_text(encoding="utf-8"))
+        assert meta["template"] == "patent-rpt"
+        assert meta["template_version"] == 3
 
 
 class TestDocTypeMigrationInPipeline:

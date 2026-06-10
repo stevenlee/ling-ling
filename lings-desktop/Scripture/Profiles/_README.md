@@ -34,9 +34,17 @@ applicable_when: Recipes, cooking instructions, kitchen techniques
 
 遇到無法分類的新文件類型時，Ling Ling 會自動草擬一組
 persona / template / profile 放進 `_pending/<類型名>/`，並在 `fromLingLing/`
-留審核通知。**草稿不會自動生效**——審核後把三個檔案各自搬到
-`Scripture/Personas/`、`Templates/`、`Scripture/Profiles/` 即可啟用。
-在那之前，同類文件一律先用 `default` profile 處理。
+留審核通知。**草稿不會自動生效**。在生效之前，同類文件一律先用
+`default` profile 處理。
+
+審核通過後，兩種生效方式擇一：
+
+- **一鍵生效**：在 `toLingLing/` 放入指令檔 `@ling-profiles approve <類型名>`，
+  三個檔案會自動搬到正式位置並清掉審核通知。
+- **手動**：把三個檔案各自搬到 `Scripture/Personas/`、`Templates/`、
+  `Scripture/Profiles/`。
+
+其他指令：`@ling-profiles`（總覽）、`@ling-profiles pending`（草稿明細）。
 
 ## 新增或修改 Profile
 

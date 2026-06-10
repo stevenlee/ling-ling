@@ -66,6 +66,28 @@ DocType.md 不再被讀取。Vault 中的 DocType.md 已加退役註記，確認
 
 ## Tests
 
-- `tests/test_profile_manager.py`：掃描規則、遷移冪等、`_pending` 不生效。
+- `tests/test_profile_manager.py`：掃描規則、遷移冪等、`_pending` 不生效、
+  approve 生效/拒絕覆寫/缺 bundle。
 - `tests/test_dynamic_pipeline.py`：三層解析全路徑、長文 parts/synthesis
-  分流、未知類型送審 + default fallback、重複送審防護。
+  分流、未知類型送審 + default fallback、重複送審防護、routing artifact、
+  template 版本戳記。
+
+## Follow-up（同日落地的五件套）
+
+1. **路由決策追蹤**：`_record_routing_decision()` 把每次路由結果寫成
+   `routing_decision` artifact（layer / profile / fallback / pending_queued）。
+   TraceStore 加 `query_artifacts()`、`query_llm_calls()`。
+2. **路由健康報告**：`maintenance/routing_report.py`，週任務
+   `routing_report_weekly`。可行動才寫 fromLingLing 報告（fallback ≥ 30%、
+   有 pending、選擇器失敗），否則只進 maintenance log——安靜的週保持安靜。
+3. **Template 版本化**：`_template_stamp()` 蓋 `template`/`template_version`
+   進頁面 frontmatter；`maintenance/template_audit.py` 週任務找出過期頁面。
+   版本宣告在 template 自身 frontmatter（統一資產契約使這變安全）。
+4. **`@ling-profiles`**：`agents/profiles_agent.py`，
+   `ProfileManager.approve_pending()` 負責搬檔（永不覆寫既有檔案）。
+5. **Skill 前置條件**：`InsightAgent._check_skill_preconditions()` 對照
+   `rag.get_total_chunks_count()` / `has_tagged_documents()` 驗證
+   `applicable_when`；RAG 錯誤時 fail-open。
+
+對應測試：`test_routing_report.py`（含 template audit）、
+`test_profiles_agent.py`、`test_skill_preconditions.py`。
