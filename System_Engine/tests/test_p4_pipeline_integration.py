@@ -308,6 +308,10 @@ class TestEndToEndIngestion:
         import services.ingestion_pipeline as ip_mod
         monkeypatch.setattr(ip_mod, "PAGES_DIR", pages)
         monkeypatch.setattr(ip_mod, "INDEX_FILE", index)
+        monkeypatch.setattr(ip_mod, "SCRIPTURE_DIR", tmp_path / "Scripture")
+        monkeypatch.setattr(ip_mod, "PROFILES_DIR", tmp_path / "Scripture" / "Profiles")
+        monkeypatch.setattr(ip_mod, "PROFILES_PENDING_DIR", tmp_path / "Scripture" / "Profiles" / "_pending")
+        monkeypatch.setattr(ip_mod, "FROM_LLM_DIR", from_llm)
 
         import core.vault_utils as vu_mod
         monkeypatch.setattr(vu_mod, "PAGES_DIR", pages)

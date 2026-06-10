@@ -517,7 +517,11 @@ class LLMClient:
             persona_resolved = "none"
         else:
             persona_resolved = persona or settings.AGENT_ROLE
-            role_instructions = self._load_localized_content(PERSONAS_DIR / f"{persona_resolved}.md")
+            # Loaded via _load_capability_body: personas now share the unified
+            # frontmatter contract (description/applicable_when), which must
+            # not leak into the system prompt. Frontmatter-less files pass
+            # through unchanged.
+            role_instructions = self._load_capability_body(PERSONAS_DIR / f"{persona_resolved}.md")
 
         # Operation axis: a persona-agnostic methodology prompt (Synthesize,
         # Critique, ...). Orthogonal to Template (which controls output shape).
@@ -533,7 +537,7 @@ class LLMClient:
         else:
             template_resolved = (forced_template or default_template) or settings.USE_TEMPLATE or "wiki-note"
             template_name = template_resolved if template_resolved.endswith(".md") else f"{template_resolved}.md"
-            template_instructions = self._load_localized_content(TEMPLATES_DIR / template_name)
+            template_instructions = self._load_capability_body(TEMPLATES_DIR / template_name)
 
         viz_instructions = self._load_localized_content(GUIDELINES_DIR / "Visualization.md")
 
@@ -1332,6 +1336,51 @@ class LLMClient:
         except Exception as e:
             logging.warning(f"classify_document LLM call failed: {e}")
             return "default"
+
+    def select_profile(self, filename: str, content_prefix: str, options: list[dict]) -> str:
+        """Pick the best routing profile for a document from known options.
+
+        Unlike classify_document (open-ended slug), this is a closed-choice
+        selection over the registered profiles, so the answer is always
+        actionable. `options` is a list of {"name", "hint"} dicts.
+
+        Returns:
+            A profile name from `options`, or "none" when nothing fits.
+        """
+        if not options:
+            return "none"
+        valid_names = {opt["name"] for opt in options}
+        menu = "\n".join(f"- {opt['hint']}" for opt in options)
+        system_prompt = (
+            "You are a document router. Choose which profile should handle the document.\n"
+            "Available profiles (name: when to use):\n"
+            f"{menu}\n\n"
+            "Pick the single best-fitting profile. If none of them genuinely fits, answer exactly 'none'.\n"
+            "Return ONLY the profile name (or 'none') as a single lowercase token — no punctuation, no explanation."
+        )
+        user_msg = f"Filename: {filename}\nContent prefix:\n{content_prefix}"
+        try:
+            raw = self._complete_text(
+                system_prompt=system_prompt,
+                user_msg=user_msg,
+                temperature=0.0,
+                max_tokens=20,
+                trace_context={
+                    "stage": "select_profile",
+                    "metadata": {"filename": filename, "options": sorted(valid_names)},
+                },
+            )
+            choice = re.sub(r'[^a-z0-9\-]', '', raw.strip().lower())
+            if choice in valid_names:
+                return choice
+            if choice and choice != "none":
+                logging.warning(
+                    f"select_profile: model answered {choice!r}, not a registered profile; treating as none."
+                )
+            return "none"
+        except Exception as e:
+            logging.warning(f"select_profile LLM call failed: {e}")
+            return "none"
 
     def generate_persona_and_template(self, category: str) -> dict:
         """Dynamically generate a Persona note and a Markdown Template for a new document category.

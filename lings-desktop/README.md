@@ -154,6 +154,14 @@ lings-desktop/
 
 ## Refactor Notes
 
+### 2026-06-10 Profile Routing（取代 DocType.md）
+
+- **Profile 制**：`Scripture/Profiles/*.md` 每檔一個具名「persona + template」配對（frontmatter：`persona / template / operations / description / applicable_when`），路由器選 profile 而非分別選 persona/template，配對衝突從結構上消失。新的 [services/profile_manager.py](System_Engine/services/profile_manager.py) 負責掃描、`DocType.md` 一次性遷移與 `_pending/` 審核佇列。使用說明見 [Scripture/Profiles/_README.md](Scripture/Profiles/_README.md)。
+- **三層解析**：文件 frontmatter 覆寫（`profile:` 或 `synthesis_persona`/`synthesis_template`）> 自動選擇（`document_type` 直接命中，否則 `LLMClient.select_profile` 在已註冊 profile 中做封閉式選擇）> `default` profile / Scripture 設定。封閉式選擇取代了舊的開放式分類＋查表，答案永遠可執行。
+- **審核佇列**：無法分類的新類型會自動草擬 persona/template/profile 三件套進 `Scripture/Profiles/_pending/<類型>/` 並通知 `fromLingLing/`，審核搬檔後才生效；當次先用 `default` 處理（品質優先於即時性）。
+- **統一資產契約**：Personas 與 Templates 改經 `_load_capability_body` 載入，frontmatter 一律剝除後才進 system prompt——之後可安全地替 persona/template 加上與 Operations 同款的 metadata。
+- **併發加固**：vault 刪檔搶不到鎖改為排程重試（不再無鎖裸跑 RAG）；`DynamicSettings.reload()` 加鎖並改為先解析再原子套用；MaintenanceScheduler 狀態檔改 temp-file + rename 原子寫入；watcher 同步/處理失敗改為 `ui.error` 浮出。
+
 ### 2026-05-24 Capability Layer & Lens Dual-Link (Phase 4)
 
 - **Capability metadata**：`Templates/Operations/*.md` 與 `Skills/*.md` 加上 frontmatter（`type / expected_inputs / produces / cost_class / applicable_when`）。新的 [services/capability_manager.py](System_Engine/services/capability_manager.py) 在 daemon 啟動時掃描並建索引；`LLMClient._build_system_prompt` 改回傳 `(prompt, resolution)`，resolution 寫入 `llm_calls.metadata_json.capability_resolution`，**不會**注入到 system prompt。Operations 的 frontmatter 在組 system prompt 前由 `_load_capability_body` 剝除。
