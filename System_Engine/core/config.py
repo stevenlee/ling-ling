@@ -79,6 +79,10 @@ FACET_BACKFILL_DAILY_BUDGET     = int(os.getenv("FACET_BACKFILL_DAILY_BUDGET", "
 FACET_BACKFILL_MAX_ATTEMPTS     = int(os.getenv("FACET_BACKFILL_MAX_ATTEMPTS", "3"))
 FACET_BACKFILL_MIN_BYTES        = int(os.getenv("FACET_BACKFILL_MIN_BYTES", "400"))
 
+# ─── Cortex Memory Phase 1 ────────────────────────────────────────────
+INSIGHT_SIGNALS_ENABLED         = os.getenv("INSIGHT_SIGNALS_ENABLED", "true").lower() == "true"
+INSIGHT_REFUTE_ENABLED          = os.getenv("INSIGHT_REFUTE_ENABLED", "true").lower() == "true"
+
 # ─── Paths ────────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
@@ -114,6 +118,7 @@ BACKUPS_DIR = PROJECT_ROOT / "Backups"
 
 DATABASE_DIR = WIKI_VAULT_DIR / "Database"
 MAINTENANCE_STATE_FILE = DATABASE_DIR / "maintenance_state.json"
+INSIGHT_SIGNALS_FILE = DATABASE_DIR / "insight_signals.json"
 PLANS_DIR = DATABASE_DIR / "plans"
 RETRIEVAL_BENCH_FILE = SCRATCH_DIR / "retrieval_bench.yml"
 # Auto-grown regression cases live separately so rewrites never clobber the

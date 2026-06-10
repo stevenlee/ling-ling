@@ -1110,6 +1110,53 @@ class LLMClient:
             logging.error(f"Critique failed: {e}")
             return f"Critique failed: {e}"
 
+    def refute_insight(self, candidate: str, sources: list[str]) -> dict:
+        """Run the refute operation to challenge an insight candidate."""
+        try:
+            system_prompt, cap_resolution = self._build_system_prompt(
+                "Evaluate the candidate insight against the provided sources and try to refute it.",
+                operation="refute",
+                persona="none",
+                forced_template="none",
+                require_yaml_header=False,
+            )
+            sources_text = "\n\n".join(f"[{i+1}] {s}" for i, s in enumerate(sources))
+            user_msg = (
+                f"## Candidate Insight\n{candidate}\n\n"
+                f"## Source Materials\n{sources_text}\n"
+            )
+            
+            raw = self._complete_text(
+                system_prompt,
+                user_msg,
+                temperature=0.1,
+                trace_context={
+                    "stage": "refute_insight",
+                    "operation": "refute",
+                    "metadata": {
+                        "capability_resolution": cap_resolution,
+                    },
+                },
+            )
+            
+            response_text = clean_llm_response(raw)
+            verdict = None
+            verdict_match = re.search(r'Verdict:\s*(survived|refuted)', response_text, re.IGNORECASE)
+            if verdict_match:
+                verdict = verdict_match.group(1).lower()
+            
+            return {
+                "verdict": verdict,
+                "notes": response_text[:500]
+            }
+            
+        except Exception as e:
+            logging.error(f"LLM Error in refute_insight: {e}")
+            return {
+                "verdict": None,
+                "notes": str(e)[:500]
+            }
+
     # ─── Quality scoring (P0) ───────────────────────────────────────────
 
     def score_text_quality(self, text: str, prompt_version: str = "v1") -> dict:

@@ -157,6 +157,12 @@ lings-desktop/
 
 ## Refactor Notes
 
+### 2026-06-10 Cortex Memory (Phase 1 - Insight Quality Signals)
+
+- **四項品質雷達**：為所有 `@ling-insight` 產出加上 `groundedness` (引用存活率)、`novelty` (內容新穎度，Cosine Distance vs `insight_signals.json` 歷史)、`bridging` (跨領域融合度，Target embeddings 間的最大距離)，以及 `refute_verdict` (LLM Challenger 壓力測試)。
+- **Fail-open 哲學**：所有計算皆包裹於 try-except，不干擾報告主流程；即使 LLM 失敗或 RAG 失聯，依然會寫入檔案（帶空訊號）。
+- **Sidecar FIFO**：採用 atomic swap 更新 `Database/insight_signals.json`，並利用 UTC timestamp 滾動淘汰舊的 embedding 快取，將記憶體與磁碟佔用上限鎖定在 500 筆。
+
 ### 2026-06-10 Profile Routing（取代 DocType.md）
 
 - **Profile 制**：`Scripture/Profiles/*.md` 每檔一個具名「persona + template」配對（frontmatter：`persona / template / operations / description / applicable_when`），路由器選 profile 而非分別選 persona/template，配對衝突從結構上消失。新的 [services/profile_manager.py](System_Engine/services/profile_manager.py) 負責掃描、`DocType.md` 一次性遷移與 `_pending/` 審核佇列。使用說明見 [Scripture/Profiles/_README.md](Scripture/Profiles/_README.md)。
