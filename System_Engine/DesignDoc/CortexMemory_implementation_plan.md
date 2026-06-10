@@ -65,6 +65,22 @@ candidate（每日 insight）
 Cortex 頁**進 facet index**——這是閉環關鍵：鞏固後的洞察成為日後
 Q&A 的一級記憶。沒有這步，鞏固只是換資料夾堆放。
 
+### 2.1 頁面 Schema（外部審閱採納，見 §9-3）
+
+反覆的 LLM 全頁重寫會產生語意破碎與 append-only log 症候群，故：
+
+- **機器狀態全放 frontmatter**（`S`、`last_reinforced_at`、
+  `confidence`、`status`、證據鏈 YAML list）——由程式碼確定性讀寫，
+  **LLM 永遠不碰 frontmatter**。
+- **內文固定四節**：`## Core Claim`、`## Evidence`、
+  `## Nuances & Variants`、`## Counterpoints`。合併由**程式碼**做
+  節級操作（append 證據、插入變體）；LLM 只生成單節新文字
+  （重寫 Core Claim 一句話、或產出一條新變體），輸出有長度上限。
+- **變體區容量上限**（保留最具區別度的前 N 條），堵死無限羅列。
+- 驗收標準：**parse → render → parse 恆等**（round-trip test），
+  每次操作後頁面必須仍是合法 schema（沿用 `_PART_DIGEST_HEADER`
+  穩定標頭＋確定性解析器的既有模式）。
+
 ## 3. 衰減：雙強度模型（Bjork New Theory of Disuse / FSRS 系）
 
 每頁兩個狀態變數：
@@ -74,9 +90,12 @@ Q&A 的一級記憶。沒有這步，鞏固只是換資料夾堆放。
 
 ```
 R(t)  = exp( −Δt / t½(S) )     Δt = 距 last_reinforced_at
-t½(S) = base × growth^S        建議初值 base=14天、growth=1.8
-                               （S=3 ≈ 2.5月、S=5 ≈ 8月）
+t½(S) = base × growth^S        初值 base=21天、growth=1.8
+                               （最終由 §3.1 模擬回測定案）
 ```
+
+失效模式不對稱，初始值偏慢：衰減太慢的代價是過期筆記多留一陣
+（溫和）；太快的代價是活記憶被提早埋葬＋索引震盪（昂貴）。
 
 **Spacing effect 強化規則**（防灌水的關鍵）：
 
@@ -96,17 +115,34 @@ R 高時重複強化幾乎不增 S（同晚重複發現不灌水）；快被遺�
 | Q&A 檢索命中並用於回答 | 中 | `retrieval_events` |
 | 新 ingest 文件落同一語意鄰域 | 弱 | embedding 相似 |
 
-**狀態由 R 推導**（不是手動狀態機）：
+**狀態由 R 推導**（不是手動狀態機），**閾值帶遲滯（hysteresis）**
+防止邊界振盪引發 facet index churn（外部審閱採納，見 §9-2）：
 
 ```
-active    R > 0.5    facets 在索引，全權重
-fading    0.2–0.5    仍可檢索，rerank 分數 × R 降權
-dormant   R < 0.2    facets 移出；頁面與 S 保留（savings：復活快）
+active    facets 在索引，全權重
+fading    仍可檢索，rerank 分數 × R 降權
+dormant   facets 移出；頁面與 S 保留（savings：復活快）
 falsified （獨立路徑）永久退出，但頁面留存——記錄曾相信過什麼
+
+降級邊界：active→fading at R<0.5；fading→dormant at R<0.2
+回升邊界：dormant→fading at R>0.3；fading→active at R>0.6
+（回升閾值高於降級閾值——不對稱是抗振盪的標準解）
 ```
 
 實作省力點：R 是純函數，frontmatter 只存 `S` + `last_reinforced_at`，
 讀取時現算；夜間 pass 只處理**跨越閾值**的頁面，無 write storm。
+
+### 3.1 冷啟動與校準阻尼（外部審閱採納，見 §9-2）
+
+revival rate 是**月級慢訊號**，冷啟動期錯誤初值會先痛數月才校得回來：
+
+- **`simulation.py` 回測先行**：Phase 3 動工的第一步。把 trace store
+  的歷史事件（retrieval_events、artifacts 時間戳）當強化序列快轉重放，
+  觀察不同 (base, growth) 下的狀態分佈與轉換頻率，據此定初值——
+  給衰減模型做它自己的 retrieval bench。
+- **阻尼校準**：base 每月最多調 ±20%，且需累積最低樣本數
+  （≥20 次 dormant 轉換）才動——冷啟動期樣本少，無阻尼的校準
+  迴路本身就是震盪源。
 
 **衰減的三驅動**：時間（上式）、干擾（§4 的取代）、證據失效
 （只動 confidence，不動 R——正交原則）。
@@ -130,7 +166,13 @@ embedding 量的是「主題接近」不是「主張相同」——對同一主�
 
 - 閾值從「正確性參數」降格為「成本參數」：0.80 設寬是安全的，
   只多花裁決 call，不會錯殺。
-- 裁決結果按筆記對 hash 快取，永不重複裁決；每晚裁決配額制。
+- **Top-K 鄰居上限**（外部審閱採納，見 §9-1）：每個新/變更筆記
+  只對最近的 K=3 個鄰居做裁決——單筆記成本 O(K) 封頂，與每晚
+  配額制互補（配額管總量，Top-K 管單點）。
+- 裁決結果快取，**key 採內容定址**：pair hash 把兩頁的 content
+  hash 編進去——任一頁被編輯，key 自然改變，舊裁決自動失效。
+  **不採 TTL/LRU**（理由見 §9-1）。夜間 pass 順手清掉引用已刪
+  頁面的快取列（orphan sweep 哲學）。
 - 合併保留「表述變體／分歧區」：合併身分，不抹平細節。
 - **un-merge rate 自校準**：使用者拆開或大改合併頁＝合錯了；
   比率過高 → equivalent 裁決自動收緊（降級為 related）。
@@ -175,7 +217,25 @@ embedding 量的是「主題接近」不是「主張相同」——對同一主�
 4. **Phase 4 — 主張帳本**：矛盾偵測網、falsified 管線、un-merge
    校準。
 
-## 9. 其他記憶系統（同場討論，列備忘，非本計畫範圍）
+## 9. 外部審閱紀錄（2026-06-10，Gemini 三項建議）
+
+1. **蘊涵裁決快取膨脹** — *部分採納*。
+   - ✅ 採納 Top-K 鄰居上限（K=3）：單筆記裁決成本封頂（§4）。
+   - ❌ 拒絕對 unrelated 快取加 TTL/LRU：`unrelated` 紀錄恰恰是
+     最有價值的快取——它存在的目的就是不再為同一個否定答案付費，
+     時間失效等於週期性重買已知結果。正確的失效機制是**內容定址
+     key**（任一頁編輯即自動失效），精確失效優於時間失效。空間
+     顧慮在個人知識庫規模下不成立（萬頁 × 3 鄰居 ≈ 3 萬列 SQLite）。
+2. **自校準冷啟動** — *全盤採納並加碼*（§3.1）：simulation.py
+   回測定初值；另加遲滯閾值（抗振盪，比模擬更直接）、阻尼校準
+   （月調幅 ±20% + 最低樣本數）、初始 base 由 14 天放寬至 21 天
+   （失效模式不對稱，偏慢的代價遠低於偏快）。
+3. **合併的 Markdown 結構化** — *全盤採納並推進一步*（§2.1）：
+   不只規定 schema，而是 LLM 根本不重寫整頁——機器狀態鎖在
+   frontmatter、程式碼做節級操作、LLM 只生成單節有界文字、
+   round-trip 恆等為驗收標準。
+
+## 10. 其他記憶系統（同場討論，列備忘，非本計畫範圍）
 
 - **興趣／注意力模型**：`retrieval_events` 驅動 insight 種子加權
   與各種優先序（backfill 已部分採用）。
