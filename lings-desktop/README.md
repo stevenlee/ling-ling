@@ -173,6 +173,14 @@ lings-desktop/
 - **`@ling-profiles` 指令**（[agents/profiles_agent.py](System_Engine/agents/profiles_agent.py)）：`@ling-profiles` 總覽、`pending` 草稿明細、`approve <名稱>` 一鍵把審核通過的草稿搬入正式位置（拒絕覆寫既有檔案）。
 - **Skill 前置條件強制檢查**：`Skills/*.md` 的 `applicable_when`（`database_populated` / `min_documents` / `has_tag_graph`）在執行前對照實際 vault 狀態驗證，不滿足就明確拒跑（例如知識庫只有 5 份文件時擋下 montecarlo）。RAG 失效時 fail-open，不會反過來癱瘓 insight。
 
+### 2026-06-10 Facet Backfill Pump（閒置時低優先權回填）
+
+- **行為**：系統閒置（busy→idle 後 180 秒 grace）時，一次回填一頁的 facets，步間隔 30 秒；`toLingLing/`、`Consolidate/` 有新檔（mtime < 10 分鐘）就讓路，使用者工作永遠優先（busy lock 仲裁 + idle callback 最後註冊）。陳舊的卡住檔案不會餓死回填。
+- **零成本捷徑**：Part 頁面的 facets 直接解析既有的「Part Digest Appendix」，不花 LLM call；只有無 appendix 的頁面才花一次 digest call。
+- **佇列從 DB 推導**（不持久化，與 orphan sweep 同哲學），優先序：Synthesis → 近 30 天被檢索命中（trace 查詢）→ 一般頁 → Part 頁。唯一持久狀態是失敗 ledger（`Database/facet_backfill_state.json`）：單頁失敗 3 次隔離（檔案改過自動解除）、連續多頁失敗視為服務中斷退避 1 小時、每日 LLM 預算 1000 calls。
+- **補完即安靜**：佇列空了就什麼都不做（一次性完成通知），新 ingestion 自帶 facets，佇列只在異常事件後重新出現。
+- 參數：`FACET_BACKFILL_ENABLED` / `_GRACE_SECONDS`(180) / `_STEP_GAP_SECONDS`(30) / `_DAILY_BUDGET`(1000) / `_MAX_ATTEMPTS`(3) / `_MIN_BYTES`(400)。
+
 ### 2026-06-10 Self-Improving Bench Loop（檢索品質自動進步迴路）
 
 - **評測集自動生長**（[maintenance/bench_builder.py](System_Engine/maintenance/bench_builder.py)，週任務）：每篇有 facet 的未覆蓋頁面，LLM 把 thesis 改寫成自然問句（禁止逐字抄），且**當下系統答得對才收錄**（品質閘門）。哲學是 regression guard：auto case 鎖定今天可用的能力，未來改動讓它失敗＝退步。寫入獨立的 `scratch/retrieval_bench_auto.yml`，手寫 bench 檔永不被改寫，auto 檔可隨時刪除重來。上限 `BENCH_AUTO_MAX_CASES`（30）、每輪 `BENCH_AUTO_PER_RUN`（5）。

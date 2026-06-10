@@ -67,6 +67,18 @@ BM25_MULTIPLIER                 = int(os.getenv("BM25_MULTIPLIER", "3"))
 FACET_INDEX_ENABLED             = os.getenv("FACET_INDEX_ENABLED", "true").lower() == "true"
 FACET_MAX_PER_DOC               = int(os.getenv("FACET_MAX_PER_DOC", "8"))
 
+# ─── Facet Backfill (idle, low-priority) ──────────────────────────────
+# Pages indexed before the facet index existed get their facets backfilled
+# one page at a time whenever the system is idle. Strictly lower priority
+# than user work: the busy lock arbitrates, steps are small, and the pump
+# yields to fresh files in toLingLing/ or Consolidate/.
+FACET_BACKFILL_ENABLED          = os.getenv("FACET_BACKFILL_ENABLED", "true").lower() == "true"
+FACET_BACKFILL_GRACE_SECONDS    = int(os.getenv("FACET_BACKFILL_GRACE_SECONDS", "180"))
+FACET_BACKFILL_STEP_GAP_SECONDS = int(os.getenv("FACET_BACKFILL_STEP_GAP_SECONDS", "30"))
+FACET_BACKFILL_DAILY_BUDGET     = int(os.getenv("FACET_BACKFILL_DAILY_BUDGET", "1000"))
+FACET_BACKFILL_MAX_ATTEMPTS     = int(os.getenv("FACET_BACKFILL_MAX_ATTEMPTS", "3"))
+FACET_BACKFILL_MIN_BYTES        = int(os.getenv("FACET_BACKFILL_MIN_BYTES", "400"))
+
 # ─── Paths ────────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
@@ -108,6 +120,7 @@ RETRIEVAL_BENCH_FILE = SCRATCH_DIR / "retrieval_bench.yml"
 # hand-written file (or its comments). Wipe the auto file freely to reset.
 RETRIEVAL_BENCH_AUTO_FILE = SCRATCH_DIR / "retrieval_bench_auto.yml"
 BENCH_HISTORY_FILE = DATABASE_DIR / "bench_history.json"
+FACET_BACKFILL_STATE_FILE = DATABASE_DIR / "facet_backfill_state.json"
 BENCH_AUTO_MAX_CASES = int(os.getenv("BENCH_AUTO_MAX_CASES", "30"))
 BENCH_AUTO_PER_RUN = int(os.getenv("BENCH_AUTO_PER_RUN", "5"))
 RAW_DIR = WIKI_VAULT_DIR / "raw"

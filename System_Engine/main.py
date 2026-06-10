@@ -54,6 +54,12 @@ def main():
     # 3.1. Register idle callbacks: re-scan directories on busy→idle to catch dropped events
     global_busy_state.register_idle_callback(event_handler_clippings.scan_existing)
     global_busy_state.register_idle_callback(event_handler_prompts.scan_existing)
+
+    # 3.2. Facet backfill pump — registered LAST so user-work queues always
+    # drain before the pump gets a turn (low-priority by callback order).
+    from maintenance.facet_backfill import FacetBackfillPump
+    facet_pump = FacetBackfillPump(llm_client, rag_manager)
+    global_busy_state.register_idle_callback(facet_pump.on_idle)
     
     # 4. Schedule Watchdogs
     observer = watchdog.observers.Observer()
@@ -85,6 +91,10 @@ def main():
     # 5. Start Background Maintenance Scheduler
     scheduler = MaintenanceScheduler(PROJECT_ROOT, llm_client, rag_manager)
     scheduler.start()
+
+    # 5.1. Startup kick: covers the daemon-starts-idle case where no
+    # busy→idle edge would otherwise wake the pump.
+    facet_pump.kick()
     
     ui.info(f"Provider: [bold cyan]{LLM_PROVIDER}[/bold cyan] | Model: [bold green]{llm_client.model}[/bold green] | Role: [bold yellow]{settings.AGENT_ROLE}[/bold yellow]")
     ui.info("☀️ 반가워요!(Ban-ga-wo-yo!) (๑˃̵ᴗ˂̵)و")

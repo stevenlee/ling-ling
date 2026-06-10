@@ -84,3 +84,29 @@ embedding 也來自母 chunk（need_embeddings 時 parent fetch 帶 embeddings�
    失敗查詢與嫌疑變更方向。
 
 對應測試：`tests/test_bench_loop.py`。
+
+## Idle backfill pump（2026-06-10 同日落地）
+
+既有頁面的 facet 由 `maintenance/facet_backfill.py` 在閒置時回填，設計
+不變量：
+
+1. **低優先權的實作 = busy lock + 步驟夠小**：一步一頁，鎖只在步內持
+   有；釋放時 BusyState 的 idle-callback 排空機制讓排隊的使用者工作先
+   跑（泵的 callback 最後註冊）。idle callback 本體絕不做 LLM 工作——
+   它在鎖仍被持有時執行，只負責排 grace timer。
+2. **kick(replace=False) 防節奏拉長**：步驟結束釋放鎖會觸發 on_idle，
+   若無此防護，30 秒的步間隔每次都會被拉回 180 秒 grace。
+3. **佇列從 DB 推導**：候選 =（pages/+Notes/ 檔案）−（有 facet 的
+   title）− 排除集（Stitched、底線、<400 bytes）− 隔離區。每日重建，
+   自我修復、永不漂移。優先序 Synthesis → 近期被檢索 → 一般 → Part。
+4. **Part 頁零成本**：解析頁尾既有 Digest Appendix（thesis/key points
+   regex），只有無 appendix 的頁面花一次 `generate_part_digest(1/1)`。
+5. **失敗分流**：單頁失敗 3 次 → 隔離（mtime 變更解除）；連續 3 個
+   「不同頁面」失敗 → 視為 provider 中斷，全域退避 1h。
+6. **餓死防護**：收件匣讓路只看「新鮮」檔案（mtime < 10 分鐘）——
+   Consolidate 裡卡住的壞檔案不得永久阻擋回填。
+7. **預算**：每日 LLM call 上限（預設 1000，本地模型），耗盡排程到
+   隔日午夜後恢復；appendix 解析不計費。
+8. **完成即靜默**：佇列空 → 不搶鎖不排 timer，一次性通知後安靜。
+
+對應測試：`tests/test_facet_backfill.py`。

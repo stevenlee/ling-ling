@@ -433,6 +433,31 @@ class TraceStore:
 
 
 
+    def recently_retrieved_titles(self, since_days: int = 30) -> set[str]:
+        """Titles that appeared in retrieval results within the window.
+
+        Used by the facet backfill pump to prioritize pages users actually
+        query over pages nobody has asked about.
+        """
+        titles: set[str] = set()
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT results_json FROM retrieval_events WHERE ts >= ?",
+                    (self._since_cutoff(since_days),),
+                ).fetchall()
+            for row in rows:
+                try:
+                    for item in json.loads(row["results_json"] or "[]"):
+                        title = (item or {}).get("title")
+                        if title:
+                            titles.add(str(title))
+                except Exception:
+                    continue
+        except Exception as e:
+            logging.debug(f"recently_retrieved_titles failed: {e}")
+        return titles
+
     def prune_old(self) -> None:
         if self.retention_days <= 0:
             return
