@@ -65,6 +65,7 @@ class MaintenanceScheduler(threading.Thread):
         self.poll_seconds = poll_seconds
         self.enabled = enabled
         self.tasks = tasks or self._default_tasks()
+        self._state_lock = threading.Lock()
         self.state = self._load_state()
         self._seed_initial_task_state()
 
@@ -119,17 +120,18 @@ class MaintenanceScheduler(threading.Thread):
         ]
 
     def _seed_initial_task_state(self) -> None:
-        changed = False
-        for task in self.tasks:
-            if task.initial_last_run_at and task.name not in self.state:
-                self.state[task.name] = {
-                    "last_run_at": task.initial_last_run_at,
-                    "last_status": "seeded",
-                    "last_summary": "Seeded from existing artifacts.",
-                }
-                changed = True
-        if changed:
-            self._save_state()
+        with self._state_lock:
+            changed = False
+            for task in self.tasks:
+                if task.initial_last_run_at and task.name not in self.state:
+                    self.state[task.name] = {
+                        "last_run_at": task.initial_last_run_at,
+                        "last_status": "seeded",
+                        "last_summary": "Seeded from existing artifacts.",
+                    }
+                    changed = True
+            if changed:
+                self._save_state()
 
     def _load_state(self) -> dict:
         if not self.state_file.exists():
@@ -142,11 +144,12 @@ class MaintenanceScheduler(threading.Thread):
             return {}
 
     def _save_state(self) -> None:
+        """Atomic write (temp file + rename). Caller must hold _state_lock."""
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        self.state_file.write_text(
-            json.dumps(self.state, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        payload = json.dumps(self.state, ensure_ascii=False, indent=2, sort_keys=True)
+        tmp_file = self.state_file.with_name(self.state_file.name + ".tmp")
+        tmp_file.write_text(payload, encoding="utf-8")
+        tmp_file.replace(self.state_file)
 
     def run(self):
         if not self.enabled:
@@ -238,12 +241,13 @@ class MaintenanceScheduler(threading.Thread):
                 "MaintenanceScheduler: task %s failed", task.name,
             )
         finally:
-            self.state[task.name] = {
-                "last_run_at": now.isoformat(timespec="seconds"),
-                "last_status": status,
-                "last_summary": summary,
-            }
-            self._save_state()
+            with self._state_lock:
+                self.state[task.name] = {
+                    "last_run_at": now.isoformat(timespec="seconds"),
+                    "last_status": status,
+                    "last_summary": summary,
+                }
+                self._save_state()
             ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)
             global_busy_state.set_busy(False)
 

@@ -1,6 +1,5 @@
 import threading
 import logging
-import time
 from pathlib import Path
 import watchdog.events
 import re
@@ -57,25 +56,36 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             if title in self._timers:
                 self._timers[title].cancel()
                 del self._timers[title]
-                
-        # Try to set busy, retry a few times to avoid lock clashing
-        acquired = False
-        for _ in range(5):
-            if global_busy_state.try_set_busy():
-                acquired = True
-                break
-            time.sleep(0.5)
-        if not acquired:
-            logging.warning(f"Vault: lock clashed on delete for {title}. Proceeding without lock...")
-            
+
+        self._process_deletion(title)
+
+    def _process_deletion(self, title: str, attempt: int = 0):
+        # Keyed separately from modification timers so a later modify event
+        # on the same title cannot cancel a pending deletion retry.
+        timer_key = f"del::{title}"
+        with self._timers_lock:
+            self._timers.pop(timer_key, None)
+
+        if not global_busy_state.try_set_busy():
+            if attempt >= 10:
+                logging.error(
+                    f"Vault: giving up on delete of {title} after {attempt} retries; "
+                    f"RAG may hold a stale entry until the next full sync."
+                )
+                return
+            with self._timers_lock:
+                timer = threading.Timer(5.0, self._process_deletion, args=[title, attempt + 1])
+                self._timers[timer_key] = timer
+                timer.start()
+            return
+
         try:
             logging.info(f"File deleted in Vault: {title}. Removing from RAG memory...")
             self.rag.delete_document(title)
             from core.vault_utils import update_wiki_index
             update_wiki_index(sync_reading_index=True)
         finally:
-            if acquired:
-                global_busy_state.set_busy(False)
+            global_busy_state.set_busy(False)
 
     def on_modified(self, event):
         if event.is_directory or not event.src_path.endswith('.md'):
@@ -186,7 +196,12 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             from core.vault_utils import update_wiki_index
             update_wiki_index(filepath, title, sync_reading_index=True)
         except Exception as e:
-            logging.error(f"Failed to update RAG on modification for {title}: {e}")
+            logging.exception(f"Failed to update RAG on modification for {title}")
+            try:
+                from core.ui import ui
+                ui.error(f"同步失敗：{title} 未寫入記憶（{e}）")
+            except Exception:
+                pass
         finally:
             global_busy_state.set_busy(False)
 

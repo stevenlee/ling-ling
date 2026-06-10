@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 
 import yaml
@@ -129,6 +130,7 @@ class DynamicSettings:
     )
 
     def __init__(self):
+        self._reload_lock = threading.Lock()
         self.AGENT_ROLE = "assistant"
         self.OUTPUT_LANGUAGE = "Traditional Chinese"
         self.USE_TEMPLATE: str | None = None
@@ -162,6 +164,10 @@ class DynamicSettings:
                 logging.warning("Scripture.md: frontmatter is empty.")
                 return
 
+            # Parse everything first, then apply under the lock in one tight
+            # loop so concurrent readers never observe a half-reloaded mix
+            # (e.g. new persona with the previous template).
+            staged: list[tuple[str, object]] = []
             for key, attr, coercer in self._BINDINGS:
                 if key not in yaml_data:
                     continue
@@ -172,7 +178,11 @@ class DynamicSettings:
                     continue
                 if coercer is str:
                     value = value.lower() if attr == "AGENT_ROLE" else value
-                setattr(self, attr, value)
+                staged.append((attr, value))
+
+            with self._reload_lock:
+                for attr, value in staged:
+                    setattr(self, attr, value)
 
             logging.info(
                 f"Scripture says: Be a {'strict' if self.STRICT_MODE else 'chatty'} {self.AGENT_ROLE}. "

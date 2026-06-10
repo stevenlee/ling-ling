@@ -196,7 +196,8 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
             ui.success(f"Clipping complete: [bold]{filepath.stem}[/bold]")
 
         except Exception as e:
-            logging.error(f"Error handling markdown {filepath.name}: {e}")
+            logging.exception(f"Error handling markdown {filepath.name}")
+            ui.error(f"Clipping 處理失敗：{filepath.name}（{e}）— 檔案留在原處，修正後會重試")
 
     def _handle_image(self, filepath: Path):
         index_content = INDEX_FILE.read_text('utf-8') if INDEX_FILE.exists() else ""

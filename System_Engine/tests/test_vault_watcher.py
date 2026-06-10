@@ -64,6 +64,37 @@ class TestVaultWatcherReadingIndex:
         mock_update.assert_called_once_with(reading_index, "ReadingIndex", sync_reading_index=True)
         rag.delete_document.assert_not_called()
 
+    def test_deletion_retries_instead_of_running_without_lock(self, monkeypatch, tmp_path):
+        rag = MagicMock()
+        watcher = VaultWatcher(rag)
+
+        monkeypatch.setattr(
+            "watchers.vault_watcher.global_busy_state.try_set_busy", lambda: False
+        )
+
+        try:
+            watcher._process_deletion("Article L")
+
+            # Lock unavailable: RAG must NOT be touched; a retry must be scheduled.
+            rag.delete_document.assert_not_called()
+            assert "del::Article L" in watcher._timers
+        finally:
+            for timer in watcher._timers.values():
+                timer.cancel()
+
+    def test_deletion_gives_up_after_max_retries(self, monkeypatch, tmp_path):
+        rag = MagicMock()
+        watcher = VaultWatcher(rag)
+
+        monkeypatch.setattr(
+            "watchers.vault_watcher.global_busy_state.try_set_busy", lambda: False
+        )
+
+        watcher._process_deletion("Article L", attempt=10)
+
+        rag.delete_document.assert_not_called()
+        assert "del::Article L" not in watcher._timers
+
     def test_regular_file_deleted_syncs_reading_index(self, monkeypatch, tmp_path):
         regular_file = tmp_path / "Article L.md"
         rag = MagicMock()
