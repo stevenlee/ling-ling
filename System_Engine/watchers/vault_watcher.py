@@ -35,7 +35,15 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
         self._schedule_process(filepath, title, delay=2.0)
 
     def on_deleted(self, event):
-        if event.is_directory or not event.src_path.endswith('.md'):
+        # Deleting a whole article folder (pages/<title>/) only emits a
+        # directory event on some platforms — the per-file events never
+        # arrive, which used to leave every chunk stranded in ChromaDB.
+        # An orphan sweep reconciles the DB against the filesystem instead.
+        if event.is_directory:
+            if self._is_indexed_dir(Path(event.src_path)):
+                self._schedule_orphan_sweep()
+            return
+        if not event.src_path.endswith('.md'):
             return
         filepath = Path(event.src_path)
         if not self._should_watch(filepath):
@@ -86,6 +94,27 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             update_wiki_index(sync_reading_index=True)
         finally:
             global_busy_state.set_busy(False)
+
+    def on_moved(self, event):
+        """Renames/moves used to leave the old path's chunks behind forever
+        (no handler existed). Treat as delete-old + index-new."""
+        src = Path(event.src_path)
+        dest = Path(getattr(event, "dest_path", "") or "")
+
+        if event.is_directory:
+            # Folder rename/move: sweep clears chunks keyed by the old
+            # paths; re-index whatever now lives at the destination.
+            if self._is_indexed_dir(src) or self._is_indexed_dir(dest):
+                self._schedule_orphan_sweep()
+                if dest and self._is_indexed_dir(dest) and dest.exists():
+                    for file in dest.rglob("*.md"):
+                        self._schedule_process(file, file.stem, delay=5.0)
+            return
+
+        if str(src).endswith(".md") and self._should_watch(src):
+            self._process_deletion(src.stem)
+        if str(dest).endswith(".md") and self._should_watch(dest):
+            self._schedule_process(dest, dest.stem, delay=2.0)
 
     def on_modified(self, event):
         if event.is_directory or not event.src_path.endswith('.md'):
@@ -202,6 +231,56 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                 ui.error(f"同步失敗：{title} 未寫入記憶（{e}）")
             except Exception:
                 pass
+        finally:
+            global_busy_state.set_busy(False)
+
+    def _is_indexed_dir(self, path: Path) -> bool:
+        from core.config import PAGES_DIR, NOTES_DIR
+        abs_path = path.absolute()
+        return self._is_relative_to(abs_path, PAGES_DIR.absolute()) or self._is_relative_to(
+            abs_path, NOTES_DIR.absolute()
+        )
+
+    def _schedule_orphan_sweep(self, delay: float = 5.0):
+        """Debounced full reconcile of ChromaDB against the filesystem."""
+        key = "orphan::sweep"
+        with self._timers_lock:
+            if key in self._timers:
+                self._timers[key].cancel()
+            timer = threading.Timer(delay, self._process_orphan_sweep)
+            self._timers[key] = timer
+            timer.start()
+
+    def _process_orphan_sweep(self, attempt: int = 0):
+        key = "orphan::sweep"
+        with self._timers_lock:
+            self._timers.pop(key, None)
+
+        if not global_busy_state.try_set_busy():
+            if attempt >= 10:
+                logging.error(
+                    "Vault: orphan sweep gave up after lock contention; "
+                    "stale chunks remain until the daily sweep."
+                )
+                return
+            with self._timers_lock:
+                timer = threading.Timer(5.0, self._process_orphan_sweep, args=[attempt + 1])
+                self._timers[key] = timer
+                timer.start()
+            return
+
+        try:
+            result = self.rag.prune_orphan_chunks()
+            if result.get("deleted_chunks"):
+                from core.ui import ui
+                ui.info(
+                    f"🧹 已清除 {result['deleted_chunks']} 個殘留 chunks"
+                    f"（{result['orphan_docs']} 份已刪除文件）"
+                )
+            from core.vault_utils import update_wiki_index
+            update_wiki_index(sync_reading_index=True)
+        except Exception:
+            logging.exception("Vault: orphan sweep failed")
         finally:
             global_busy_state.set_busy(False)
 

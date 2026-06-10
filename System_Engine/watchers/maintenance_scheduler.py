@@ -89,6 +89,18 @@ class MaintenanceScheduler(threading.Thread):
             trace_store.prune_old()
             return MaintenanceResult("succeeded", "SQLite trace logs pruned successfully.")
 
+        def rag_orphan_sweep() -> MaintenanceResult:
+            result = self.rag.prune_orphan_chunks()
+            if result["deleted_chunks"]:
+                return MaintenanceResult(
+                    "succeeded",
+                    f"Removed {result['deleted_chunks']} orphan chunks "
+                    f"({result['orphan_docs']} vanished docs).",
+                )
+            return MaintenanceResult(
+                "succeeded", f"No orphan chunks ({result['scanned']} scanned)."
+            )
+
         def template_audit() -> MaintenanceResult:
             from maintenance.template_audit import run_template_audit
             result = run_template_audit()
@@ -129,6 +141,14 @@ class MaintenanceScheduler(threading.Thread):
                 idle_required=False,
                 intent="maintenance.trace_prune",
                 agent="TraceStore",
+            ),
+            MaintenanceTask(
+                name="rag_orphan_sweep_daily",
+                action=rag_orphan_sweep,
+                daily=True,
+                idle_required=True,
+                intent="maintenance.rag_orphan_sweep",
+                agent="RAGManager",
             ),
             MaintenanceTask(
                 name="routing_report_weekly",

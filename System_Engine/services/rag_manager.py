@@ -887,6 +887,62 @@ class RAGManager:
         self.collection.upsert(**kwargs)
 
     @retry_on_db_lock()
+    def prune_orphan_chunks(self, roots: list[Path] | None = None) -> dict:
+        """Delete chunks whose source file no longer exists on disk.
+
+        Ground truth is the filesystem: every .md under the indexed roots
+        (pages/, Notes/) maps to a doc_id via the same path hash used at
+        add time; any chunk carrying an unknown doc_id is an orphan. This
+        catches everything the event-based delete path can miss — folder
+        deletions, renames/moves, and deletions while the daemon was off.
+
+        Returns {"scanned", "orphan_docs", "deleted_chunks", "titles"}.
+        """
+        from core.config import NOTES_DIR, PAGES_DIR
+        roots = roots if roots is not None else [PAGES_DIR, NOTES_DIR]
+
+        valid_doc_ids = set()
+        for root in roots:
+            root = Path(root)
+            if not root.exists():
+                continue
+            for file in root.rglob("*.md"):
+                valid_doc_ids.add(self._get_doc_id(file))
+
+        results = self.collection.get(include=["metadatas"])
+        ids = results.get("ids") or []
+        metadatas = results.get("metadatas") or []
+
+        orphan_ids: list[str] = []
+        orphan_docs: set[str] = set()
+        orphan_titles: set[str] = set()
+        for chunk_id, meta in zip(ids, metadatas):
+            doc_id = (meta or {}).get("doc_id")
+            if doc_id not in valid_doc_ids:
+                orphan_ids.append(chunk_id)
+                orphan_docs.add(doc_id or "<no-doc-id>")
+                title = (meta or {}).get("title")
+                if title:
+                    orphan_titles.add(title)
+
+        if orphan_ids:
+            # Delete by chunk id (not where-clause) so legacy chunks without
+            # doc_id metadata are swept too.
+            self.collection.delete(ids=orphan_ids)
+            self._bm25.mark_dirty()
+            logging.info(
+                f"RAG orphan sweep: removed {len(orphan_ids)} chunks "
+                f"from {len(orphan_docs)} vanished documents: {sorted(orphan_titles)[:10]}"
+            )
+
+        return {
+            "scanned": len(ids),
+            "orphan_docs": len(orphan_docs),
+            "deleted_chunks": len(orphan_ids),
+            "titles": sorted(orphan_titles),
+        }
+
+    @retry_on_db_lock()
     def delete_document(self, doc_id_or_title: str | Path):
         """Delete all chunks associated with a specific document (by doc_id, path, or title)."""
         doc_id = None

@@ -173,6 +173,11 @@ lings-desktop/
 - **`@ling-profiles` 指令**（[agents/profiles_agent.py](System_Engine/agents/profiles_agent.py)）：`@ling-profiles` 總覽、`pending` 草稿明細、`approve <名稱>` 一鍵把審核通過的草稿搬入正式位置（拒絕覆寫既有檔案）。
 - **Skill 前置條件強制檢查**：`Skills/*.md` 的 `applicable_when`（`database_populated` / `min_documents` / `has_tag_graph`）在執行前對照實際 vault 狀態驗證，不滿足就明確拒跑（例如知識庫只有 5 份文件時擋下 montecarlo）。RAG 失效時 fail-open，不會反過來癱瘓 insight。
 
+### 2026-06-10 RAG Orphan Sweep（殘留 chunk 清理）
+
+- **問題**：刪除整個文章資料夾（`pages/<標題>/`）只發 directory 事件，舊 watcher 直接忽略；改名/搬移完全沒有 handler——兩者都讓 chunks 永久殘留在 ChromaDB。
+- **修復**：`RAGManager.prune_orphan_chunks()` 以檔案系統為真相來源——掃描 `pages/`+`Notes/` 算出有效 doc_id 集合，刪除其餘所有 chunks（含無 doc_id 的 legacy chunks）。觸發點三處：資料夾刪除事件（debounce 5s）、新增的 `on_moved` handler（改名＝刪舊+索引新）、每日 maintenance task `rag_orphan_sweep_daily`（涵蓋 daemon 關機期間的刪除）。
+
 ### 2026-05-24 Capability Layer & Lens Dual-Link (Phase 4)
 
 - **Capability metadata**：`Templates/Operations/*.md` 與 `Skills/*.md` 加上 frontmatter（`type / expected_inputs / produces / cost_class / applicable_when`）。新的 [services/capability_manager.py](System_Engine/services/capability_manager.py) 在 daemon 啟動時掃描並建索引；`LLMClient._build_system_prompt` 改回傳 `(prompt, resolution)`，resolution 寫入 `llm_calls.metadata_json.capability_resolution`，**不會**注入到 system prompt。Operations 的 frontmatter 在組 system prompt 前由 `_load_capability_body` 剝除。
