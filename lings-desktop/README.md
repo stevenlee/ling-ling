@@ -113,6 +113,9 @@ Confidence: medium
 - `@ling-repair-db`：資料庫修復與重新同步。
 - `@ling-insight`：從既有筆記生成跨領域洞察。
 - `@ling-merge`：合併筆記。內容包含 `[[A]]` 與 `[[B]]` 即可融合兩篇筆記。
+- `@ling-plan`：規劃多步工作流（Pipeline），產出腳本與預覽報告，不立即執行。
+- `@ling-do`：執行 `@ling-plan` 產出的工作流腳本。
+- `@ling-profiles`：管理文件路由 Profiles。`pending` 看待審草稿、`approve <名稱>` 一鍵生效。
 - `@ling-zip` / `@ling-unzip`：備份與還原知識庫。
 - `@ling-RESET`：清除內容前會先強制備份。
 
