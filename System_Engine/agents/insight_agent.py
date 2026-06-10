@@ -137,15 +137,17 @@ class InsightAgent(BaseAgent):
             "pipeline": pipeline,
         }
 
-        from services.insight_signals import compute_signals
-        signals = compute_signals(report_content, target_titles, self.rag, self.llm)
-        meta["signals"] = {
-            "groundedness": round(signals.groundedness, 4),
-            "novelty": round(signals.novelty, 4),
-            "bridging": round(signals.bridging, 4),
-            "refute_verdict": signals.refute_verdict,
-        }
-        meta["signals_version"] = 1
+        from core.config import INSIGHT_SIGNALS_ENABLED
+        if INSIGHT_SIGNALS_ENABLED:
+            from services.insight_signals import compute_signals
+            signals = compute_signals(report_content, target_titles, self.rag, self.llm)
+            meta["signals"] = {
+                "groundedness": round(signals.groundedness, 4) if signals.groundedness is not None else None,
+                "novelty": round(signals.novelty, 4) if signals.novelty is not None else None,
+                "bridging": round(signals.bridging, 4) if signals.bridging is not None else None,
+                "refute_verdict": signals.refute_verdict,
+            }
+            meta["signals_version"] = 1
 
         _, full_markdown = self._write_report(
             f"洞察分析-{config['name']}", report_content, "report_insight", meta
@@ -223,17 +225,20 @@ class InsightAgent(BaseAgent):
             f"{sections_joined}"
         )
 
-        from services.insight_signals import compute_signals
-        signals = compute_signals(final_markdown, target_titles, self.rag, self.llm)
-        meta = {
-            "signals": {
-                "groundedness": round(signals.groundedness, 4),
-                "novelty": round(signals.novelty, 4),
-                "bridging": round(signals.bridging, 4),
-                "refute_verdict": signals.refute_verdict,
-            },
-            "signals_version": 1
-        }
+        meta = {}
+        from core.config import INSIGHT_SIGNALS_ENABLED
+        if INSIGHT_SIGNALS_ENABLED:
+            from services.insight_signals import compute_signals
+            signals = compute_signals(final_markdown, target_titles, self.rag, self.llm)
+            meta = {
+                "signals": {
+                    "groundedness": round(signals.groundedness, 4) if signals.groundedness is not None else None,
+                    "novelty": round(signals.novelty, 4) if signals.novelty is not None else None,
+                    "bridging": round(signals.bridging, 4) if signals.bridging is not None else None,
+                    "refute_verdict": signals.refute_verdict,
+                },
+                "signals_version": 1
+            }
 
         _, full_markdown = self._write_report("全方位洞察報告", final_markdown, "report_insight_full", meta)
         self._mirror_to_insights(

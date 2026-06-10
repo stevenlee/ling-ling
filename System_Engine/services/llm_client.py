@@ -1141,7 +1141,7 @@ class LLMClient:
             
             response_text = clean_llm_response(raw)
             verdict = None
-            verdict_match = re.search(r'Verdict:\s*(survived|refuted)', response_text, re.IGNORECASE)
+            verdict_match = re.search(r'(?im)^\**\s*Verdict\**\s*[:：]\s*[*_`]*\s*(survived|refuted)', response_text)
             if verdict_match:
                 verdict = verdict_match.group(1).lower()
             
