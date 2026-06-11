@@ -37,6 +37,9 @@ class FakeLLM:
                 return {"verdict": verdict, "rationale": "test"}
         return {"verdict": "unrelated", "rationale": "test"}
 
+    def assess_falsifiability(self, claim):
+        return {"score": 0.5, "falsifier": "test falsifier"}
+
 
 class FakeRAG:
     """Embeddings by keyword so neighbor similarity is controllable."""
