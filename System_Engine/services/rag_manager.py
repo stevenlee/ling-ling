@@ -1033,33 +1033,49 @@ class RAGManager:
         candidate_info: dict,
         need_embeddings: bool = False,
     ) -> list[dict]:
-        """Swap facet hits for their parent's real chunk, dedup by chunk id.
+        """Swap facet hits for their parent's real chunk — as a RESCUE tier.
 
-        Order is preserved (candidates arrive best-first), so when both a
-        facet and its parent chunk are in the pool, the better-ranked
-        occurrence wins. Dangling facets (parent vanished) are dropped.
+        Facet sentences are short and semantically dense, so they
+        systematically outrank long content chunks for short queries —
+        letting them compete in place steals top-k slots from direct
+        content hits (bench measured facet lift -2 that way). Instead,
+        all facet-derived parents are appended AFTER every direct hit:
+        they can only fill remaining slots and rescue pages that content
+        matching missed, never displace a direct match. When the
+        cross-encoder reranker is enabled it runs after this and can
+        still promote a rescued parent on merit.
+
+        Dedup: a parent already present as a direct hit wins; dangling
+        facets (parent vanished) are dropped.
         """
-        out: list[dict] = []
+        direct: list[dict] = []
+        rescued: list[dict] = []
         seen: set[str] = set()
         for c in candidates:
             meta = c.get("metadata") or {}
             if meta.get("role") != "facet":
                 if c["id"] not in seen:
                     seen.add(c["id"])
-                    out.append(c)
+                    direct.append(c)
                 continue
 
             parent = self._first_chunk_of_doc(meta.get("doc_id"), need_embeddings)
-            if parent is None or parent["id"] in seen:
+            if parent is None:
                 continue
             parent["distance"] = c.get("distance", 0.0)
             parent["matched_facet"] = c.get("text", "")
+            rescued.append((c["id"], parent))
+
+        out = direct
+        for facet_id, parent in rescued:
+            if parent["id"] in seen:
+                continue
             seen.add(parent["id"])
             out.append(parent)
 
             # Carry the facet's retrieval signals over to the parent id so
             # the trace breakdown survives the swap.
-            facet_info = candidate_info.get(c["id"])
+            facet_info = candidate_info.get(facet_id)
             if facet_info is not None and parent["id"] not in candidate_info:
                 swapped = dict(facet_info)
                 swapped["passed_layers"] = list(facet_info.get("passed_layers", [])) + ["facet_deref"]

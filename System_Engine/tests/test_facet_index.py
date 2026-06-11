@@ -122,6 +122,24 @@ class TestDereference:
         assert [c["id"] for c in out] == [parent_id]
         assert "matched_facet" not in out[0]  # direct hit, not via facet
 
+    def test_facets_are_rescue_tier_never_displace_direct_hits(self, tmp_path):
+        """A facet that outranks direct hits must still land BEHIND them —
+        facets fill remaining slots, they don't steal top-k (bench measured
+        facet lift -2 with in-place competition)."""
+        rag = _rag()
+        page = tmp_path / "p.md"
+        doc_id = self._seed_parent(rag, page, n_chunks=1)
+        facet = {
+            "id": f"{doc_id}_facet_abc", "text": "Dense thesis.",
+            "metadata": {"role": "facet", "doc_id": doc_id}, "distance": 0.01,  # best rank
+        }
+        direct_a = {"id": "a", "text": "A", "metadata": {}, "distance": 0.2}
+        direct_b = {"id": "b", "text": "B", "metadata": {}, "distance": 0.3}
+
+        out = rag._dereference_facets([facet, direct_a, direct_b], {})
+
+        assert [c["id"] for c in out] == ["a", "b", f"{doc_id}_chunk_0_99"]
+
     def test_dangling_facet_dropped(self, tmp_path):
         rag = _rag()
         facet = {
