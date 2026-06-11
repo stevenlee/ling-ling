@@ -83,6 +83,18 @@ FACET_BACKFILL_MIN_BYTES        = int(os.getenv("FACET_BACKFILL_MIN_BYTES", "400
 INSIGHT_SIGNALS_ENABLED         = os.getenv("INSIGHT_SIGNALS_ENABLED", "true").lower() == "true"
 INSIGHT_REFUTE_ENABLED          = os.getenv("INSIGHT_REFUTE_ENABLED", "true").lower() == "true"
 
+# ─── Cortex Memory Phase 2 (nightly consolidation) ────────────────────
+# Insights with healthy Phase-1 signals are distilled into atomic claims
+# and consolidated into Cortex/ pages during the dreaming window. Merging
+# only happens on a bidirectional-entailment verdict; everything else
+# links. Quotas bound the nightly LLM spend.
+CORTEX_CONSOLIDATION_ENABLED        = os.getenv("CORTEX_CONSOLIDATION_ENABLED", "true").lower() == "true"
+CORTEX_MAX_INSIGHTS_PER_NIGHT       = int(os.getenv("CORTEX_MAX_INSIGHTS_PER_NIGHT", "10"))
+CORTEX_MAX_ADJUDICATIONS_PER_NIGHT  = int(os.getenv("CORTEX_MAX_ADJUDICATIONS_PER_NIGHT", "20"))
+CORTEX_NEIGHBOR_TOP_K               = int(os.getenv("CORTEX_NEIGHBOR_TOP_K", "3"))
+CORTEX_NEIGHBOR_SIM_THRESHOLD       = float(os.getenv("CORTEX_NEIGHBOR_SIM_THRESHOLD", "0.80"))
+CORTEX_MAX_VARIANTS                 = int(os.getenv("CORTEX_MAX_VARIANTS", "5"))
+
 # ─── Paths ────────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
@@ -105,6 +117,8 @@ PROMPTS_DIR = TEMPLATES_DIR / "Prompts"
 OPERATIONS_DIR = TEMPLATES_DIR / "Operations"
 PAGES_DIR = WIKI_VAULT_DIR / "pages"
 NOTES_DIR = WIKI_VAULT_DIR / "Notes"
+CORTEX_DIR = WIKI_VAULT_DIR / "Cortex"
+INSIGHTS_DIR = WIKI_VAULT_DIR / "Insights"
 TAG_MAP_FILE = PAGES_DIR / "_tagScrapbook.md"
 
 CLIPPINGS_DIR = WIKI_VAULT_DIR / "Clippings"
@@ -126,6 +140,8 @@ RETRIEVAL_BENCH_FILE = SCRATCH_DIR / "retrieval_bench.yml"
 RETRIEVAL_BENCH_AUTO_FILE = SCRATCH_DIR / "retrieval_bench_auto.yml"
 BENCH_HISTORY_FILE = DATABASE_DIR / "bench_history.json"
 FACET_BACKFILL_STATE_FILE = DATABASE_DIR / "facet_backfill_state.json"
+CORTEX_STATE_FILE = DATABASE_DIR / "cortex_state.json"
+CORTEX_ADJUDICATION_CACHE = DATABASE_DIR / "cortex_adjudications.json"
 BENCH_AUTO_MAX_CASES = int(os.getenv("BENCH_AUTO_MAX_CASES", "30"))
 BENCH_AUTO_PER_RUN = int(os.getenv("BENCH_AUTO_PER_RUN", "5"))
 RAW_DIR = WIKI_VAULT_DIR / "raw"
@@ -235,6 +251,7 @@ _MANAGED_DIRECTORIES = (
     RAW_ASSETS_DIR, RAW_MERGED_DIR, SCRIPTURE_DIR, PERSONAS_DIR, PROFILES_DIR,
     PROFILES_PENDING_DIR, GUIDELINES_DIR,
     SKILLS_DIR, BACKUPS_DIR, TEMPLATES_DIR, PROMPTS_DIR, OPERATIONS_DIR, SCRATCH_DIR,
+    CORTEX_DIR,
 )
 
 
