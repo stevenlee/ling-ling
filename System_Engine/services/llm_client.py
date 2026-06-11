@@ -39,7 +39,7 @@ from core.config import (
     TEMPLATES_DIR,
     settings,
 )
-from core.parser import extract_json_object, strip_body_frontmatter, clean_llm_response
+from core.parser import extract_json_array, extract_json_object, strip_body_frontmatter, clean_llm_response
 from core.utils import MtimeCache, digest_value_to_text
 from services.capability_manager import CapabilityManager
 from services.trace_store import TraceStore, elapsed_ms, usage_to_counts
@@ -1428,6 +1428,93 @@ class LLMClient:
         except Exception as e:
             logging.warning(f"select_profile LLM call failed: {e}")
             return "none"
+
+    def extract_claims(self, insight_text: str) -> list[dict]:
+        """Distill an insight report into at most 3 atomic claims.
+
+        Each claim must be an independently truth-evaluable statement
+        (not a topic label). Returns [{"claim": ..., "summary": ...}];
+        empty list on any failure (fail-open — the insight just waits).
+        """
+        system_prompt = (
+            "You distill an insight report into atomic claims for a long-term memory store.\n"
+            "Extract AT MOST 3 claims. Each claim must be:\n"
+            "- ONE declarative sentence that can be judged true or false on its own\n"
+            "  (NOT a topic label like 'memory and learning').\n"
+            "- In the same language as the report.\n"
+            "- Self-contained: no dangling pronouns or 'this/it' references.\n\n"
+            "Return ONLY a JSON array:\n"
+            '[{"claim": "<one sentence>", "summary": "<one-line gist of the supporting argument>"}]\n'
+            "No prose outside the JSON. Return [] if the report contains no real claim."
+        )
+        try:
+            raw = self._complete_text(
+                system_prompt=system_prompt,
+                user_msg=insight_text,
+                temperature=0.2,
+                max_tokens=1024,
+                trace_context={"stage": "extract_claims", "metadata": {}},
+            )
+            parsed = extract_json_array(raw)
+            out = []
+            for item in parsed if isinstance(parsed, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                claim = item.get("claim")
+                if isinstance(claim, str) and len(claim.strip()) >= 8:
+                    out.append({
+                        "claim": claim.strip(),
+                        "summary": str(item.get("summary") or "").strip()[:200],
+                    })
+            return out[:3]
+        except Exception as e:
+            logging.warning(f"extract_claims failed: {e}")
+            return []
+
+    def adjudicate_claims(self, claim_a: str, claim_b: str) -> dict:
+        """Closed-choice relation verdict between two atomic claims.
+
+        equivalent is BIDIRECTIONAL entailment only — that criterion is
+        the merge trigger (CortexMemory invariant 5), so it is spelled
+        out in the prompt. Any parse failure or illegal verdict degrades
+        to "unrelated": the conservative outcome (no merge, no link).
+        """
+        system_prompt = (
+            "You judge the logical relation between two atomic claims, A and B.\n"
+            "Choose EXACTLY ONE verdict:\n"
+            "- equivalent:    A and B entail each other IN BOTH DIRECTIONS — interchangeable\n"
+            "                 statements of the same claim. If A is merely a special case of B\n"
+            "                 (or vice versa), that is NOT equivalent.\n"
+            "- entails:       A is the more specific claim; A being true makes B true, not vice versa.\n"
+            "- entailed_by:   B is the more specific claim; B being true makes A true, not vice versa.\n"
+            "- complementary: same topic, different non-conflicting aspects.\n"
+            "- contradicts:   they cannot both be true.\n"
+            "- unrelated:     different topics.\n\n"
+            "Return ONLY a JSON object:\n"
+            '{"verdict": "<one of the six>", "rationale": "<=200 chars>"}'
+        )
+        valid = {"equivalent", "entails", "entailed_by", "complementary", "contradicts", "unrelated"}
+        fallback = {"verdict": "unrelated", "rationale": "adjudication failed; conservative default"}
+        try:
+            raw = self._complete_text(
+                system_prompt=system_prompt,
+                user_msg=f"A: {claim_a}\n\nB: {claim_b}",
+                temperature=0.0,
+                max_tokens=300,
+                trace_context={"stage": "adjudicate_claims", "metadata": {}},
+            )
+            parsed = extract_json_object(raw)
+            verdict = parsed.get("verdict") if isinstance(parsed, dict) else None
+            if isinstance(verdict, str) and verdict.strip().lower() in valid:
+                return {
+                    "verdict": verdict.strip().lower(),
+                    "rationale": str(parsed.get("rationale") or "").strip()[:200],
+                }
+            logging.warning(f"adjudicate_claims: illegal verdict {verdict!r}; defaulting to unrelated")
+            return fallback
+        except Exception as e:
+            logging.warning(f"adjudicate_claims failed: {e}")
+            return fallback
 
     def generate_bench_question(self, title: str, thesis: str) -> str:
         """Turn a page's thesis into one natural retrieval question.

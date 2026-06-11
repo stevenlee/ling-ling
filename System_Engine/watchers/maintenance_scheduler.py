@@ -100,6 +100,14 @@ class MaintenanceScheduler(threading.Thread):
             trace_store.prune_old()
             return MaintenanceResult("succeeded", "SQLite trace logs pruned successfully.")
 
+        def cortex_consolidation() -> MaintenanceResult:
+            from core.config import CORTEX_CONSOLIDATION_ENABLED
+            if not CORTEX_CONSOLIDATION_ENABLED:
+                return MaintenanceResult("skipped", "Cortex consolidation disabled.")
+            from maintenance.cortex_consolidation import run_consolidation
+            result = run_consolidation(self.llm, self.rag)
+            return MaintenanceResult(result.status, result.message)
+
         def rag_orphan_sweep() -> MaintenanceResult:
             result = self.rag.prune_orphan_chunks()
             if result["deleted_chunks"]:
@@ -152,6 +160,16 @@ class MaintenanceScheduler(threading.Thread):
                 idle_required=False,
                 intent="maintenance.trace_prune",
                 agent="TraceStore",
+            ),
+            MaintenanceTask(
+                name="cortex_consolidation_daily",
+                action=cortex_consolidation,
+                daily=True,
+                idle_required=True,
+                window_start_hour=settings.DREAMING_FROM,
+                window_end_hour=settings.DREAMING_TO,
+                intent="maintenance.cortex_consolidation",
+                agent="CortexConsolidation",
             ),
             MaintenanceTask(
                 name="bench_builder_weekly",

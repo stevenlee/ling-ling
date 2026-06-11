@@ -235,10 +235,12 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             global_busy_state.set_busy(False)
 
     def _is_indexed_dir(self, path: Path) -> bool:
-        from core.config import PAGES_DIR, NOTES_DIR
+        from core.config import CORTEX_DIR, PAGES_DIR, NOTES_DIR
         abs_path = path.absolute()
-        return self._is_relative_to(abs_path, PAGES_DIR.absolute()) or self._is_relative_to(
-            abs_path, NOTES_DIR.absolute()
+        return (
+            self._is_relative_to(abs_path, PAGES_DIR.absolute())
+            or self._is_relative_to(abs_path, NOTES_DIR.absolute())
+            or self._is_relative_to(abs_path, CORTEX_DIR.absolute())
         )
 
     def _schedule_orphan_sweep(self, delay: float = 5.0):
@@ -301,9 +303,13 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
         return filepath.absolute() == READING_INDEX_FILE.absolute()
 
     def _should_index(self, filepath: Path) -> bool:
-        from core.config import PAGES_DIR, NOTES_DIR
+        from core.config import CORTEX_DIR, PAGES_DIR, NOTES_DIR
         abs_path = filepath.absolute()
-        return self._is_relative_to(abs_path, PAGES_DIR.absolute()) or self._is_relative_to(abs_path, NOTES_DIR.absolute())
+        return (
+            self._is_relative_to(abs_path, PAGES_DIR.absolute())
+            or self._is_relative_to(abs_path, NOTES_DIR.absolute())
+            or self._is_relative_to(abs_path, CORTEX_DIR.absolute())
+        )
 
     def _is_relative_to(self, path: Path, parent: Path) -> bool:
         try:

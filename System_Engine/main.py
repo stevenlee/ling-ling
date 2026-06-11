@@ -4,7 +4,7 @@ import logging
 import watchdog.observers
 
 from core.config import (
-    LLM_PROVIDER, PROJECT_ROOT, CLIPPINGS_DIR, CONSOLIDATE_DIR,
+    LLM_PROVIDER, PROJECT_ROOT, CLIPPINGS_DIR, CONSOLIDATE_DIR, CORTEX_DIR,
     TO_LLM_DIR, PAGES_DIR, NOTES_DIR, SCRIPTURE_DIR, PID_FILE, ensure_directories, settings
 )
 from core.vault_utils import READING_INDEX_FILE, ensure_wiki_indexes
@@ -75,6 +75,7 @@ def main():
     # metadata churn that are ignored later anyway.
     observer.schedule(event_handler_vault, str(PAGES_DIR), recursive=True)
     observer.schedule(event_handler_vault, str(NOTES_DIR), recursive=True)
+    observer.schedule(event_handler_vault, str(CORTEX_DIR), recursive=True)
     observer.schedule(event_handler_vault, str(SCRIPTURE_DIR), recursive=True)
     observer.schedule(event_handler_vault, str(READING_INDEX_FILE.parent), recursive=False)
     observer.start()

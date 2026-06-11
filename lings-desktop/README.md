@@ -157,6 +157,14 @@ lings-desktop/
 
 ## Refactor Notes
 
+### 2026-06-11 Cortex Memory (Phase 2 - 夜間鞏固)
+
+- **Insight → 原子主張 → Cortex 頁**：dreaming window 的每日任務把通過 Phase 1 訊號閘門的 insights（排除 refuted 與低 groundedness）蒸餾成原子主張（每份最多 3 條），鞏固進獨立的 `Cortex/` 目錄——**一頁一主張**，這是長期記憶的最高層。
+- **只有雙向蘊涵才合併**：embedding 鄰居（≥0.80、top-3）交給 LLM 做六值裁決（equivalent / entails / entailed_by / complementary / contradicts / unrelated）；只有 `equivalent` 觸發合併（reconsolidation：證據鏈增長、S+1、confidence 上調 cap 0.9、變體區 cap 5），其餘建**型別化連結**；`contradicts` 雙方互記並下調 confidence（floor 0.1，不擊殺——falsified 是 Phase 4）。裁決結果內容定址快取、無 TTL。
+- **頁面結構鎖死**：[services/cortex_store.py](System_Engine/services/cortex_store.py) 是唯一讀寫路徑——機器狀態（S / confidence / 證據鏈）在 frontmatter、內文固定四節，全部確定性程式碼操作，LLM 永不重寫整頁；`parse(render())` round-trip 有測試把關。
+- **進檢索閉環**：Cortex 頁建立/更新即 `add_document` + facet；`Cortex/` 納入 vault watcher 與 orphan sweep——你刪頁面，chunks 自動清理。
+- 配額：每晚 10 份 insight 抽取、20 次蘊涵裁決（`CORTEX_*` flags 可調）。
+
 ### 2026-06-10 Cortex Memory (Phase 1 - Insight Quality Signals)
 
 - **四項品質雷達**：為所有 `@ling-insight` 產出加上 `groundedness` (引用存活率)、`novelty` (內容新穎度，Cosine Distance vs `insight_signals.json` 歷史)、`bridging` (跨領域融合度，Target embeddings 間的最大距離)，以及 `refute_verdict` (LLM Challenger 壓力測試)。

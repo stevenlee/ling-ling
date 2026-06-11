@@ -1078,8 +1078,8 @@ class RAGManager:
 
         Returns {"scanned", "orphan_docs", "deleted_chunks", "titles"}.
         """
-        from core.config import NOTES_DIR, PAGES_DIR
-        roots = roots if roots is not None else [PAGES_DIR, NOTES_DIR]
+        from core.config import CORTEX_DIR, NOTES_DIR, PAGES_DIR
+        roots = roots if roots is not None else [PAGES_DIR, NOTES_DIR, CORTEX_DIR]
 
         valid_doc_ids = set()
         for root in roots:
