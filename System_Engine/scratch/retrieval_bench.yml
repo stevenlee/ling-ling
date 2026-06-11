@@ -129,3 +129,32 @@ queries:
       - "妙法蓮華經 (Stitched)"
     top_k: 5
     hybrid: true
+
+  # ── 抽象層查詢（驗證 facet/cortex 對概念性問題的效益）──
+  - query: "我讀過哪些關於多變數函數泰勒展開的數學論證"
+    expected_top_k:
+      - "TRENCH_REAL_ANALYSIS (Synthesis)"
+      - "TRENCH_REAL_ANALYSIS (Stitched)"
+      - "TRENCH_REAL_ANALYSIS (Part 105)"
+      - "TRENCH_REAL_ANALYSIS (Part 83)"
+    top_k: 5
+    hybrid: true
+
+  - query: "弱解的存在性是怎麼證明的"
+    expected_top_k:
+      - "Partial Differential Equations with Numerical Methods (Synthesis)"
+      - "Partial Differential Equations with Numerical Methods (Stitched)"
+      - "Partial Differential Equations with Numerical Methods (Part 51)"
+      - "Partial Differential Equations with Numerical Methods (Part 47)"
+      - "Partial Differential Equations with Numerical Methods (Part 61)"
+    top_k: 5
+    hybrid: true
+
+  - query: "求道者放棄苦行之後經歷了什麼轉變"
+    expected_top_k:
+      - "Siddhartha(EN) (Synthesis)"
+      - "Siddhartha(EN) (Stitched)"
+      - "Siddhartha(EN) (Part 15)"
+      - "Siddhartha(EN) (Part 17)"
+    top_k: 5
+    hybrid: true
