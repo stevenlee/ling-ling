@@ -155,13 +155,24 @@ class _Consolidator:
         cached = self.state.setdefault("claim_embeddings", {})
         for page in self.pages:
             entry = cached.get(page.claim_id)
-            if entry and entry.get("updated") == page.updated:
+            # Invalidate on `updated` OR on the claim text itself — an
+            # external editor (Obsidian) can change the Core Claim without
+            # bumping frontmatter `updated` (review nitpick, phase-2 R1).
+            if (
+                entry
+                and entry.get("updated") == page.updated
+                and entry.get("claim_hash") == _claim_hash(page.claim)
+            ):
                 self.embeddings[page.claim_id] = entry["embedding"]
                 continue
             vec = self._embed(page.claim)
             if vec is not None:
                 self.embeddings[page.claim_id] = vec
-                cached[page.claim_id] = {"embedding": vec, "updated": page.updated}
+                cached[page.claim_id] = {
+                    "embedding": vec,
+                    "updated": page.updated,
+                    "claim_hash": _claim_hash(page.claim),
+                }
         # Drop cache entries for pages that no longer exist.
         for claim_id in list(cached):
             if claim_id not in self.by_claim_id:
@@ -284,7 +295,11 @@ class _Consolidator:
         self.by_claim_id[claim_id] = page
         if vec is not None:
             self.embeddings[claim_id] = vec
-            self.state["claim_embeddings"][claim_id] = {"embedding": vec, "updated": page.updated}
+            self.state["claim_embeddings"][claim_id] = {
+                "embedding": vec,
+                "updated": page.updated,
+                "claim_hash": _claim_hash(claim),
+            }
         self._index_page(page)
         self.created += 1
 

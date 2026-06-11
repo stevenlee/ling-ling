@@ -308,6 +308,31 @@ class TestQuotasAndCache:
         cache = json.loads(env["cache_file"].read_text())
         assert any(v.get("verdict") == "complementary" for v in cache.values())
 
+    def test_manual_claim_edit_invalidates_embedding_cache(self, tmp_path):
+        """An external editor can change the Core Claim without bumping
+        frontmatter `updated`; the embedding cache must catch that via
+        the claim content hash (Gemini review nitpick, phase-2 R1)."""
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "n1.md", body="MARKER-A")
+        llm = FakeLLM(claims_map={"MARKER-A": [{"claim": "ALPHA original claim.", "summary": "s"}]})
+        run_consolidation(llm, FakeRAG(), **env)
+
+        # Simulate a manual Core Claim edit that leaves `updated` untouched.
+        page_path = next(env["cortex_dir"].glob("*.md"))
+        text = page_path.read_text(encoding="utf-8")
+        page_path.write_text(
+            text.replace("ALPHA original claim.", "BETA edited claim."), encoding="utf-8"
+        )
+
+        _write_insight(env["insights_dir"], "n2.md", body="MARKER-B")
+        llm2 = FakeLLM(claims_map={"MARKER-B": [{"claim": "BETA new sibling claim.", "summary": "s"}]})
+        run_consolidation(llm2, FakeRAG(), **env)
+
+        # Cache entry was recomputed for the edited claim text.
+        state = json.loads(env["state_file"].read_text())
+        entries = list(state["claim_embeddings"].values())
+        assert any(e["embedding"] == [0.0, 1.0] for e in entries)  # BETA vector
+
     def test_corrupted_state_and_cache_recover(self, tmp_path):
         env = _env(tmp_path)
         env["state_file"].parent.mkdir(parents=True, exist_ok=True)
