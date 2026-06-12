@@ -458,6 +458,28 @@ class TraceStore:
             logging.debug(f"recently_retrieved_titles failed: {e}")
         return titles
 
+    def recent_query_texts(self, since_days: int = 7) -> list[str]:
+        """Distinct retrieval query texts in the window, newest first."""
+        texts: list[str] = []
+        seen: set[str] = set()
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT query_text FROM retrieval_events WHERE ts >= ? ORDER BY ts DESC",
+                    (self._since_cutoff(since_days),),
+                ).fetchall()
+            for row in rows:
+                query_text = row["query_text"]
+                if not query_text or not str(query_text).strip():
+                    continue
+                text = str(query_text).strip()
+                if text not in seen:
+                    seen.add(text)
+                    texts.append(text)
+        except Exception as e:
+            logging.debug(f"recent_query_texts failed: {e}")
+        return texts
+
     def prune_old(self) -> None:
         if self.retention_days <= 0:
             return
