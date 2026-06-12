@@ -3,8 +3,8 @@
 > Status: **Phase 1 landed 2026-06-11**（Gemini 實作、Claude 審查，
 > 兩輪後 merge：01e92b0）。**Phase 2 landed 2026-06-11**（角色互換：
 > Claude 實作、Gemini 審查 APPROVE，見 CortexMemory_phase2_review.md）。
-> Phase 3–4 未實作。與 Steven 逐項討論定案；實作前請先讀完
-> 「核心不變量」與「分相計畫」。
+> **Phase 3+4 landed 2026-06-12**（Claude 實作；生成端配比同日落地）。
+> 全四相完成。與 Steven 逐項討論定案。
 
 ## Problem
 

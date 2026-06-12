@@ -108,6 +108,18 @@ CORTEX_REVALIDATIONS_PER_NIGHT  = int(os.getenv("CORTEX_REVALIDATIONS_PER_NIGHT"
 CORTEX_REVIVAL_TARGET_LOW       = float(os.getenv("CORTEX_REVIVAL_TARGET_LOW", "0.05"))
 CORTEX_REVIVAL_TARGET_HIGH      = float(os.getenv("CORTEX_REVIVAL_TARGET_HIGH", "0.10"))
 
+# ─── Cortex Memory Phase 4 (claim ledger + falsified) ─────────────────
+# Falsification is conservative: >=2 contradicting claims from
+# INDEPENDENT insights, plus an LLM refute confirmation, before a page
+# is killed (the file stays — it records what we used to believe).
+# Un-merge tracking feeds adjudication strictness: when users keep
+# splitting merged pages, equivalent verdicts demote to links.
+CORTEX_LEDGER_ENABLED           = os.getenv("CORTEX_LEDGER_ENABLED", "true").lower() == "true"
+CORTEX_FALSIFY_PER_NIGHT        = int(os.getenv("CORTEX_FALSIFY_PER_NIGHT", "2"))
+CORTEX_UNMERGE_STRICT_AT        = float(os.getenv("CORTEX_UNMERGE_STRICT_AT", "0.10"))
+CORTEX_UNMERGE_RELAX_AT         = float(os.getenv("CORTEX_UNMERGE_RELAX_AT", "0.05"))
+CORTEX_UNMERGE_MIN_SAMPLES      = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))
+
 # ─── Insight generation mix (backlog: doc-anchored seeds) ─────────────
 # Nightly insights target concrete documents chosen by interest-weighted
 # sampling with an exploration share — doc-anchored material produces
@@ -165,6 +177,7 @@ CORTEX_STATE_FILE = DATABASE_DIR / "cortex_state.json"
 CORTEX_ADJUDICATION_CACHE = DATABASE_DIR / "cortex_adjudications.json"
 SEED_HISTORY_FILE = DATABASE_DIR / "seed_history.json"
 CORTEX_DECAY_STATE_FILE = DATABASE_DIR / "cortex_decay_state.json"
+CORTEX_LEDGER_STATE_FILE = DATABASE_DIR / "cortex_ledger_state.json"
 BENCH_AUTO_MAX_CASES = int(os.getenv("BENCH_AUTO_MAX_CASES", "30"))
 BENCH_AUTO_PER_RUN = int(os.getenv("BENCH_AUTO_PER_RUN", "5"))
 RAW_DIR = WIKI_VAULT_DIR / "raw"

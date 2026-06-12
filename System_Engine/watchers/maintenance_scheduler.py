@@ -143,6 +143,14 @@ class MaintenanceScheduler(threading.Thread):
             result = run_decay_pass(self.llm, self.rag)
             return MaintenanceResult(result.status, result.message)
 
+        def cortex_ledger() -> MaintenanceResult:
+            from core.config import CORTEX_LEDGER_ENABLED
+            if not CORTEX_LEDGER_ENABLED:
+                return MaintenanceResult("skipped", "Cortex ledger disabled.")
+            from maintenance.cortex_ledger import run_ledger_pass
+            result = run_ledger_pass(self.llm, self.rag)
+            return MaintenanceResult(result.status, result.message)
+
         def rag_orphan_sweep() -> MaintenanceResult:
             result = self.rag.prune_orphan_chunks()
             if result["deleted_chunks"]:
@@ -225,6 +233,16 @@ class MaintenanceScheduler(threading.Thread):
                 window_end_hour=settings.DREAMING_TO,
                 intent="maintenance.cortex_decay",
                 agent="CortexDecay",
+            ),
+            MaintenanceTask(
+                name="cortex_ledger_daily",
+                action=cortex_ledger,
+                daily=True,
+                idle_required=True,
+                window_start_hour=settings.DREAMING_FROM,
+                window_end_hour=settings.DREAMING_TO,
+                intent="maintenance.cortex_ledger",
+                agent="CortexLedger",
             ),
             MaintenanceTask(
                 name="bench_builder_weekly",

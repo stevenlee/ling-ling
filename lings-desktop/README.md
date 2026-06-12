@@ -157,6 +157,12 @@ lings-desktop/
 
 ## Refactor Notes
 
+### 2026-06-12 Cortex Memory (Phase 3+4 - 衰減、行為訊號、主張帳本) ＋ 生成端配比
+
+- **生成端配比**：夜間 insight 改為 doc-anchored——SeedSampler 以「近期被檢索命中」做興趣加權、ε=0.2 保證探索（最久未被抽中的文件輪流上場），確定性選種子餵給 targeted montecarlo；全庫漫談降為每週任務。對症下藥：過閘 insights 斷鏈率 80% 全來自 Vault 型漫談。
+- **Phase 3 雙強度衰減**（[services/cortex_decay.py](System_Engine/services/cortex_decay.py)）：S 只增不減、R = exp(−Δt·ln2/t½(S)) 現算不存；**spacing effect** ΔS = gain×(1−R)——同晚重複發現幾乎不增 S，快遺忘時被重新發現才大漲。狀態遲滯（降 0.5/0.2、升 0.6/0.3）防 facet index 震盪；dormant 移出 facets、復活自動歸隊。行為訊號：檢索命中（0.5/日）、使用者編輯（1.0，mtime 動了而 frontmatter `updated` 沒動＝只有人類這樣寫）。每晚再驗證 3 頁（fading 高 S 優先——睡眠優先重播重要記憶），失敗降 confidence。revival rate 阻尼校準（±20%、≥20 樣本、月節奏）。`decay_simulation.py` 回測：現有頁面太年輕無法區分網格，維持 21d/1.8 預設。
+- **Phase 4 主張帳本**（[maintenance/cortex_ledger.py](System_Engine/maintenance/cortex_ledger.py)）：**保守擊殺**——≥2 個矛盾連結且追溯到**獨立** insights（單源圍攻不算）＋ LLM 反駁確認才轉 falsified（檔案保留、facets 移除、counterpoints 記死因；倖存者 14 天冷卻）。**un-merge 回饋**：快照偵測使用者拆頁，un-merge 率 ≥10% 自動進 strict mode（equivalent 裁決降級為連結），<5% 鬆綁。驗證報告新增「⚔️ 矛盾對」與「🪦 已 falsified」區。
+
 ### 2026-06-11 Cortex Memory (Phase 2.5 - 可反駁性與抽取錨點)
 
 - **第五訊號 falsifiability**：把 Popper 操作化——`assess_falsifiability` 要求 LLM「描述一個能推翻此主張的具體觀察」，寫不出＝低分（0/0.5/1 三檔，越界自動夾制）。建新 Cortex 頁時評一次（merge 路徑零額外成本），分數掛鉤初始 confidence（`0.3 + 0.4×score`）——不可反駁的主張以低信心進場而非被拒。緣起：首輪驗證發現「有道理＋無法反駁＋不知如何實施」的占星術組合，而模糊是對 refute 訊號的天然護甲。

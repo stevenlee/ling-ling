@@ -123,9 +123,13 @@ class _Consolidator:
     """One night's run. Holds quotas, caches, and the in-memory page set."""
 
     def __init__(self, llm, rag, *, cortex_dir, state, adjudication_cache,
-                 max_adjudications, top_k, sim_threshold, max_variants):
+                 max_adjudications, top_k, sim_threshold, max_variants,
+                 strict: bool = False):
         self.llm = llm
         self.rag = rag
+        # Phase 4 un-merge feedback: in strict mode, equivalent verdicts
+        # demote to links — the user has been splitting our merges.
+        self.strict = strict
         self.cortex_dir = Path(cortex_dir)
         self.state = state
         self.cache = adjudication_cache
@@ -296,8 +300,10 @@ class _Consolidator:
                 if verdict is None:
                     break  # quota exhausted — remaining relations wait for tomorrow
                 if verdict == "equivalent":
-                    self._merge_into(neighbor, claim, evidence)
-                    return
+                    if not self.strict:
+                        self._merge_into(neighbor, claim, evidence)
+                        return
+                    verdict = "complementary"  # strict: link, don't merge
                 if verdict in ("entails", "entailed_by", "complementary"):
                     related.append(neighbor_id)
                 elif verdict == "contradicts":
@@ -474,10 +480,12 @@ def run_consolidation(
             status="skipped", message="No unprocessed insights with healthy signals."
         )
 
+    from maintenance.cortex_ledger import is_adjudication_strict
     worker = _Consolidator(
         llm, rag, cortex_dir=cortex_dir, state=state, adjudication_cache=cache,
         max_adjudications=max_adjudications, top_k=top_k,
         sim_threshold=sim_threshold, max_variants=max_variants,
+        strict=is_adjudication_strict(),
     )
 
     insights_processed = 0
