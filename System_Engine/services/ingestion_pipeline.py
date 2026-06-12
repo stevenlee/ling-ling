@@ -23,6 +23,7 @@ from core.config import (
     PROFILES_DIR,
     PROFILES_PENDING_DIR,
     SYNTHESIS_CRITIQUE_ENABLED,
+    SYNTHESIS_CRITIQUE_MAX_RETRIES,
     THOUGHTFUL_EMIT_SUMMARY,
     THOUGHTFUL_USE_LLM_FOR_INGEST,
     TEMPLATES_DIR,
@@ -47,11 +48,14 @@ _FRONTMATTER_RE = re.compile(r'^---\s*\n.*?\n---\s*\n?', re.DOTALL)
 _PART_DIGEST_HEADER = "## 🧩 Part Digest Appendix"
 _CRITIQUE_HEADER = "## 🔍 Quality Critique"
 # Verdicts come from Operations/critique.md ("keep, revise, or reject").
-# The model is allowed to use either English or zh-translated equivalents, so
-# match generously on the trailing keyword of the Overall Verdict line.
+# The model is allowed to use either English or zh-translated equivalents, and
+# often wraps the keyword in prose ("應修正 (revise)" — observed live on
+# gemma), so allow a short gap after the colon and take the first keyword on
+# the line. A negated revise ("不需修正") counts as keep.
 _VERDICT_RE = re.compile(
-    r'(?im)^\**\s*Overall\s+Verdict\**\s*[:：]\s*[*_`]*\s*(keep|revise|reject|保留|修訂|修正|重做|拒絕)',
+    r'(?im)^\**\s*Overall\s+Verdict\**\s*[:：][^\n]{0,40}?(keep|revise|reject|保留|修訂|修正|重做|拒絕)',
 )
+_VERDICT_NEGATION_RE = re.compile(r'(不需|不必|無需|无需|毋須|毋须)\s*$')
 _VERDICT_NORMALISE = {
     "keep": "keep", "保留": "keep",
     "revise": "revise", "修訂": "revise", "修正": "revise",
@@ -639,21 +643,15 @@ class IngestionPipeline:
         syn_persona = (doc_config or {}).get("synthesis_persona", "none")
         syn_template = (doc_config or {}).get("synthesis_template") or settings.USE_TEMPLATE or "wiki-note"
 
-        synthesis_text = self.llm.generate_synthesis(
-            base_title,
-            part_state["part_digests"],
-            part_state["pending_concepts"],
-            template=syn_template,
-            persona=syn_persona,
+        outcome = self._synthesize_with_critique_retry(
+            base_title, part_state, syn_template, syn_persona
         )
-        synthesis_text, synthesis_fixes = run_markdown_quality_checks(synthesis_text, strip_frontmatter=True)
+        synthesis_text = outcome["text"]
+        synthesis_fixes = outcome["fixes"]
+        critique_section = outcome["section"]
+        critique_verdict = outcome["verdict"]
 
         digest_appendix = self.format_digest_appendix(part_state["part_digests"])
-        # Critique runs against the same digests the synthesis was generated
-        # from — so any drift away from the sources gets surfaced.
-        critique_section, critique_verdict = self._run_synthesis_critique(
-            base_title, synthesis_text, part_state["part_digests"]
-        )
         master_tags = part_state["master_tags"]
         nav_block = "\n".join(part_state["navigation_items"])
         syn_nav = (
@@ -703,6 +701,10 @@ class IngestionPipeline:
             final_meta["quality_fixes"] = combined_fixes
         if critique_verdict:
             final_meta["quality_verdict"] = critique_verdict
+        if SYNTHESIS_CRITIQUE_ENABLED:
+            final_meta["critique_attempts"] = outcome["attempts"]
+        if len(outcome["verdict_history"]) > 1:
+            final_meta["quality_verdict_history"] = outcome["verdict_history"]
         self._attach_trace_metadata(final_meta)
 
         entity_dir = PAGES_DIR / base_title
@@ -721,6 +723,71 @@ class IngestionPipeline:
         return synthesis_file
 
     # ── Critique post-step ───────────────────────────────────────────
+
+    _VERDICT_RANK = {"keep": 2, "revise": 1, "reject": 0, None: -1}
+
+    def _synthesize_with_critique_retry(
+        self,
+        base_title: str,
+        part_state: dict,
+        syn_template,
+        syn_persona,
+    ) -> dict:
+        """Generate the synthesis, then act on the critique verdict.
+
+        An explicit revise/reject verdict triggers up to
+        SYNTHESIS_CRITIQUE_MAX_RETRIES regenerations with the critique
+        findings fed back. A retry is adopted only when its verdict ranks
+        strictly higher (keep > revise > reject > unparseable); an
+        unparseable first verdict never triggers a retry. Worst case adds
+        one synthesis + one critique call per retry (local model).
+
+        Returns {"text", "fixes", "section", "verdict", "attempts",
+        "verdict_history"}.
+        """
+
+        def attempt(feedback: str | None) -> dict:
+            # Pass critique_feedback only when set, so doubles of the LLM
+            # client that predate the kwarg keep working on the normal path.
+            extra = {"critique_feedback": feedback} if feedback is not None else {}
+            text = self.llm.generate_synthesis(
+                base_title,
+                part_state["part_digests"],
+                part_state["pending_concepts"],
+                template=syn_template,
+                persona=syn_persona,
+                **extra,
+            )
+            text, fixes = run_markdown_quality_checks(text, strip_frontmatter=True)
+            # Critique runs against the same digests the synthesis was
+            # generated from — so any drift away from the sources surfaces.
+            section, verdict = self._run_synthesis_critique(
+                base_title, text, part_state["part_digests"]
+            )
+            return {"text": text, "fixes": fixes, "section": section, "verdict": verdict}
+
+        current = attempt(None)
+        attempts = 1
+        history = [current["verdict"]]
+
+        retries_left = SYNTHESIS_CRITIQUE_MAX_RETRIES
+        while current["verdict"] in ("revise", "reject") and retries_left > 0:
+            retries_left -= 1
+            feedback = current["section"].removeprefix(_CRITIQUE_HEADER).strip()
+            retry = attempt(feedback)
+            attempts += 1
+            history.append(retry["verdict"])
+            if self._VERDICT_RANK[retry["verdict"]] > self._VERDICT_RANK[current["verdict"]]:
+                current = retry
+            else:
+                logging.info(
+                    f"Critique retry for {base_title} did not improve "
+                    f"({history[-2]} → {history[-1]}); keeping the original synthesis."
+                )
+
+        current["attempts"] = attempts
+        current["verdict_history"] = history
+        return current
 
     def _run_synthesis_critique(
         self,
@@ -765,7 +832,10 @@ class IngestionPipeline:
         m = _VERDICT_RE.search(critique)
         if not m:
             return None
-        return _VERDICT_NORMALISE.get(m.group(1).strip().lower())
+        verdict = _VERDICT_NORMALISE.get(m.group(1).strip().lower())
+        if verdict == "revise" and _VERDICT_NEGATION_RE.search(critique[: m.start(1)]):
+            return "keep"
+        return verdict
 
     @staticmethod
     def _dedupe_quality_fixes(fixes: list) -> list:

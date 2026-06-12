@@ -258,6 +258,12 @@ lings-desktop/
 - `rank_bm25` 已加入 `requirements.txt`（純 Python，~10KB）。
 - `sentence-transformers` 列為選用依賴；只在需要 reranker 時手動 `pip install`。
 
+### 2026-06-12 backlog batch-2
+
+- **T1: Critique retry loop**: synthesis 的 critique postcheck 由「只記錄」升級為「行動」——verdict 為 revise/reject 時，帶著 critique 全文重生 synthesis（`SYNTHESIS_CRITIQUE_MAX_RETRIES` 控制，預設 1），重試結果 verdict 嚴格較好才採用。metadata 新增 `critique_attempts` 與（重試發生時）`quality_verdict_history`；`critique_feedback=None` 路徑的 prompt 與舊行為 byte-identical。
+- **T2: 新 Operations 四件套**: `Templates/Operations/` 新增 `compare` / `classify` / `outline` / `explain` 四個 fixed-methodology 模板，CapabilityManager 自動拾取，零 Python 產品碼變動。
+- **T3: select_profile 選單修復**: 選單原本只印 hint、從未給模型看 profile 名，模型答 hint 字樣被攔成 `none` → 路由靜默退化到 default profile（batch-1 live transcript 實測發現）。選單改為 `name: hint` 格式，並加一層「答案恰好包含一個合法名」的 salvage 解析。
+
 ### 2026-06-12 backlog batch-1
 
 - **T1: Falsifiability 穩健化**: `assess_falsifiability` 改為支援多重取樣（由 `CORTEX_FALSIFY_SAMPLES` 控制）。當 `samples=1` 時維持 `byte-identical` 原生行為；偶數樣本時取中位數，並在 Falsifier 挑選時取最接近中位數者，避免產生不符實際推論的文本。

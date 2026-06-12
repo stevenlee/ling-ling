@@ -1031,19 +1031,31 @@ class LLMClient:
         final_concepts: str,
         template: str | None = None,
         persona: str | None = None,
+        *,
+        critique_feedback: str | None = None,
     ) -> str:
         """Synthesize a long document from per-part digests.
 
         Synthesis is a fixed methodology, not a persona — so we hard-wire
         `persona='none'` and `operation='synthesize'` here by default, but allow
         overriding `persona` when needed. `template` controls only the output format.
+
+        `critique_feedback` carries the findings of a failed critique postcheck
+        on a previous attempt; when None the prompt is byte-identical to the
+        no-retry path.
         """
         lang_hint = self._get_lang_hint()
         digest_text = "\n\n".join(self._format_part_digest_for_prompt(d) for d in part_digests)
+        feedback_block = (
+            f"Previous attempt was critiqued. Address these findings:\n{critique_feedback}\n\n"
+            if critique_feedback
+            else ""
+        )
         prompt = (
             f'You have processed a long document titled "{title}" using a map-reduce pipeline.\n\n'
             f"Structured digests from each part:\n{digest_text}\n\n"
             f"Final unresolved concepts or carry-over notes:\n{final_concepts or '(none)'}\n\n"
+            f"{feedback_block}"
             f"Task:\nWrite the final synthesis in {lang_hint}.\n"
         )
         resolved_persona = persona if persona is not None else "none"
@@ -1415,7 +1427,7 @@ class LLMClient:
         if not options:
             return "none"
         valid_names = {opt["name"] for opt in options}
-        menu = "\n".join(f"- {opt['hint']}" for opt in options)
+        menu = "\n".join(f"- {opt['name']}: {opt['hint']}" for opt in options)
         system_prompt = (
             "You are a document router. Choose which profile should handle the document.\n"
             "Available profiles (name: when to use):\n"
@@ -1438,7 +1450,15 @@ class LLMClient:
             choice = re.sub(r'[^a-z0-9\-]', '', raw.strip().lower())
             if choice in valid_names:
                 return choice
+            # Salvage: the model wrapped the name in prose ("I choose academic.").
+            # Only safe when exactly one registered name survives in the answer.
             if choice and choice != "none":
+                contained = [name for name in sorted(valid_names) if name in choice]
+                if len(contained) == 1:
+                    logging.info(
+                        f"select_profile: salvaged {contained[0]!r} from model answer {choice!r}."
+                    )
+                    return contained[0]
                 logging.warning(
                     f"select_profile: model answered {choice!r}, not a registered profile; treating as none."
                 )
