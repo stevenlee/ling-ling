@@ -248,6 +248,28 @@ def _write_report(report_dir: Path, report: ValidationReport, pages) -> Path | N
         lines += ["## 📊 指標", ""]
         for key, value in report.stats.items():
             lines.append(f"- {key}: `{value}`")
+        # Contradiction pairs first — the most valuable, most easily
+        # buried signal in a knowledge base (Phase 4 surfacing).
+        by_id = {p.claim_id: p for p in pages}
+        seen_pairs = set()
+        contradiction_lines = []
+        for page in pages:
+            for other_id in page.contradictions:
+                pair = tuple(sorted((page.claim_id, other_id)))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                other = by_id.get(other_id)
+                other_text = other.claim if other else f"（已刪除：{other_id}）"
+                contradiction_lines.append(f"- ⚔️ 「{page.claim}」 vs 「{other_text}」")
+        if contradiction_lines:
+            lines += ["## ⚔️ 矛盾對（知識庫裡最珍貴的訊號）", ""]
+            lines += contradiction_lines + [""]
+        falsified = [p for p in pages if p.status == "falsified"]
+        if falsified:
+            lines += ["## 🪦 已 falsified（檔案保留，記錄曾相信過什麼）", ""]
+            lines += [f"- {p.claim}" for p in falsified] + [""]
+
         lines += [
             "",
             "## 🔍 人工抽查清單（爛的直接刪頁＝品質投票）",
