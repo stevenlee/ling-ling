@@ -95,6 +95,14 @@ CORTEX_NEIGHBOR_TOP_K               = int(os.getenv("CORTEX_NEIGHBOR_TOP_K", "3"
 CORTEX_NEIGHBOR_SIM_THRESHOLD       = float(os.getenv("CORTEX_NEIGHBOR_SIM_THRESHOLD", "0.80"))
 CORTEX_MAX_VARIANTS                 = int(os.getenv("CORTEX_MAX_VARIANTS", "5"))
 
+# ─── Insight generation mix (backlog: doc-anchored seeds) ─────────────
+# Nightly insights target concrete documents chosen by interest-weighted
+# sampling with an exploration share — doc-anchored material produces
+# more falsifiable claims than vault-wide rumination. Weekly full-vault
+# insight is kept as a separate task.
+INSIGHT_SEED_EPSILON                = float(os.getenv("INSIGHT_SEED_EPSILON", "0.2"))
+INSIGHT_SEED_TARGETS                = int(os.getenv("INSIGHT_SEED_TARGETS", "2"))
+
 # ─── Paths ────────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
@@ -142,6 +150,7 @@ BENCH_HISTORY_FILE = DATABASE_DIR / "bench_history.json"
 FACET_BACKFILL_STATE_FILE = DATABASE_DIR / "facet_backfill_state.json"
 CORTEX_STATE_FILE = DATABASE_DIR / "cortex_state.json"
 CORTEX_ADJUDICATION_CACHE = DATABASE_DIR / "cortex_adjudications.json"
+SEED_HISTORY_FILE = DATABASE_DIR / "seed_history.json"
 BENCH_AUTO_MAX_CASES = int(os.getenv("BENCH_AUTO_MAX_CASES", "30"))
 BENCH_AUTO_PER_RUN = int(os.getenv("BENCH_AUTO_PER_RUN", "5"))
 RAW_DIR = WIKI_VAULT_DIR / "raw"
