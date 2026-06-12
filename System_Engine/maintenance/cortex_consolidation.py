@@ -228,6 +228,29 @@ class _Consolidator:
         self._index_page(page)
         self.merged += 1
 
+    def _assess_falsifiability(self, claim: str) -> tuple[float | None, str]:
+        """Guarded fifth-signal call. Fail-open: any failure, missing
+        method (mock LLMs), or non-numeric score → (None, "") so the
+        claim enters unmeasured at confidence 0.5 — never crashes the
+        rest of the insight's claims."""
+        if not hasattr(self.llm, "assess_falsifiability"):
+            return None, ""
+        try:
+            result = self.llm.assess_falsifiability(claim)
+            if not isinstance(result, dict):
+                return None, ""
+            score = result.get("score")
+            if isinstance(score, bool) or not isinstance(score, (int, float)):
+                return None, ""
+            falsifier = result.get("falsifier")
+            return (
+                max(0.0, min(1.0, float(score))),
+                falsifier.strip()[:200] if isinstance(falsifier, str) else "",
+            )
+        except Exception as e:
+            logging.warning(f"Cortex: falsifiability assessment failed: {e}")
+            return None, ""
+
     def _dent_confidence(self, page: CortexPage) -> None:
         page.confidence = round(max(_CONFIDENCE_FLOOR, page.confidence - _CONTRADICTION_DENT), 4)
         page.updated = _now()
@@ -278,23 +301,21 @@ class _Consolidator:
 
         # No equivalent found → a new claim enters the cortex.
         now = _now()
-        confidence = 0.5
-
-        f_result = self.llm.assess_falsifiability(claim)
-        score = f_result.get("score")
-        if score is not None:
-            confidence = 0.3 + 0.4 * score
+        score, falsifier = self._assess_falsifiability(claim)
+        # Unfalsifiable claims enter at low confidence rather than being
+        # rejected (record-don't-execute philosophy); unmeasured → 0.5.
+        confidence = 0.5 if score is None else 0.3 + 0.4 * score
 
         if contradictions:
             confidence = max(_CONFIDENCE_FLOOR, confidence - _CONTRADICTION_DENT * len(contradictions))
-        
+
         page = CortexPage(
             claim_id=claim_id,
             path=claim_filename(claim, claim_id, self.cortex_dir),
             claim=claim,
             confidence=round(confidence, 4),
             falsifiability=score,
-            falsifier=f_result.get("falsifier", ""),
+            falsifier=falsifier,
             applies_when=applies_when,
             S=1,
             last_reinforced_at=now,

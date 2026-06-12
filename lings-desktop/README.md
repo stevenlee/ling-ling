@@ -157,6 +157,14 @@ lings-desktop/
 
 ## Refactor Notes
 
+### 2026-06-11 Cortex Memory (Phase 2.5 - 可反駁性與抽取錨點)
+
+- **第五訊號 falsifiability**：把 Popper 操作化——`assess_falsifiability` 要求 LLM「描述一個能推翻此主張的具體觀察」，寫不出＝低分（0/0.5/1 三檔，越界自動夾制）。建新 Cortex 頁時評一次（merge 路徑零額外成本），分數掛鉤初始 confidence（`0.3 + 0.4×score`）——不可反駁的主張以低信心進場而非被拒。緣起：首輪驗證發現「有道理＋無法反駁＋不知如何實施」的占星術組合，而模糊是對 refute 訊號的天然護甲。
+- **抽取錨點 applies_when**：每條 claim 附「適用情境」，prompt 明文糾偏「原子 ≠ 無條件全稱」；頁面以 `> 適用情境：` blockquote 確定性編碼進 Core Claim 節（round-trip 有測試把關）。
+- **證據鏈穿透**：claim 的 sources 除 insight frontmatter 外，追加解析 insight 內文的 `[[wikilink]]`（存在性過濾、上限 5）——「如何實施」的脈絡一跳可達。
+- **量尺修缺**：斷鏈率只計過閘 insights（首輪 90% 是把被擋的 planner 文件算進去的假象，且閘門判定改為與鞏固管線共用同一函式）；新增 `refute_coverage` 與 falsifiability 分佈（mean < 0.4 黃線）；人工抽查清單每條附「證偽」提示。
+- **回補基線**：`maintenance/backfill_falsifiability.py` 對既有頁面補測（只加測量、不改 confidence/S/時間戳——不破壞 reconsolidation 歷史）。
+
 ### 2026-06-11 Cortex Memory (Phase 2 - 夜間鞏固)
 
 - **Insight → 原子主張 → Cortex 頁**：dreaming window 的每日任務把通過 Phase 1 訊號閘門的 insights（排除 refuted 與低 groundedness）蒸餾成原子主張（每份最多 3 條），鞏固進獨立的 `Cortex/` 目錄——**一頁一主張**，這是長期記憶的最高層。

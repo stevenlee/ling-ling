@@ -37,10 +37,6 @@ class FakeLLM:
                 return {"verdict": verdict, "rationale": "test"}
         return {"verdict": "unrelated", "rationale": "test"}
 
-    def assess_falsifiability(self, claim):
-        return {"score": 0.5, "falsifier": "test falsifier"}
-
-
 class FakeRAG:
     """Embeddings by keyword so neighbor similarity is controllable."""
 
@@ -389,3 +385,119 @@ class TestLLMDefenses:
 
         garbage = self._client(monkeypatch, "no json at all")
         assert garbage.adjudicate_claims("a", "b")["verdict"] == "unrelated"
+
+
+# ── Phase 2.5: falsifiability wiring, anchoring, penetration ──────────
+
+class FalsifiabilityFakeLLM(FakeLLM):
+    """FakeLLM + configurable fifth signal; counts assessment calls."""
+
+    def __init__(self, *args, score=0.5, falsifier="若 X 則推翻", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.score = score
+        self.falsifier = falsifier
+        self.assess_calls = []
+
+    def assess_falsifiability(self, claim):
+        self.assess_calls.append(claim)
+        return {"score": self.score, "falsifier": self.falsifier}
+
+
+class TestFalsifiabilityWiring:
+    def _run_one(self, tmp_path, llm, claim="BETA standalone claim.", applies_when=""):
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "n1.md", body="MARKER-A")
+        item = {"claim": claim, "summary": "s"}
+        if applies_when:
+            item["applies_when"] = applies_when
+        llm.claims_map = {"MARKER-A": [item]}
+        run_consolidation(llm, FakeRAG(), **env)
+        return load_all_pages(env["cortex_dir"])[0]
+
+    def test_confidence_formula_four_points(self, tmp_path):
+        # score 0 → 0.3; 0.5 → 0.5; 1.0 → 0.7
+        for score, expected in ((0.0, 0.3), (0.5, 0.5), (1.0, 0.7)):
+            page = self._run_one(
+                tmp_path / f"s{score}", FalsifiabilityFakeLLM(score=score)
+            )
+            assert page.confidence == expected, (score, page.confidence)
+            assert page.falsifiability == score
+        # score None（解析失敗）→ 未測量 → 0.5
+        class NoneScoreLLM(FalsifiabilityFakeLLM):
+            def assess_falsifiability(self, claim):
+                return {"score": None, "falsifier": ""}
+        page = self._run_one(tmp_path / "snone", NoneScoreLLM())
+        assert page.confidence == 0.5
+        assert page.falsifiability is None
+
+    def test_out_of_range_score_clamped(self, tmp_path):
+        page = self._run_one(tmp_path, FalsifiabilityFakeLLM(score=7.5))
+        assert page.falsifiability == 1.0
+        assert page.confidence == 0.7          # 不是 3.3
+
+    def test_llm_without_method_fails_open(self, tmp_path):
+        # Phase 2 的 FakeLLM 沒有 assess_falsifiability —— 必須照常運作
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "n1.md", body="MARKER-A")
+        llm = FakeLLM(claims_map={"MARKER-A": [{"claim": "BETA plain claim here.", "summary": "s"}]})
+        run_consolidation(llm, FakeRAG(), **env)
+        page = load_all_pages(env["cortex_dir"])[0]
+        assert page.falsifiability is None and page.confidence == 0.5
+
+    def test_crashing_assessment_fails_open(self, tmp_path):
+        class CrashLLM(FalsifiabilityFakeLLM):
+            def assess_falsifiability(self, claim):
+                raise RuntimeError("provider down")
+        page = self._run_one(tmp_path, CrashLLM())
+        assert page.falsifiability is None and page.confidence == 0.5
+
+    def test_applies_when_lands_on_page(self, tmp_path):
+        page = self._run_one(
+            tmp_path, FalsifiabilityFakeLLM(), applies_when="處理長文拆解時"
+        )
+        assert page.applies_when == "處理長文拆解時"
+
+    def test_merge_path_never_reassesses(self, tmp_path):
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "n1.md", body="MARKER-A")
+        llm1 = FalsifiabilityFakeLLM(
+            claims_map={"MARKER-A": [{"claim": "ALPHA base claim text.", "summary": "s"}]}
+        )
+        run_consolidation(llm1, FakeRAG(), **env)
+        assert len(llm1.assess_calls) == 1     # 建頁評一次
+
+        _write_insight(env["insights_dir"], "n2.md", body="MARKER-B")
+        llm2 = FalsifiabilityFakeLLM(
+            claims_map={"MARKER-B": [{"claim": "NEARALPHA same idea rephrased.", "summary": "s"}]},
+            verdicts={("NEARALPHA", "ALPHA"): "equivalent"},
+        )
+        result = run_consolidation(llm2, FakeRAG(), **env)
+        assert result.merged == 1
+        assert llm2.assess_calls == []         # merge 路徑零額外 call
+
+
+class TestWikilinkPenetration:
+    def test_sources_mined_filtered_and_capped(self, tmp_path, monkeypatch):
+        import maintenance.cortex_consolidation as cc
+        pages_dir = tmp_path / "pages"
+        notes_dir = tmp_path / "Notes"
+        pages_dir.mkdir(); notes_dir.mkdir()
+        for name in ("P1", "P2", "P3", "P4", "P5", "P6"):
+            (pages_dir / f"{name}.md").write_text("x", encoding="utf-8")
+        monkeypatch.setattr(cc, "PAGES_DIR", pages_dir)
+        monkeypatch.setattr(cc, "NOTES_DIR", notes_dir)
+
+        env = _env(tmp_path)
+        body = ("MARKER-A 引用 [[P1]] [[P2|alias]] [[P3#sec]] [[Ghost]] "
+                "[[P4]] [[P5]] [[P6]] [[P1]]")
+        _write_insight(env["insights_dir"], "n1.md", body=body, sources=["P1"])
+        llm = FalsifiabilityFakeLLM(
+            claims_map={"MARKER-A": [{"claim": "BETA sourced claim text.", "summary": "s"}]}
+        )
+        run_consolidation(llm, FakeRAG(), **env)
+
+        page = load_all_pages(env["cortex_dir"])[0]
+        sources = page.evidence[0]["sources"]
+        assert "Ghost" not in sources           # 存在性過濾
+        assert len(sources) == 5                # 上限 5
+        assert sources[0] == "P1"               # frontmatter 來源優先且去重

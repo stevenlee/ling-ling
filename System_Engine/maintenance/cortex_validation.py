@@ -33,6 +33,7 @@ from core.config import (
     INSIGHTS_DIR,
 )
 from core.parser import parse_markdown_metadata
+from maintenance.cortex_consolidation import _is_candidate
 from services.cortex_store import load_all_pages, parse_cortex_page
 
 
@@ -162,27 +163,24 @@ def run_validation(
                 continue
             
             insights_with_signals += 1
-            g_str = signals.get("groundedness")
             g_val = None
-            if g_str is not None:
+            g_raw = signals.get("groundedness")
+            if g_raw is not None:
                 try:
-                    g_val = float(g_str)
+                    g_val = float(g_raw)
                 except (TypeError, ValueError):
                     pass
-                    
+
             verdict = signals.get("refute_verdict")
             if verdict in ("survived", "refuted"):
                 refute_total += 1
                 refute_survived += verdict == "survived"
-                
-            # Is candidate?
-            is_candidate = True
-            if verdict == "refuted":
-                is_candidate = False
-            elif g_val is not None and g_val < 0.5:
-                is_candidate = False
-                
-            if is_candidate and g_val is not None:
+
+            # Broken-link rate is scoped to GATE-PASSING insights only —
+            # planner docs the gate quarantines are supposed to have dead
+            # links; counting them manufactured a fake 90% yellow flag.
+            # Single source of truth: the consolidation gate itself.
+            if _is_candidate(meta) and g_val is not None:
                 grounded.append(g_val)
     if grounded:
         broken_rate = sum(1 for g in grounded if g < 0.8) / len(grounded)

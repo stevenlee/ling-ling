@@ -1,6 +1,7 @@
 # Cortex Phase 2.5 — 可反駁性訊號與抽取錨點（工作計劃）
 
-> Status: **planned 2026-06-11, not yet implemented**。
+> Status: **landed 2026-06-12**（Gemini 實作、Claude 接手修復後合併，
+> 見 CortexMemory_phase2_5_review.md）。
 > 緣起：首輪加速驗證後 Steven 對 Cortex 頁的評價——「全部保留、
 > 都有點道理、但太抽象不知如何實施」。共同診斷：**「有道理＋
 > 無法反駁＋無法實施」是占星術特徵組合**——模糊是對 refute 的天然

@@ -95,6 +95,55 @@ class TestRoundTrip:
         assert isinstance(parsed.evidence[0]["date"], str)
 
 
+class TestPhase25Fields:
+    """falsifiability / falsifier / applies_when round-trip both states,
+    and the Core Claim section's applies_when encoding is deterministic."""
+
+    def test_roundtrip_with_phase25_fields(self, tmp_path):
+        page = _page(
+            tmp_path,
+            "在輸入資料不完整時，分析粒度無法收斂。",
+            falsifiability=0.5,
+            falsifier="提供完整資料集後粒度仍不收斂，即推翻此主張。",
+            applies_when="對長文做多段拆解分析時",
+        )
+        assert _roundtrip(page) == page
+
+    def test_roundtrip_with_defaults(self, tmp_path):
+        page = _page(tmp_path, "A claim without fifth-signal data yet.")
+        parsed = _roundtrip(page)
+        assert parsed == page
+        assert parsed.falsifiability is None
+        assert parsed.falsifier == ""
+        assert parsed.applies_when == ""
+
+    def test_applies_when_blockquote_parse(self, tmp_path):
+        page = _page(tmp_path, "Claim line first.", applies_when="only under X")
+        save_cortex_page(page)
+        text = page.path.read_text(encoding="utf-8")
+        assert "> 適用情境：only under X" in text
+        parsed = parse_cortex_page(page.path)
+        assert parsed.claim == "Claim line first."
+        assert parsed.applies_when == "only under X"
+
+    def test_foreign_blockquote_does_not_become_claim(self, tmp_path):
+        """A blockquote with the wrong prefix is neither claim nor
+        applies_when — the claim is still the first plain line."""
+        page = _page(tmp_path, "Plain claim survives noise.")
+        save_cortex_page(page)
+        text = page.path.read_text(encoding="utf-8")
+        page.path.write_text(
+            text.replace(
+                "## Core Claim\nPlain claim survives noise.",
+                "## Core Claim\n> 註記：random note\nPlain claim survives noise.",
+            ),
+            encoding="utf-8",
+        )
+        parsed = parse_cortex_page(page.path)
+        assert parsed.claim == "Plain claim survives noise."
+        assert parsed.applies_when == ""
+
+
 class TestParseDefenses:
     def test_missing_claim_id_returns_none(self, tmp_path):
         bad = tmp_path / "bad.md"

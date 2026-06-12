@@ -432,7 +432,25 @@ class LLMClient:
             max_tokens=max_tokens,
             extra_body=extra_body,
         )
-        return response.choices[0].message.content or "", getattr(response, "usage", None)
+        message = response.choices[0].message
+        content = message.content or ""
+        if not content.strip():
+            # Reasoning models served via Ollama (e.g. gemma thinking
+            # variants) intermittently emit the whole answer — including
+            # the final JSON — into the reasoning channel and leave
+            # content empty. Fall back so scanning parsers
+            # (extract_json_*, verdict regexes) can still find the answer;
+            # an empty string is strictly worse for every caller.
+            reasoning = getattr(message, "reasoning", None) or getattr(
+                message, "reasoning_content", None
+            )
+            if isinstance(reasoning, str) and reasoning.strip():
+                logging.warning(
+                    "LLM returned empty content with non-empty reasoning; "
+                    "falling back to the reasoning channel."
+                )
+                content = reasoning
+        return content, getattr(response, "usage", None)
 
     def trace_run(self, **kwargs):
         return self.trace_store.run(**kwargs)
@@ -1491,26 +1509,32 @@ class LLMClient:
             '{"score": <float 0.0, 0.5, or 1.0>, "falsifier": "<specific observation that refutes it, <=200 chars>"}'
         )
         fallback = {"score": None, "falsifier": ""}
-        try:
-            raw = self._complete_text(
-                system_prompt=system_prompt,
-                user_msg=f"Claim: {claim}",
-                temperature=0.1,
-                max_tokens=300,
-                trace_context={"stage": "assess_falsifiability", "metadata": {}},
-            )
-            parsed = extract_json_object(raw)
-            if isinstance(parsed, dict):
-                score = parsed.get("score")
-                if isinstance(score, (int, float)):
-                    return {
-                        "score": float(score),
-                        "falsifier": str(parsed.get("falsifier") or "").strip()[:200],
-                    }
-            return fallback
-        except Exception as e:
-            logging.warning(f"assess_falsifiability failed: {e}")
-            return fallback
+        # Transport retries live in _complete_text; this loop covers a
+        # different failure — reasoning models intermittently return empty
+        # or unparseable text without raising. One re-roll usually lands.
+        for attempt in range(2):
+            try:
+                raw = self._complete_text(
+                    system_prompt=system_prompt,
+                    user_msg=f"Claim: {claim}",
+                    temperature=0.1,
+                    max_tokens=None,  # reasoning models need thinking room
+                    trace_context={"stage": "assess_falsifiability", "metadata": {"attempt": attempt + 1}},
+                )
+                parsed = extract_json_object(raw)
+                if isinstance(parsed, dict):
+                    score = parsed.get("score")
+                    if isinstance(score, (int, float)) and not isinstance(score, bool):
+                        # Clamp: an out-of-range score must not leak into the
+                        # confidence formula (0.3 + 0.4*s) and blow past 1.0.
+                        return {
+                            "score": max(0.0, min(1.0, float(score))),
+                            "falsifier": str(parsed.get("falsifier") or "").strip()[:200],
+                        }
+                logging.warning(f"assess_falsifiability: unparseable output (attempt {attempt + 1})")
+            except Exception as e:
+                logging.warning(f"assess_falsifiability failed (attempt {attempt + 1}): {e}")
+        return fallback
 
     def adjudicate_claims(self, claim_a: str, claim_b: str) -> dict:
         """Closed-choice relation verdict between two atomic claims.
@@ -1541,7 +1565,7 @@ class LLMClient:
                 system_prompt=system_prompt,
                 user_msg=f"A: {claim_a}\n\nB: {claim_b}",
                 temperature=0.0,
-                max_tokens=300,
+                max_tokens=None,  # reasoning models need thinking room
                 trace_context={"stage": "adjudicate_claims", "metadata": {}},
             )
             parsed = extract_json_object(raw)
@@ -1581,7 +1605,7 @@ class LLMClient:
                 system_prompt=system_prompt,
                 user_msg=user_msg,
                 temperature=0.3,
-                max_tokens=100,
+                max_tokens=400,
                 trace_context={
                     "stage": "generate_bench_question",
                     "metadata": {"title": title},
