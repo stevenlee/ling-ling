@@ -432,7 +432,25 @@ class LLMClient:
             max_tokens=max_tokens,
             extra_body=extra_body,
         )
-        return response.choices[0].message.content or "", getattr(response, "usage", None)
+        message = response.choices[0].message
+        content = message.content or ""
+        if not content.strip():
+            # Reasoning models served via Ollama (e.g. gemma thinking
+            # variants) intermittently emit the whole answer — including
+            # the final JSON — into the reasoning channel and leave
+            # content empty. Fall back so scanning parsers
+            # (extract_json_*, verdict regexes) can still find the answer;
+            # an empty string is strictly worse for every caller.
+            reasoning = getattr(message, "reasoning", None) or getattr(
+                message, "reasoning_content", None
+            )
+            if isinstance(reasoning, str) and reasoning.strip():
+                logging.warning(
+                    "LLM returned empty content with non-empty reasoning; "
+                    "falling back to the reasoning channel."
+                )
+                content = reasoning
+        return content, getattr(response, "usage", None)
 
     def trace_run(self, **kwargs):
         return self.trace_store.run(**kwargs)
@@ -1433,7 +1451,7 @@ class LLMClient:
         """Distill an insight report into at most 3 atomic claims.
 
         Each claim must be an independently truth-evaluable statement
-        (not a topic label). Returns [{"claim": ..., "summary": ...}];
+        (not a topic label). Returns [{"claim": ..., "summary": ..., "applies_when": ...}];
         empty list on any failure (fail-open — the insight just waits).
         """
         system_prompt = (
@@ -1442,9 +1460,10 @@ class LLMClient:
             "- ONE declarative sentence that can be judged true or false on its own\n"
             "  (NOT a topic label like 'memory and learning').\n"
             "- In the same language as the report.\n"
-            "- Self-contained: no dangling pronouns or 'this/it' references.\n\n"
+            "- Self-contained: no dangling pronouns or 'this/it' references.\n"
+            "- 'Atomic' does not mean unconditional. Condition-based claims (e.g. 'Under X, A causes B') are better than vague absolutes.\n\n"
             "Return ONLY a JSON array:\n"
-            '[{"claim": "<one sentence>", "summary": "<one-line gist of the supporting argument>"}]\n'
+            '[{"claim": "<one sentence>", "summary": "<one-line gist>", "applies_when": "<specific context/condition this applies to>"}]\n'
             "No prose outside the JSON. Return [] if the report contains no real claim."
         )
         try:
@@ -1465,11 +1484,57 @@ class LLMClient:
                     out.append({
                         "claim": claim.strip(),
                         "summary": str(item.get("summary") or "").strip()[:200],
+                        "applies_when": str(item.get("applies_when") or "").strip(),
                     })
             return out[:3]
         except Exception as e:
             logging.warning(f"extract_claims failed: {e}")
             return []
+
+    def assess_falsifiability(self, claim: str) -> dict:
+        """Assess whether a claim is falsifiable (has empirical content).
+
+        Returns {"score": float 0-1, "falsifier": "<max 200 chars>"}.
+        Fail-open returns {"score": None, "falsifier": ""}.
+        """
+        system_prompt = (
+            "You are assessing the falsifiability (empirical content) of a claim.\n"
+            "A claim has empirical content if and only if you can describe a concrete observation that would prove it false.\n\n"
+            "First, try to write a 'falsifier' — a concrete, observable scenario that would refute the claim.\n"
+            "Then, score the claim from 0.0 to 1.0 based on how falsifiable it is:\n"
+            "- 1.0: The falsifier is a concrete, observable, specific scenario.\n"
+            "- 0.5: A falsifier exists but requires further operationalization to be tested.\n"
+            "- 0.0: The claim is unfalsifiable (e.g., vague absolute, tautology, value statement, or the falsifier is just 'when it is not true').\n\n"
+            "Return ONLY a JSON object:\n"
+            '{"score": <float 0.0, 0.5, or 1.0>, "falsifier": "<specific observation that refutes it, <=200 chars>"}'
+        )
+        fallback = {"score": None, "falsifier": ""}
+        # Transport retries live in _complete_text; this loop covers a
+        # different failure — reasoning models intermittently return empty
+        # or unparseable text without raising. One re-roll usually lands.
+        for attempt in range(2):
+            try:
+                raw = self._complete_text(
+                    system_prompt=system_prompt,
+                    user_msg=f"Claim: {claim}",
+                    temperature=0.1,
+                    max_tokens=None,  # reasoning models need thinking room
+                    trace_context={"stage": "assess_falsifiability", "metadata": {"attempt": attempt + 1}},
+                )
+                parsed = extract_json_object(raw)
+                if isinstance(parsed, dict):
+                    score = parsed.get("score")
+                    if isinstance(score, (int, float)) and not isinstance(score, bool):
+                        # Clamp: an out-of-range score must not leak into the
+                        # confidence formula (0.3 + 0.4*s) and blow past 1.0.
+                        return {
+                            "score": max(0.0, min(1.0, float(score))),
+                            "falsifier": str(parsed.get("falsifier") or "").strip()[:200],
+                        }
+                logging.warning(f"assess_falsifiability: unparseable output (attempt {attempt + 1})")
+            except Exception as e:
+                logging.warning(f"assess_falsifiability failed (attempt {attempt + 1}): {e}")
+        return fallback
 
     def adjudicate_claims(self, claim_a: str, claim_b: str) -> dict:
         """Closed-choice relation verdict between two atomic claims.
@@ -1500,7 +1565,7 @@ class LLMClient:
                 system_prompt=system_prompt,
                 user_msg=f"A: {claim_a}\n\nB: {claim_b}",
                 temperature=0.0,
-                max_tokens=300,
+                max_tokens=None,  # reasoning models need thinking room
                 trace_context={"stage": "adjudicate_claims", "metadata": {}},
             )
             parsed = extract_json_object(raw)
@@ -1540,7 +1605,7 @@ class LLMClient:
                 system_prompt=system_prompt,
                 user_msg=user_msg,
                 temperature=0.3,
-                max_tokens=100,
+                max_tokens=400,
                 trace_context={
                     "stage": "generate_bench_question",
                     "metadata": {"title": title},

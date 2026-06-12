@@ -45,6 +45,9 @@ class CortexPage:
     claim: str
     status: str = "active"
     confidence: float = 0.5
+    falsifiability: float | None = None
+    falsifier: str = ""
+    applies_when: str = ""
     S: int = 1
     last_reinforced_at: str = ""
     created: str = ""
@@ -105,6 +108,8 @@ def render_cortex_page(page: CortexPage) -> str:
         "claim_id": page.claim_id,
         "status": page.status,
         "confidence": round(float(page.confidence), 4),
+        "falsifiability": round(float(page.falsifiability), 4) if page.falsifiability is not None else None,
+        "falsifier": page.falsifier,
         "S": int(page.S),
         "last_reinforced_at": page.last_reinforced_at,
         "created": page.created,
@@ -126,11 +131,15 @@ def render_cortex_page(page: CortexPage) -> str:
     variants_lines = [f"- {v}" for v in page.variants] or [_EMPTY_PLACEHOLDER]
     counterpoints_lines = [f"- {c}" for c in page.counterpoints] or [_EMPTY_PLACEHOLDER]
 
+    core_claim_lines = [page.claim]
+    if page.applies_when:
+        core_claim_lines.append(f"> 適用情境：{page.applies_when}")
+
     body = "\n".join([
         f"# {page.claim[:60]}",
         "",
         CORE_CLAIM_HEADER,
-        page.claim,
+        *core_claim_lines,
         "",
         EVIDENCE_HEADER,
         *evidence_lines,
@@ -181,18 +190,37 @@ def parse_cortex_page(path: Path) -> CortexPage | None:
         return None
 
     sections = _section_map(text)
-    claim = sections.get(CORE_CLAIM_HEADER, "").strip()
-    if not claim:
+    claim_section = sections.get(CORE_CLAIM_HEADER, "").strip()
+    if not claim_section:
         logging.warning(f"CortexStore: {path.name} has no Core Claim section; skipping")
         return None
 
+    claim_text = ""
+    applies_when_text = ""
+    for line in claim_section.splitlines():
+        line_s = line.strip()
+        if not line_s:
+            continue
+        if line_s.startswith("> 適用情境："):
+            applies_when_text = line_s[len("> 適用情境："):].strip()
+        elif not claim_text and not line_s.startswith(">"):
+            claim_text = line_s
+
+    if not claim_text:
+        logging.warning(f"CortexStore: {path.name} has no valid claim in Core Claim section; skipping")
+        return None
+
     try:
+        f_val = meta.get("falsifiability")
         return CortexPage(
             claim_id=str(meta["claim_id"]),
             path=path,
-            claim=claim,
+            claim=claim_text,
             status=str(meta.get("status") or "active"),
             confidence=float(meta.get("confidence", 0.5)),
+            falsifiability=float(f_val) if f_val is not None else None,
+            falsifier=str(meta.get("falsifier") or ""),
+            applies_when=applies_when_text,
             S=int(meta.get("S", 1)),
             last_reinforced_at=_as_str(meta.get("last_reinforced_at")),
             created=_as_str(meta.get("created")),

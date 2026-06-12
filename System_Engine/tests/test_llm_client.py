@@ -4,6 +4,7 @@ We don't mock the actual provider here — we only exercise the pure helpers
 (YAML parsing, file caching, digest formatting, fallbacks) that run alongside
 the LLM call but don't require one.
 """
+import json
 import os
 import sys
 import tempfile
@@ -362,6 +363,45 @@ class TestLLMTrace:
         assert call["total_tokens"] == 8
         assert call["status"] == "succeeded"
         assert run["status"] == "succeeded"
+
+
+class TestAssessFalsifiability:
+    def _client(self, monkeypatch, response):
+        client = LLMClient.__new__(LLMClient)
+        monkeypatch.setattr(client, "_complete_text", lambda *a, **k: response)
+        return client
+
+    def test_parses_valid_json(self, monkeypatch):
+        response = '```json\n{"score": 0.8, "falsifier": "find X"}\n```'
+        res = self._client(monkeypatch, response).assess_falsifiability("claim")
+        assert res["score"] == 0.8
+        assert res["falsifier"] == "find X"
+
+    def test_handles_missing_keys(self, monkeypatch):
+        res = self._client(monkeypatch, '{}').assess_falsifiability("claim")
+        assert res["score"] is None
+        assert res["falsifier"] == ""
+
+    def test_handles_invalid_json(self, monkeypatch):
+        res = self._client(monkeypatch, 'garbage').assess_falsifiability("claim")
+        assert res["score"] is None
+        assert res["falsifier"] == ""
+
+
+class TestExtractClaimsAppliesWhen:
+    def _client(self, monkeypatch, response):
+        client = LLMClient.__new__(LLMClient)
+        monkeypatch.setattr(client, "_complete_text", lambda *a, **k: response)
+        return client
+
+    def test_parses_applies_when(self, monkeypatch):
+        response = json.dumps([{
+            "claim": "This claim is definitely long enough to pass.",
+            "summary": "s",
+            "applies_when": "condition A"
+        }])
+        res = self._client(monkeypatch, response).extract_claims("text")
+        assert res[0]["applies_when"] == "condition A"
 
 
 if __name__ == "__main__":

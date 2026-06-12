@@ -33,6 +33,7 @@ from core.config import (
     INSIGHTS_DIR,
 )
 from core.parser import parse_markdown_metadata
+from maintenance.cortex_consolidation import _is_candidate
 from services.cortex_store import load_all_pages, parse_cortex_page
 
 
@@ -150,7 +151,7 @@ def run_validation(
         # don't create pages, so survival uses created-claims when known.
         stats["survival_pages"] = len(pages)
 
-    grounded, refute_survived, refute_total = [], 0, 0
+    grounded, refute_survived, refute_total, insights_with_signals = [], 0, 0, 0
     if insights_dir.exists():
         for path in insights_dir.glob("*.md"):
             try:
@@ -160,22 +161,37 @@ def run_validation(
             signals = meta.get("signals")
             if not isinstance(signals, dict):
                 continue
-            g = signals.get("groundedness")
-            if g is not None:
+            
+            insights_with_signals += 1
+            g_val = None
+            g_raw = signals.get("groundedness")
+            if g_raw is not None:
                 try:
-                    grounded.append(float(g))
+                    g_val = float(g_raw)
                 except (TypeError, ValueError):
                     pass
+
             verdict = signals.get("refute_verdict")
             if verdict in ("survived", "refuted"):
                 refute_total += 1
                 refute_survived += verdict == "survived"
+
+            # Broken-link rate is scoped to GATE-PASSING insights only —
+            # planner docs the gate quarantines are supposed to have dead
+            # links; counting them manufactured a fake 90% yellow flag.
+            # Single source of truth: the consolidation gate itself.
+            if _is_candidate(meta) and g_val is not None:
+                grounded.append(g_val)
     if grounded:
         broken_rate = sum(1 for g in grounded if g < 0.8) / len(grounded)
         stats["groundedness_mean"] = round(sum(grounded) / len(grounded), 3)
         stats["broken_link_insight_rate"] = round(broken_rate, 3)
         if broken_rate > 0.2:
             yellow.append(f"斷鏈 insight 比例 {broken_rate:.0%} > 20%")
+            
+    if insights_with_signals > 0:
+        stats["refute_coverage"] = round(refute_total / insights_with_signals, 3)
+        
     if refute_total:
         survival = refute_survived / refute_total
         stats["refute_survival_rate"] = round(survival, 3)
@@ -183,6 +199,16 @@ def run_validation(
             yellow.append(f"Refute 存活率 {survival:.0%}——反駁者可能太鬆")
         elif survival < 0.3:
             yellow.append(f"Refute 存活率 {survival:.0%}——insight 生成品質堪憂")
+            
+    # Falsifiability distribution
+    falsifiability_scores = [p.falsifiability for p in pages if p.falsifiability is not None]
+    if falsifiability_scores:
+        f_mean = sum(falsifiability_scores) / len(falsifiability_scores)
+        f_low = sum(1 for f in falsifiability_scores if f < 0.3) / len(falsifiability_scores)
+        stats["falsifiability_mean"] = round(f_mean, 3)
+        stats["falsifiability_lt_0.3_rate"] = round(f_low, 3)
+        if f_mean < 0.4:
+            yellow.append(f"Falsifiability mean {f_mean:.3f} < 0.4 —— 主張普遍難以反駁（太模糊）")
 
     # ── Tier 3: cortex retrieval hits ────────────────────────────────
     try:
@@ -232,6 +258,8 @@ def _write_report(report_dir: Path, report: ValidationReport, pages) -> Path | N
                 marks.append(f"矛盾×{len(page.contradictions)}")
             suffix = f"（{'、'.join(marks)}）" if marks else ""
             lines.append(f"- [[{page.path.stem}]] — {page.claim}{suffix}")
+            if page.falsifier:
+                lines.append(f"    - 證偽：{page.falsifier}")
             for v in page.variants:
                 lines.append(f"    - 變體：{v}")
         lines.append("")

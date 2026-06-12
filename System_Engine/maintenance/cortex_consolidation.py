@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +40,8 @@ from core.config import (
     FROM_LLM_DIR,
     INSIGHTS_DIR,
     MAINTENANCE_LOG_FILE,
+    PAGES_DIR,
+    NOTES_DIR,
 )
 from core.parser import parse_markdown_metadata, strip_body_frontmatter
 from services.cortex_store import (
@@ -58,6 +61,7 @@ _CONTRADICTION_DENT = 0.2
 _CONFIDENCE_FLOOR = 0.1
 # Insight frontmatter keys that may carry the source titles (fail-open).
 _SOURCE_KEYS = ("related_docs", "related_titles", "target_titles", "sources")
+_WIKILINK_RE = re.compile(r'\[\[(.*?)\]\]')
 
 
 @dataclass
@@ -224,11 +228,34 @@ class _Consolidator:
         self._index_page(page)
         self.merged += 1
 
+    def _assess_falsifiability(self, claim: str) -> tuple[float | None, str]:
+        """Guarded fifth-signal call. Fail-open: any failure, missing
+        method (mock LLMs), or non-numeric score → (None, "") so the
+        claim enters unmeasured at confidence 0.5 — never crashes the
+        rest of the insight's claims."""
+        if not hasattr(self.llm, "assess_falsifiability"):
+            return None, ""
+        try:
+            result = self.llm.assess_falsifiability(claim)
+            if not isinstance(result, dict):
+                return None, ""
+            score = result.get("score")
+            if isinstance(score, bool) or not isinstance(score, (int, float)):
+                return None, ""
+            falsifier = result.get("falsifier")
+            return (
+                max(0.0, min(1.0, float(score))),
+                falsifier.strip()[:200] if isinstance(falsifier, str) else "",
+            )
+        except Exception as e:
+            logging.warning(f"Cortex: falsifiability assessment failed: {e}")
+            return None, ""
+
     def _dent_confidence(self, page: CortexPage) -> None:
         page.confidence = round(max(_CONFIDENCE_FLOOR, page.confidence - _CONTRADICTION_DENT), 4)
         page.updated = _now()
 
-    def process_claim(self, claim: str, summary: str, insight_name: str, sources: list[str]) -> None:
+    def process_claim(self, claim: str, summary: str, insight_name: str, sources: list[str], applies_when: str = "") -> None:
         evidence = {
             "insight": insight_name,
             "sources": sources,
@@ -274,14 +301,22 @@ class _Consolidator:
 
         # No equivalent found → a new claim enters the cortex.
         now = _now()
-        confidence = 0.5
+        score, falsifier = self._assess_falsifiability(claim)
+        # Unfalsifiable claims enter at low confidence rather than being
+        # rejected (record-don't-execute philosophy); unmeasured → 0.5.
+        confidence = 0.5 if score is None else 0.3 + 0.4 * score
+
         if contradictions:
             confidence = max(_CONFIDENCE_FLOOR, confidence - _CONTRADICTION_DENT * len(contradictions))
+
         page = CortexPage(
             claim_id=claim_id,
             path=claim_filename(claim, claim_id, self.cortex_dir),
             claim=claim,
             confidence=round(confidence, 4),
+            falsifiability=score,
+            falsifier=falsifier,
+            applies_when=applies_when,
             S=1,
             last_reinforced_at=now,
             created=now,
@@ -349,12 +384,32 @@ def _is_candidate(meta: dict) -> bool:
     return True
 
 
-def _insight_sources(meta: dict) -> list[str]:
+def _insight_sources(meta: dict, body: str, pages_dir: Path, notes_dir: Path) -> list[str]:
+    sources = []
     for key in _SOURCE_KEYS:
         value = meta.get(key)
         if isinstance(value, list) and value:
-            return [str(v) for v in value]
-    return []
+            sources.extend([str(v) for v in value])
+            break
+
+    # Wikilink penetration
+    for match in _WIKILINK_RE.finditer(body):
+        link = match.group(1).split('|')[0].split('#')[0].strip()
+        if not link or link in sources:
+            continue
+        if (pages_dir / f"{link}.md").exists() or (notes_dir / f"{link}.md").exists():
+            sources.append(link)
+    
+    # Deduplicate while preserving order, max 5
+    seen = set()
+    out = []
+    for s in sources:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+            if len(out) == 5:
+                break
+    return out
 
 
 # ── Entry point ───────────────────────────────────────────────────────
@@ -427,12 +482,13 @@ def run_consolidation(
         try:
             body, _ = strip_body_frontmatter(path.read_text(encoding="utf-8"))
             claims = llm.extract_claims(body[:_INSIGHT_TEXT_CAP])
-            sources = _insight_sources(meta)
+            sources = _insight_sources(meta, body, PAGES_DIR, NOTES_DIR)
             for item in claims if isinstance(claims, list) else []:
                 if not isinstance(item, dict) or not isinstance(item.get("claim"), str):
                     continue
                 worker.process_claim(
-                    item["claim"], str(item.get("summary") or ""), path.name, sources
+                    item["claim"], str(item.get("summary") or ""), path.name, sources,
+                    str(item.get("applies_when") or "")
                 )
                 claim_count += 1
         except Exception:
