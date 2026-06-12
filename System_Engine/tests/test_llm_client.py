@@ -377,6 +377,17 @@ class TestAssessFalsifiability:
         assert res["score"] == 0.8
         assert res["falsifier"] == "find X"
 
+    def test_bilingual_falsifier_combined(self, monkeypatch):
+        response = ('{"score": 1.0, "falsifier": "A documented counter-case.", '
+                    '"falsifier_zh": "一個有紀錄的反例。"}')
+        res = self._client(monkeypatch, response).assess_falsifiability("claim")
+        assert res["falsifier"] == "A documented counter-case.（一個有紀錄的反例。）"
+
+    def test_missing_zh_keeps_english_only(self, monkeypatch):
+        response = '{"score": 0.5, "falsifier": "English only."}'
+        res = self._client(monkeypatch, response).assess_falsifiability("claim")
+        assert res["falsifier"] == "English only."
+
     def test_handles_missing_keys(self, monkeypatch):
         res = self._client(monkeypatch, '{}').assess_falsifiability("claim")
         assert res["score"] is None

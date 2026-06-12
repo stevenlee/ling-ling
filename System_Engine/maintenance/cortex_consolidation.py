@@ -253,7 +253,7 @@ class _Consolidator:
             falsifier = result.get("falsifier")
             return (
                 max(0.0, min(1.0, float(score))),
-                falsifier.strip()[:200] if isinstance(falsifier, str) else "",
+                falsifier.strip()[:420] if isinstance(falsifier, str) else "",
             )
         except Exception as e:
             logging.warning(f"Cortex: falsifiability assessment failed: {e}")

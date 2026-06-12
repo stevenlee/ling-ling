@@ -145,6 +145,27 @@ def _signed_insight(insights_dir, name, *, groundedness, refute="survived"):
     )
 
 
+class TestReportScores:
+    def test_report_shows_scores_under_each_claim(self, tmp_path):
+        cortex = tmp_path / "Cortex"
+        claim = "Scored claim with falsifier."
+        page = CortexPage(
+            claim_id=make_claim_id(claim), path=cortex / "c.md", claim=claim,
+            falsifiability=0.5, falsifier="EN text（中文輔助）", confidence=0.5,
+            last_reinforced_at="2026-06-12T03:00:00",
+            created="2026-06-12T03:00:00", updated="2026-06-12T03:00:00",
+        )
+        save_cortex_page(page)
+        report = run_validation(
+            FakeRAG(facet_titles=[page.claim_id]), cortex_dir=cortex,
+            insights_dir=tmp_path / "Insights", state_file=tmp_path / "s.json",
+            bench_history=tmp_path / "b.json", report_dir=tmp_path / "out",
+        )
+        text = report.report_path.read_text(encoding="utf-8")
+        assert "證偽：EN text（中文輔助）" in text
+        assert "falsifiability: 0.5 ｜ confidence: 0.5" in text
+
+
 class TestGaugeFixes:
     def _run(self, tmp_path, rag=None):
         return run_validation(

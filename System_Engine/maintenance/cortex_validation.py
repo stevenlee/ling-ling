@@ -286,6 +286,11 @@ def _write_report(report_dir: Path, report: ValidationReport, pages) -> Path | N
             lines.append(f"- [[{page.path.stem}]] — {page.claim}{suffix}")
             if page.falsifier:
                 lines.append(f"    - 證偽：{page.falsifier}")
+            f_score = "未測" if page.falsifiability is None else f"{page.falsifiability}"
+            lines.append(
+                f"    - 📊 falsifiability: {f_score} ｜ confidence: {page.confidence}"
+                f" ｜ S: {page.S} ｜ {page.status}"
+            )
             for v in page.variants:
                 lines.append(f"    - 變體：{v}")
         lines.append("")

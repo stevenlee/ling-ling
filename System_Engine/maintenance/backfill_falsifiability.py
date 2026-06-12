@@ -27,13 +27,17 @@ class FalsifiabilityBackfillResult:
     failed: list[str] = field(default_factory=list)
 
 
-def backfill_falsifiability(llm, *, cortex_dir: Path = None) -> FalsifiabilityBackfillResult:
+def backfill_falsifiability(
+    llm, *, cortex_dir: Path = None, force: bool = False
+) -> FalsifiabilityBackfillResult:
+    """force=True re-assesses pages that already have a score (used when
+    the falsifier format changes, e.g. the bilingual upgrade)."""
     cortex_dir = cortex_dir or CORTEX_DIR
     result = FalsifiabilityBackfillResult()
 
     for page in load_all_pages(cortex_dir):
         result.scanned += 1
-        if page.falsifiability is not None:
+        if page.falsifiability is not None and not force:
             result.skipped += 1
             continue
         try:
@@ -44,7 +48,7 @@ def backfill_falsifiability(llm, *, cortex_dir: Path = None) -> FalsifiabilityBa
                 continue
             page.falsifiability = max(0.0, min(1.0, float(score)))
             falsifier = assessment.get("falsifier")
-            page.falsifier = falsifier.strip()[:200] if isinstance(falsifier, str) else ""
+            page.falsifier = falsifier.strip()[:420] if isinstance(falsifier, str) else ""
             # Measurement only — confidence, S, and timestamps stay untouched.
             save_cortex_page(page)
             result.backfilled += 1
@@ -58,10 +62,11 @@ def backfill_falsifiability(llm, *, cortex_dir: Path = None) -> FalsifiabilityBa
 
 
 def main():
+    import sys
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     from services.llm_client import LLMClient
 
-    result = backfill_falsifiability(LLMClient())
+    result = backfill_falsifiability(LLMClient(), force="--force" in sys.argv)
     print(
         f"scanned={result.scanned} backfilled={result.backfilled} "
         f"skipped={result.skipped} failed={len(result.failed)}"

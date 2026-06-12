@@ -1506,7 +1506,8 @@ class LLMClient:
             "- 0.5: A falsifier exists but requires further operationalization to be tested.\n"
             "- 0.0: The claim is unfalsifiable (e.g., vague absolute, tautology, value statement, or the falsifier is just 'when it is not true').\n\n"
             "Return ONLY a JSON object:\n"
-            '{"score": <float 0.0, 0.5, or 1.0>, "falsifier": "<specific observation that refutes it, <=200 chars>"}'
+            '{"score": <float 0.0, 0.5, or 1.0>, "falsifier": "<specific observation that refutes it, <=200 chars>", '
+            '"falsifier_zh": "<the same falsifier translated into Traditional Chinese (繁體中文), <=200 chars>"}'
         )
         fallback = {"score": None, "falsifier": ""}
         # Transport retries live in _complete_text; this loop covers a
@@ -1525,11 +1526,17 @@ class LLMClient:
                 if isinstance(parsed, dict):
                     score = parsed.get("score")
                     if isinstance(score, (int, float)) and not isinstance(score, bool):
+                        falsifier = str(parsed.get("falsifier") or "").strip()[:200]
+                        # 英文為主、中文輔助：append the zh gloss when present
+                        # so the report stays readable for the user.
+                        zh = str(parsed.get("falsifier_zh") or "").strip()[:200]
+                        if zh and zh != falsifier:
+                            falsifier = f"{falsifier}（{zh}）"
                         # Clamp: an out-of-range score must not leak into the
                         # confidence formula (0.3 + 0.4*s) and blow past 1.0.
                         return {
                             "score": max(0.0, min(1.0, float(score))),
-                            "falsifier": str(parsed.get("falsifier") or "").strip()[:200],
+                            "falsifier": falsifier,
                         }
                 logging.warning(f"assess_falsifiability: unparseable output (attempt {attempt + 1})")
             except Exception as e:
