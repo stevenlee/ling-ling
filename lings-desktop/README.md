@@ -116,6 +116,7 @@ Confidence: medium
 - `@ling-plan`：規劃多步工作流（Pipeline），產出腳本與預覽報告，不立即執行。
 - `@ling-do`：執行 `@ling-plan` 產出的工作流腳本。
 - `@ling-profiles`：管理文件路由 Profiles。`pending` 看待審草稿、`approve <名稱>` 一鍵生效。
+- `@ling-cortex`：對 Cortex 長期記憶層跑三層驗證（紅線/品質/檢索效益），報告含狀態分佈、矛盾對與人工抽查清單。
 - `@ling-zip` / `@ling-unzip`：備份與還原知識庫。
 - `@ling-RESET`：清除內容前會先強制備份。
 

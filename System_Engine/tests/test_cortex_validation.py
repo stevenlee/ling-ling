@@ -253,3 +253,36 @@ class TestFalsifiabilityBackfill:
 
         result = backfill_falsifiability(CrashLLM(), cortex_dir=cortex)
         assert result.backfilled == 0 and len(result.failed) == 1
+
+
+class TestCortexAgent:
+    def test_agent_triggers_validation_and_reports_verdict(self, tmp_path, monkeypatch):
+        from agents.cortex_agent import CortexAgent
+        import agents.cortex_agent as agent_mod
+
+        class FakeReport:
+            verdict = "GREEN"
+            red_flags = []
+            yellow_flags = []
+            report_path = tmp_path / "[report] cortex validation x.md"
+
+        calls = []
+        monkeypatch.setattr(agent_mod, "run_validation", lambda rag: calls.append(rag) or FakeReport())
+
+        agent = CortexAgent.__new__(CortexAgent)
+        agent.llm = None
+        agent.rag = "the-rag"
+        agent.stats = {"input_chars": 0, "output_chars": 0}
+
+        message = agent.execute({})
+
+        assert calls == ["the-rag"]
+        assert "GREEN" in message and "cortex validation" in message
+
+    def test_route_registered(self):
+        from watchers.prompt_watcher import INTENT_ROUTES
+        from agents.registry import AgentRegistry
+        from unittest.mock import MagicMock
+        assert any(key == "cortex" for _, _, key in INTENT_ROUTES)
+        registry = AgentRegistry(MagicMock(), MagicMock())
+        assert registry.get_agent("cortex") is not None
