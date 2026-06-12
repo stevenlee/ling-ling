@@ -135,6 +135,18 @@ Not on the critical path. Worth noting so they aren't forgotten.
 
 A3 + A4 are orthogonal — slot them in opportunistically.
 
+## Remaining work（2026-06-12 batch-3 收斂後的全量清單）
+
+主線 Phase 1–6 與停車場 D1–D3 全部落地（batch-1/2/3）。剩下：
+
+| # | 項目 | 大小 | 條件 / 時點 |
+|---|---|---|---|
+| R1 | **Falsifiability 假設驗證**：doc-anchored seeds 是否產出更可反駁的主張（兩組分佈比較 + 黃線比例 + 0612 前 baseline） | S | ✅ 已排程 2026-06-26 09:00 一次性 scheduled task（純唯讀統計，報告進 scratch/） |
+| R2 | **Planner learning loop**（停車場 D4）：把 quality_verdict traces 餵回 planner prompt 自我調校 | M | verdict 數據現在從三個來源累積（synthesis critique、lens quote verification、planner pipelines）；等量夠了再立案——建議 R1 跑完一併看數據量 |
+| R3 | **Lens tally 路徑補 retry**：`_tally_instances` 的 LLM 去重路徑（>3 實例）沒有 extraction 那層「無 array 重試一次」防禦，同樣暴露在 gemma reasoning-channel 間歇失敗下 | S | 隨手可做 |
+| R4 | **Reasoning-channel 強健性盤點**：全面盤點 `_complete_text` 的 JSON 端呼叫（extract_claims、adjudicate_claims、generate_part_digest、translate_tags…）哪些缺「解析失敗重試」，統一防禦模式 | M | batch-3 證實此失敗模式發生率不低（單日 live 三發中兩發）；建議下一批 |
+| R5 | **LENS_QUOTE_MIN_GROUNDED_RATIO 調參**：0.8 是拍腦袋預設；翻譯文章的引文錨定率天然偏低 | S | 等 lens verdict 數據累積幾週後用實際分佈校準 |
+
 ## Resolved decisions
 
 1. **4.5 demo pipeline**: synthesize → critique, **fixture/dry-run only**. Must not touch `IngestionPipeline._write_synthesis` or any production private method. All capability invocations go through named adapters in a registry, not through string-matching against existing code paths.
