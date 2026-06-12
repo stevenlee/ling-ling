@@ -37,6 +37,11 @@ SYNTHESIS_CRITIQUE_ENABLED      = os.getenv("SYNTHESIS_CRITIQUE_ENABLED", "true"
 # the findings as feedback) up to this many times. Worst case adds one
 # synthesis + one critique call per retry. 0 disables the retry loop.
 SYNTHESIS_CRITIQUE_MAX_RETRIES  = max(0, int(os.getenv("SYNTHESIS_CRITIQUE_MAX_RETRIES", "1")))
+# LingLens quote verification: a report whose deterministically grounded
+# quote ratio falls below this gets quality_verdict "revise" instead of
+# "keep". Grounding is exact/near-exact substring match — translated or
+# heavily paraphrased quotes legitimately miss, hence the lenient default.
+LENS_QUOTE_MIN_GROUNDED_RATIO   = float(os.getenv("LENS_QUOTE_MIN_GROUNDED_RATIO", "0.8"))
 RAG_EXPLAIN_ENABLED             = os.getenv("RAG_EXPLAIN_ENABLED", "false").lower() == "true"
 MAINTENANCE_SCHEDULER_ENABLED   = os.getenv("MAINTENANCE_SCHEDULER_ENABLED", "true").lower() == "true"
 MAINTENANCE_POLL_SECONDS        = int(os.getenv("MAINTENANCE_POLL_SECONDS", "300"))

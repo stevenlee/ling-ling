@@ -258,6 +258,10 @@ lings-desktop/
 - `rank_bm25` 已加入 `requirements.txt`（純 Python，~10KB）。
 - `sentence-transformers` 列為選用依賴；只在需要 reranker 時手動 `pip install`。
 
+### 2026-06-12 backlog batch-3：Lens 引文驗證
+
+- **LingLens Quote Verification**: `_ground_tally_locations` 原本就會嘗試把每條引文定位回原文，但「定位失敗」這個負訊號被默默吞掉。現在報告尾端新增 `## 🔍 Quote Verification` 節：統計錨定比例、列出無法定位的引文（可能是改寫、翻譯或虛構，提示人工抽查）；metadata 寫入 `quotes_grounded`/`quotes_total` 與 `quality_verdict`（比例低於 `LENS_QUOTE_MIN_GROUNDED_RATIO`，預設 0.8 → `revise`），與 synthesis critique 共用同一套 verdict 詞彙，artifact 層可跨報告型態比較。停車場 D2 的 Insight 半邊由 Phase 2.5/3 的 groundedness/refute 訊號涵蓋，不另做。
+
 ### 2026-06-12 backlog batch-2
 
 - **T1: Critique retry loop**: synthesis 的 critique postcheck 由「只記錄」升級為「行動」——verdict 為 revise/reject 時，帶著 critique 全文重生 synthesis（`SYNTHESIS_CRITIQUE_MAX_RETRIES` 控制，預設 1），重試結果 verdict 嚴格較好才採用。metadata 新增 `critique_attempts` 與（重試發生時）`quality_verdict_history`；`critique_feedback=None` 路徑的 prompt 與舊行為 byte-identical。

@@ -112,10 +112,11 @@ later if real workloads demand it.
 
 Not on the critical path. Worth noting so they aren't forgotten.
 
-- **Critique retry loop**: regenerate when verdict < threshold (postcheck exists; retry doesn't).
-- **Critique applied to Insight / Lens reports**, not just Synthesis.
-- **New Operations**: Compare, Classify, Outline, Explain — CapabilityManager picks them up automatically.
-- **Planner learning loop**: feed `quality_verdict` traces back to planner prompt for self-tuning. Phase 6+ territory.
+- ~~**Critique retry loop**: regenerate when verdict < threshold~~ ✅ batch-2 — `SYNTHESIS_CRITIQUE_MAX_RETRIES`, adopt on strictly-better verdict only.
+- ~~**Critique applied to Insight / Lens reports**~~ ✅ — Insight half superseded by Phase 2.5/3 groundedness + refute signals; Lens half landed as deterministic quote verification (`quality_verdict` keep/revise by grounded-quote ratio, batch-3).
+- ~~**New Operations**: Compare, Classify, Outline, Explain~~ ✅ batch-2 — four templates, registry auto-pickup.
+- **Planner learning loop**: feed `quality_verdict` traces back to planner prompt for self-tuning. Phase 6+ territory. Verdict data now accumulates from three report types (synthesis, lens, planner pipelines) — revisit once there is enough volume to mean something.
+- **Falsifiability hypothesis check** (from CortexMemory_phase2_5_brief §6): validate "doc-anchored seeds produce more falsifiable claims" with data. Gen-mix landed 2026-06-12; ripe ~2026-06-26 with two weeks of nightly data.
 
 ## Execution order
 
