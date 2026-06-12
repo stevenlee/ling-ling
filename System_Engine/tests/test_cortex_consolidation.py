@@ -175,7 +175,11 @@ class TestActions:
         assert len(pages) == 1
         page = pages[0]
         assert len(page.evidence) == 2
-        assert page.S == first.S + 1
+        # Phase 3 spacing rule: a same-night rediscovery happens at R≈1, so
+        # ΔS = gain×(1−R) ≈ 0 — duplicates no longer inflate S. The
+        # reinforcement still resets last_reinforced_at.
+        assert first.S <= page.S < first.S + 0.01
+        assert page.last_reinforced_at >= first.last_reinforced_at
         assert page.confidence == 0.6
         assert "NEARALPHA: every retrieval re-encodes the trace." in page.variants
 
@@ -196,7 +200,8 @@ class TestActions:
         page = load_all_pages(env["cortex_dir"])[0]
         assert page.confidence == 0.9          # capped
         assert len(page.variants) == 3         # capped, oldest dropped
-        assert page.S == 8
+        # Spacing rule: seven same-night merges barely move S (R≈1 each time).
+        assert 1.0 <= page.S < 1.1
 
     def test_contradicts_links_and_dents_both(self, tmp_path):
         env = _env(tmp_path)

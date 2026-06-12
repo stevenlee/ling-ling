@@ -95,6 +95,19 @@ CORTEX_NEIGHBOR_TOP_K               = int(os.getenv("CORTEX_NEIGHBOR_TOP_K", "3"
 CORTEX_NEIGHBOR_SIM_THRESHOLD       = float(os.getenv("CORTEX_NEIGHBOR_SIM_THRESHOLD", "0.80"))
 CORTEX_MAX_VARIANTS                 = int(os.getenv("CORTEX_MAX_VARIANTS", "5"))
 
+# ─── Cortex Memory Phase 3 (decay: dual-strength S/R model) ───────────
+# Storage strength S only grows (spacing effect: gains shrink when R is
+# still high); retrievability R is a pure function computed at read time.
+# States derive from R with hysteresis. base/growth here are INITIAL
+# values — the live params live in CORTEX_DECAY_STATE_FILE and get
+# damped-calibrated against the revival rate.
+CORTEX_DECAY_ENABLED            = os.getenv("CORTEX_DECAY_ENABLED", "true").lower() == "true"
+CORTEX_DECAY_BASE_DAYS          = float(os.getenv("CORTEX_DECAY_BASE_DAYS", "21"))
+CORTEX_DECAY_GROWTH             = float(os.getenv("CORTEX_DECAY_GROWTH", "1.8"))
+CORTEX_REVALIDATIONS_PER_NIGHT  = int(os.getenv("CORTEX_REVALIDATIONS_PER_NIGHT", "3"))
+CORTEX_REVIVAL_TARGET_LOW       = float(os.getenv("CORTEX_REVIVAL_TARGET_LOW", "0.05"))
+CORTEX_REVIVAL_TARGET_HIGH      = float(os.getenv("CORTEX_REVIVAL_TARGET_HIGH", "0.10"))
+
 # ─── Insight generation mix (backlog: doc-anchored seeds) ─────────────
 # Nightly insights target concrete documents chosen by interest-weighted
 # sampling with an exploration share — doc-anchored material produces
@@ -151,6 +164,7 @@ FACET_BACKFILL_STATE_FILE = DATABASE_DIR / "facet_backfill_state.json"
 CORTEX_STATE_FILE = DATABASE_DIR / "cortex_state.json"
 CORTEX_ADJUDICATION_CACHE = DATABASE_DIR / "cortex_adjudications.json"
 SEED_HISTORY_FILE = DATABASE_DIR / "seed_history.json"
+CORTEX_DECAY_STATE_FILE = DATABASE_DIR / "cortex_decay_state.json"
 BENCH_AUTO_MAX_CASES = int(os.getenv("BENCH_AUTO_MAX_CASES", "30"))
 BENCH_AUTO_PER_RUN = int(os.getenv("BENCH_AUTO_PER_RUN", "5"))
 RAW_DIR = WIKI_VAULT_DIR / "raw"

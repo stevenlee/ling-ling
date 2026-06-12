@@ -951,6 +951,13 @@ class RAGManager:
         except Exception as e:
             logging.error(f"Failed to add facets for '{title}': {e}")
 
+    @retry_on_db_lock()
+    def remove_facets(self, filepath: Path) -> None:
+        """Public facet removal for one document (dormant Cortex pages
+        leave the facet index but keep their chunks and their file)."""
+        self._delete_facets(self._get_doc_id(filepath))
+        self._bm25.mark_dirty()
+
     def _delete_facets(self, doc_id: str) -> None:
         """Remove existing facet entries for one doc (python-side filter —
         legacy chunks have no `role` key, and Chroma's $ne semantics on

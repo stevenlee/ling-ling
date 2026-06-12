@@ -77,6 +77,10 @@ def run_validation(
         else:
             pages.append(page)
     stats["pages_total"] = len(pages)
+    status_counts: dict[str, int] = {}
+    for page in pages:
+        status_counts[page.status] = status_counts.get(page.status, 0) + 1
+    stats["status_counts"] = status_counts
 
     seen_ids: dict[str, str] = {}
     for page in pages:

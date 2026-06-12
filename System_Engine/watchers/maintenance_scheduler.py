@@ -135,6 +135,14 @@ class MaintenanceScheduler(threading.Thread):
             result = run_consolidation(self.llm, self.rag)
             return MaintenanceResult(result.status, result.message)
 
+        def cortex_decay() -> MaintenanceResult:
+            from core.config import CORTEX_DECAY_ENABLED
+            if not CORTEX_DECAY_ENABLED:
+                return MaintenanceResult("skipped", "Cortex decay disabled.")
+            from maintenance.cortex_decay_pass import run_decay_pass
+            result = run_decay_pass(self.llm, self.rag)
+            return MaintenanceResult(result.status, result.message)
+
         def rag_orphan_sweep() -> MaintenanceResult:
             result = self.rag.prune_orphan_chunks()
             if result["deleted_chunks"]:
@@ -207,6 +215,16 @@ class MaintenanceScheduler(threading.Thread):
                 window_end_hour=settings.DREAMING_TO,
                 intent="maintenance.cortex_consolidation",
                 agent="CortexConsolidation",
+            ),
+            MaintenanceTask(
+                name="cortex_decay_daily",
+                action=cortex_decay,
+                daily=True,
+                idle_required=True,
+                window_start_hour=settings.DREAMING_FROM,
+                window_end_hour=settings.DREAMING_TO,
+                intent="maintenance.cortex_decay",
+                agent="CortexDecay",
             ),
             MaintenanceTask(
                 name="bench_builder_weekly",
