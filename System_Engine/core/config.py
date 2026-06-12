@@ -116,6 +116,7 @@ CORTEX_REVIVAL_TARGET_HIGH      = float(os.getenv("CORTEX_REVIVAL_TARGET_HIGH", 
 # splitting merged pages, equivalent verdicts demote to links.
 CORTEX_LEDGER_ENABLED           = os.getenv("CORTEX_LEDGER_ENABLED", "true").lower() == "true"
 CORTEX_FALSIFY_PER_NIGHT        = int(os.getenv("CORTEX_FALSIFY_PER_NIGHT", "2"))
+CORTEX_FALSIFY_SAMPLES          = max(1, int(os.getenv("CORTEX_FALSIFY_SAMPLES", "3")))
 CORTEX_UNMERGE_STRICT_AT        = float(os.getenv("CORTEX_UNMERGE_STRICT_AT", "0.10"))
 CORTEX_UNMERGE_RELAX_AT         = float(os.getenv("CORTEX_UNMERGE_RELAX_AT", "0.05"))
 CORTEX_UNMERGE_MIN_SAMPLES      = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))

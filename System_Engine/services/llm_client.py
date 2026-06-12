@@ -1206,7 +1206,7 @@ class LLMClient:
                 system_prompt=system_prompt,
                 user_msg=user_msg,
                 temperature=0.0,
-                max_tokens=200,
+                max_tokens=None,
                 trace_context={
                     "stage": "score_text_quality",
                     "metadata": {"prompt_version": prompt_version},
@@ -1273,7 +1273,7 @@ class LLMClient:
                 system_prompt=system_prompt,
                 user_msg=user_msg,
                 temperature=0.0,
-                max_tokens=200,
+                max_tokens=None,
                 trace_context={
                     "stage": "find_topic_shifts",
                     "metadata": {
@@ -1321,7 +1321,7 @@ class LLMClient:
                 system_prompt=system_prompt,
                 user_msg=text,
                 temperature=0.0,
-                max_tokens=200,
+                max_tokens=None,
                 trace_context={
                     "stage": "summarize_for_context",
                     "metadata": {"prompt_version": prompt_version, "max_chars": max_chars},
@@ -1388,7 +1388,7 @@ class LLMClient:
                 system_prompt=system_prompt,
                 user_msg=user_msg,
                 temperature=0.0,
-                max_tokens=20,
+                max_tokens=None,
                 trace_context={
                     "stage": "classify_document",
                     "metadata": {"filename": filename},
@@ -1429,7 +1429,7 @@ class LLMClient:
                 system_prompt=system_prompt,
                 user_msg=user_msg,
                 temperature=0.0,
-                max_tokens=20,
+                max_tokens=None,
                 trace_context={
                     "stage": "select_profile",
                     "metadata": {"filename": filename, "options": sorted(valid_names)},
@@ -1491,12 +1491,7 @@ class LLMClient:
             logging.warning(f"extract_claims failed: {e}")
             return []
 
-    def assess_falsifiability(self, claim: str) -> dict:
-        """Assess whether a claim is falsifiable (has empirical content).
-
-        Returns {"score": float 0-1, "falsifier": "<max 200 chars>"}.
-        Fail-open returns {"score": None, "falsifier": ""}.
-        """
+    def _assess_falsifiability_once(self, claim: str) -> dict:
         system_prompt = (
             "You are assessing the falsifiability (empirical content) of a claim.\n"
             "A claim has empirical content if and only if you can describe a concrete observation that would prove it false.\n\n"
@@ -1542,6 +1537,38 @@ class LLMClient:
             except Exception as e:
                 logging.warning(f"assess_falsifiability failed (attempt {attempt + 1}): {e}")
         return fallback
+
+    def assess_falsifiability(self, claim: str) -> dict:
+        """Assess whether a claim is falsifiable (has empirical content).
+
+        每個新主張 ≈ samples × call（本地模型）。
+        Returns {"score": float 0-1, "falsifier": "<max 200 chars>"}.
+        Fail-open returns {"score": None, "falsifier": ""}.
+        """
+        import statistics
+        from core.config import CORTEX_FALSIFY_SAMPLES
+
+        if CORTEX_FALSIFY_SAMPLES == 1:
+            return self._assess_falsifiability_once(claim)
+
+        results = []
+        for _ in range(CORTEX_FALSIFY_SAMPLES):
+            res = self._assess_falsifiability_once(claim)
+            if res["score"] is not None:
+                results.append(res)
+
+        if not results:
+            return {"score": None, "falsifier": ""}
+
+        scores = [r["score"] for r in results]
+        median_score = statistics.median(scores)
+        median_score = max(0.0, min(1.0, round(median_score, 4)))
+
+        best_result = min(results, key=lambda r: abs(r["score"] - median_score))
+        return {
+            "score": median_score,
+            "falsifier": best_result["falsifier"]
+        }
 
     def adjudicate_claims(self, claim_a: str, claim_b: str) -> dict:
         """Closed-choice relation verdict between two atomic claims.

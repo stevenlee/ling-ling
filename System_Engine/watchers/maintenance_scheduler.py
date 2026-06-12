@@ -176,6 +176,14 @@ class MaintenanceScheduler(threading.Thread):
             result = run_routing_report(trace_store)
             return MaintenanceResult(result.status, result.message)
 
+        def weekly_memoir() -> MaintenanceResult:
+            trace_store = getattr(self.llm, "trace_store", None)
+            if trace_store is None:
+                return MaintenanceResult("skipped", "No trace store associated with LLM client.")
+            from maintenance.weekly_memoir import run_weekly_memoir
+            result = run_weekly_memoir(trace_store)
+            return MaintenanceResult(result.status, result.message)
+
         return [
             MaintenanceTask(
                 name="insight_daily",
@@ -275,6 +283,14 @@ class MaintenanceScheduler(threading.Thread):
                 idle_required=True,
                 intent="maintenance.template_audit",
                 agent="TemplateAudit",
+            ),
+            MaintenanceTask(
+                name="weekly_memoir",
+                action=weekly_memoir,
+                interval_seconds=7 * 86400,
+                idle_required=True,
+                intent="maintenance.weekly_memoir",
+                agent="WeeklyMemoir",
             ),
         ]
 

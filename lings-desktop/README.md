@@ -258,6 +258,12 @@ lings-desktop/
 - `rank_bm25` 已加入 `requirements.txt`（純 Python，~10KB）。
 - `sentence-transformers` 列為選用依賴；只在需要 reranker 時手動 `pip install`。
 
+### 2026-06-12 backlog batch-1
+
+- **T1: Falsifiability 穩健化**: `assess_falsifiability` 改為支援多重取樣（由 `CORTEX_FALSIFY_SAMPLES` 控制）。當 `samples=1` 時維持 `byte-identical` 原生行為；偶數樣本時取中位數，並在 Falsifier 挑選時取最接近中位數者，避免產生不符實際推論的文本。
+- **T2: 每週記事 (Weekly Memoir)**: 新增 `weekly_memoir` 工具並註冊至 `maintenance_scheduler`。匯總當週 `recent_query_texts` 歷史、Cortex 頁面動態與 Falsified 狀態更新。全模組採 fail-open 策略，確保個別資料源損毀時報告仍能產生（標註資料不可用），無資料的節點則自動省略。
+- **T3: 結構化 LLM Token 上限解除**: `score_text_quality`, `find_topic_shifts`, `summarize_for_context` 等 P0 評分器，以及 `classify_document`, `select_profile` 等結構化路由呼叫的 `max_tokens` 上限由 `20/200` 等具體數字調整為 `None`。解決因 Reasoning 模型輸出過長而被中途截斷的問題，並透過實機測試（如 gemma 等模型）證明與既有的 `reasoning` / `reasoning_content` fallback 機制完全相容。
+
 ### 2026-05-23 Monte Carlo Concept-Level Sampling
 
 - `InsightAgent._get_all_documents` 改成兩階段抽樣：先 uniform 抽 Book，再從每本書抽多個 chunk，讓碰撞池呈現概念層級的多樣性，而不是每本書只露出一個代表 chunk。
