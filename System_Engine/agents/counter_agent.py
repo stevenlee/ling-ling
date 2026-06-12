@@ -91,6 +91,9 @@ class CounterAgent(BaseAgent):
             tally = results_matrix[article_title][concept]
             report = self._format_report(concept, article_title, tally, resolved_path)
 
+        verification = self._verify_quote_grounding(results_matrix)
+        report = report.rstrip() + "\n\n" + self._format_quote_verification(verification) + "\n"
+
         grand_total = sum(
             tally.get("total_count", 0)
             for tallies in results_matrix.values()
@@ -101,7 +104,11 @@ class CounterAgent(BaseAgent):
             "source_articles": [a[0] for a in articles],
             "total_count": grand_total,
             "matrix_mode": is_matrix,
+            "quotes_total": verification["total"],
+            "quotes_grounded": verification["grounded"],
         }
+        if verification["verdict"]:
+            meta["quality_verdict"] = verification["verdict"]
         title_slug = concepts[0] if len(concepts) == 1 else f"{len(concepts)} concepts"
         article_slug = articles[0][0] if len(articles) == 1 else f"{len(articles)} articles"
         self._write_report(
@@ -305,13 +312,33 @@ class CounterAgent(BaseAgent):
             "- If zero instances found, return an empty array: []\n"
             "- Return ONLY the JSON array, nothing else.\n"
         )
-        try:
-            raw = self.llm.answer_query(user_prompt, wiki_context="", custom_instruction=system_prompt)
-        except Exception as e:
-            ui.error(f"      ❌ Chunk {part} extraction 失敗: {e}")
-            logging.error(f"LingLens extraction failed for chunk {part}: {e}")
-            return []
-        instances = extract_json_array(raw)
+        instances = []
+        # Reasoning models intermittently emit the whole reply into the
+        # reasoning channel without the final JSON array — retry once before
+        # treating the chunk as empty. A literal [] in the reply is a genuine
+        # zero, not a parse failure.
+        for attempt in range(2):
+            try:
+                # JSON output: opt out of the template/persona axes, or the
+                # default wiki-note template (STRICT ADHERENCE) overrides the
+                # JSON instruction and the model writes a note instead.
+                raw = self.llm.answer_query(
+                    user_prompt,
+                    wiki_context="",
+                    custom_instruction=system_prompt,
+                    forced_template="none",
+                    persona="none",
+                )
+            except Exception as e:
+                ui.error(f"      ❌ Chunk {part} extraction 失敗: {e}")
+                logging.error(f"LingLens extraction failed for chunk {part}: {e}")
+                return []
+            instances = extract_json_array(raw)
+            if instances or "[]" in _WS_RE.sub("", raw):
+                break
+            logging.warning(
+                f"LingLens chunk {part}: reply had no JSON array (attempt {attempt + 1})."
+            )
         for inst in instances:
             inst["source_part"] = part
         return instances
@@ -351,7 +378,14 @@ class CounterAgent(BaseAgent):
             "Return ONLY the JSON object.\n"
         )
         try:
-            raw = self.llm.answer_query(user_prompt, wiki_context="", custom_instruction=system_prompt)
+            # JSON output: same template/persona opt-out as _extract_from_chunk.
+            raw = self.llm.answer_query(
+                user_prompt,
+                wiki_context="",
+                custom_instruction=system_prompt,
+                forced_template="none",
+                persona="none",
+            )
             tally = extract_json_object(raw)
             if tally and "total_count" in tally:
                 return tally
@@ -407,6 +441,74 @@ class CounterAgent(BaseAgent):
             if heading:
                 inst["closest_heading"] = heading
                 inst["source_anchor"] = part_anchor or heading
+
+    @staticmethod
+    def _verify_quote_grounding(results_matrix) -> dict:
+        """Surface the deterministic grounding signal as a per-report verdict.
+
+        `_ground_tally_locations` already tried to locate every quote in the
+        source; instances without a `source_offset` are the ones it could
+        not find. Below LENS_QUOTE_MIN_GROUNDED_RATIO the report is marked
+        "revise" — same vocabulary as the synthesis critique postcheck, so
+        artifact verdicts stay comparable across report types.
+        """
+        from core.config import LENS_QUOTE_MIN_GROUNDED_RATIO
+
+        total = 0
+        grounded = 0
+        ungrounded = []
+        for article_title, tallies in results_matrix.items():
+            for concept, tally in (tallies or {}).items():
+                for inst in (tally or {}).get("instances", []):
+                    total += 1
+                    if inst.get("source_offset") is not None:
+                        grounded += 1
+                    else:
+                        ungrounded.append({
+                            "article": article_title,
+                            "concept": concept,
+                            "id": inst.get("id"),
+                            "quote": (inst.get("quote") or "").strip()[:120],
+                        })
+        ratio = (grounded / total) if total else None
+        verdict = None
+        if total:
+            verdict = "keep" if ratio >= LENS_QUOTE_MIN_GROUNDED_RATIO else "revise"
+        return {
+            "total": total,
+            "grounded": grounded,
+            "ratio": ratio,
+            "ungrounded": ungrounded,
+            "verdict": verdict,
+        }
+
+    @staticmethod
+    def _format_quote_verification(verification) -> str:
+        lines = ["## 🔍 Quote Verification", ""]
+        total = verification["total"]
+        if not total:
+            lines.append("（沒有實例可驗證）")
+            return "\n".join(lines)
+
+        grounded = verification["grounded"]
+        ratio = verification["ratio"]
+        lines.append(
+            f"**{grounded}/{total}** 個引文在原文中定位成功"
+            f"（{ratio:.0%}）— verdict: **{verification['verdict']}**"
+        )
+        if verification["ungrounded"]:
+            lines.extend([
+                "",
+                "以下引文無法在原文中定位（可能是改寫、翻譯，或模型虛構——請人工抽查）：",
+                "",
+            ])
+            for item in verification["ungrounded"][:10]:
+                label = f"#{item['id']}" if item.get("id") is not None else "#?"
+                lines.append(f"- {label}（{item['concept']} @ [[{item['article']}]]）：「{item['quote']}」")
+            hidden = len(verification["ungrounded"]) - 10
+            if hidden > 0:
+                lines.append(f"- ……及其他 {hidden} 條")
+        return "\n".join(lines)
 
     @staticmethod
     def _find_quote_offset(article_text, quote):

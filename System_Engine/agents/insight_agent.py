@@ -1400,11 +1400,15 @@ class InsightAgent(BaseAgent):
         )
 
         try:
+            # JSON output: opt out of the template/persona axes, or the
+            # default wiki-note template overrides the JSON instruction.
             raw = self.llm.answer_query(
                 query_content=user_msg,
                 wiki_context="",
                 custom_instruction=system_prompt,
                 temperature=self.TEMP_SPARK,
+                forced_template="none",
+                persona="none",
             )
             seed = extract_json_object(raw)
         except Exception as e:
@@ -1589,11 +1593,14 @@ class InsightAgent(BaseAgent):
             "Each claim should be a single declarative sentence."
         )
         try:
+            # JSON output: same template/persona opt-out as the spark call.
             raw = self.llm.answer_query(
                 query_content=section_content[:3000],
                 wiki_context="",
                 custom_instruction=extract_prompt,
                 temperature=0.1,
+                forced_template="none",
+                persona="none",
             )
             seeds = extract_json_array(raw)
         except Exception as e:
