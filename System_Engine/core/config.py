@@ -33,6 +33,10 @@ THOUGHTFUL_CACHE_DIR            = os.getenv("THOUGHTFUL_CACHE_DIR") or None
 # source-grounding defects and a keep/revise/reject verdict. Adds one LLM call
 # per long-doc ingestion; flip to "false" to disable on cost-constrained runs.
 SYNTHESIS_CRITIQUE_ENABLED      = os.getenv("SYNTHESIS_CRITIQUE_ENABLED", "true").lower() == "true"
+# When the critique verdict is revise/reject, regenerate the synthesis (with
+# the findings as feedback) up to this many times. Worst case adds one
+# synthesis + one critique call per retry. 0 disables the retry loop.
+SYNTHESIS_CRITIQUE_MAX_RETRIES  = max(0, int(os.getenv("SYNTHESIS_CRITIQUE_MAX_RETRIES", "1")))
 RAG_EXPLAIN_ENABLED             = os.getenv("RAG_EXPLAIN_ENABLED", "false").lower() == "true"
 MAINTENANCE_SCHEDULER_ENABLED   = os.getenv("MAINTENANCE_SCHEDULER_ENABLED", "true").lower() == "true"
 MAINTENANCE_POLL_SECONDS        = int(os.getenv("MAINTENANCE_POLL_SECONDS", "300"))
