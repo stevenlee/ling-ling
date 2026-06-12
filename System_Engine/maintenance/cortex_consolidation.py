@@ -213,12 +213,16 @@ class _Consolidator:
             logging.warning(f"Cortex: indexing failed for {page.claim_id}: {e}")
 
     def _merge_into(self, page: CortexPage, claim: str, evidence: dict) -> None:
-        """Reconsolidation: section-level mutations only, zero LLM calls."""
+        """Reconsolidation: section-level mutations only, zero LLM calls.
+
+        S grows by the spacing rule (cortex_decay.reinforce): a same-night
+        duplicate barely moves it; a rediscovery after near-forgetting
+        consolidates deeply. Phase 2's flat S+=1 is superseded.
+        """
+        from services.cortex_decay import GAIN_REDISCOVERY, reinforce
         page.evidence.append(evidence)
-        page.S += 1
+        reinforce(page, GAIN_REDISCOVERY)
         page.confidence = round(min(_CONFIDENCE_CAP, page.confidence + _CONFIDENCE_STEP), 4)
-        page.last_reinforced_at = _now()
-        page.updated = _now()
         if claim != page.claim and claim not in page.variants:
             page.variants.append(claim)
             if len(page.variants) > self.max_variants:
