@@ -109,3 +109,14 @@ def test_assess_falsifiability_samples_1_zero_cost(llm, monkeypatch):
     assert result["falsifier"] == "f_1"
     # Should only call _complete_text once if it succeeds
     assert llm._complete_text.call_count == 1
+
+
+def test_assess_falsifiability_samples_1_retry(llm, monkeypatch):
+    monkeypatch.setattr(config, "CORTEX_FALSIFY_SAMPLES", 1)
+    # samples=1 仍保留「解析失敗重試一次」的既有行為
+    mock_responses(llm, [None, {"score": 0.5, "falsifier": "f_retry"}])
+
+    result = llm.assess_falsifiability("Claim 7")
+    assert result["score"] == 0.5
+    assert result["falsifier"] == "f_retry"
+    assert llm._complete_text.call_count == 2

@@ -118,14 +118,26 @@ def test_weekly_memoir_corrupted_bench_history(tmp_path):
     assert result.status == "succeeded"
     content = result.report_path.read_text(encoding="utf-8")
     assert "（本節資料不可用）" in content
+    # 空窗口的節（1-4）整節省略，而不是佔位文字
+    assert "## 1." not in content
+    assert "## 2." not in content
+    assert "## 3." not in content
+    assert "## 4." not in content
+    # maintenance log 仍有摘要一行
+    log_content = (tmp_path / "maintenance.log.md").read_text(encoding="utf-8")
+    assert "Weekly Memoir" in log_content
 
 
 def test_weekly_memoir_real_trace_store(tmp_path):
+    import time
+
     ts = TraceStore(db_path=tmp_path / "traces.sqlite")
-    
+
     with ts.run():
         ts.record_retrieval_event(query_text="What is cats?", top_k=0, options={}, results=[])
+        time.sleep(0.002)
         ts.record_retrieval_event(query_text="What is cats?", top_k=0, options={}, results=[])
+        time.sleep(0.002)
         ts.record_retrieval_event(query_text="Dogs are nice?", top_k=0, options={}, results=[])
         
     cortex_dir = tmp_path / "cortex"
@@ -151,3 +163,5 @@ def test_weekly_memoir_real_trace_store(tmp_path):
     assert "What is cats?" in content
     assert "Dogs are nice?" in content
     assert content.count("What is cats?") == 1
+    # 最新優先：Dogs 是最後記錄的，應排在前面
+    assert content.index("Dogs are nice?") < content.index("What is cats?")
