@@ -53,6 +53,28 @@ def test_ranks_by_relevance(tmp_path):
     assert hits[0][0] > hits[1][0]             # strictly higher score
 
 
+def test_hybrid_surfaces_literal_match_over_higher_cosine(tmp_path):
+    # The decisive case: a claim with strong lexical overlap but the embedder
+    # ranks it LOWER must still win under hybrid. Pure vector buries the literal
+    # match (the live "知識圖譜" rank-9 bug); magnitude-aware fusion surfaces it.
+    _page(tmp_path, "構建知識圖譜方法")         # lexical overlap, but lower cosine
+    _page(tmp_path, "天氣晴朗")                # no overlap, but higher cosine
+    # Filler pages so BM25 IDF isn't degenerate (a term in 1 of N=2 docs has
+    # IDF=0; with N~6 the discriminating chars get positive IDF).
+    for filler in ("貓咪睡覺", "汽車引擎", "海洋潮汐", "鋼琴演奏"):
+        _page(tmp_path, filler)
+    rag = FakeRAG({
+        "查詢": (1.0, 0.0, 0.0),               # query
+        "方法": (0.6, 0.8, 0.0),               # overlap claim — cosine 0.6 (buried)
+        "天氣": (0.99, 0.14, 0.0),             # unrelated claim — cosine ~0.99
+    })  # fillers fall to the default (0,0,0) → cosine 0, no interference
+    hits = recall_claims(rag, "構建知識圖譜查詢", cortex_dir=tmp_path, hybrid=True)
+    assert "知識圖譜" in hits[0][1].claim          # literal match wins under hybrid
+
+    vec_only = recall_claims(rag, "構建知識圖譜查詢", cortex_dir=tmp_path, hybrid=False)
+    assert "天氣" in vec_only[0][1].claim          # ...but loses on cosine alone
+
+
 def test_top_k_caps(tmp_path):
     for i in range(5):
         _page(tmp_path, f"claim about topic {i}")

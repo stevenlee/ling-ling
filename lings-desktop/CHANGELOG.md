@@ -8,6 +8,7 @@ Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [READM
 - **`@ling-recall` 指令**（`agents/recall_agent.py`）：給主題，撈最相關的蒸餾主張並渲染**連同其知識論**——刻意把反例與矛盾一起攤開（反同溫層透明度），不是只給結論。與 `@ling` 問答區分：問答從原始筆記答，recall 從蒸餾信念答。
 - 這個 `recall_claims` 原語是 F1（Cortex-grounded insight）與 F3（張力摘要）共用的地基。F1 計劃見 [DesignDoc/CortexPhase5_F1_grounded_insight_plan.md](System_Engine/DesignDoc/CortexPhase5_F1_grounded_insight_plan.md)，其中把 provenance 防火牆與同溫層金絲雀列為硬條款。
 - Flag `CORTEX_RECALL_TOP_K`（預設 8）。Live：真實 vault 查「用什麼文獻當蒙特卡羅種子」→ 對應主張 0.865 排第一。+7 tests。
+- **Hybrid 融合（live 回饋後）**：純向量在真實對話式查詢上回傳平帶 grab-bag——embedder（nomic-embed-text）對同語言文字的 cosine 擠在 0.53–0.69，連把 on-topic 主張排到 off-topic 之前都做不到（這是 R6 的同一個 embedder 天花板，memory loop 繼承了它）。recall 改為 **magnitude-aware hybrid**（cosine + BM25 字元級 CJK token，BM25 以自身 max 正規化後加權融合）。**刻意不用 RAG 層的 RRF**：RRF 是 rank-based、丟棄 BM25 的量級，且其 k=60 阻尼在 Cortex 這種小語料（~數十條）會把「字面命中得分 4× 次名」的尖峰訊號壓成「rank1 僅微幅勝 rank2」，被 embedder 平帶蓋過。實測：「構建知識圖譜的過程」查詢，字面命中主張從純向量的 **rank 9 → hybrid rank 1**。注意：BM25 在極小語料（≤2–3 頁）IDF 退化為 0；hybrid 的效益隨 Cortex 長大才完整。純概念、無詞彙重疊的查詢仍受 embedder 天花板限制（R6）。+1 test。
 
 ### 2026-06-13 全模組稽核與硬化（audit R7）
 
