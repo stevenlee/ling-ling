@@ -39,7 +39,7 @@ from core.config import (
     TEMPLATES_DIR,
     settings,
 )
-from core.parser import extract_json_array, extract_json_object, strip_body_frontmatter, clean_llm_response
+from core.parser import extract_json_array, extract_json_object, is_empty_json_literal, strip_body_frontmatter, clean_llm_response
 from core.utils import MtimeCache, digest_value_to_text
 from services.capability_manager import CapabilityManager
 from services.trace_store import TraceStore, elapsed_ms, usage_to_counts
@@ -808,7 +808,6 @@ class LLMClient:
         """
         parse = extract_json_array if kind == "array" else extract_json_object
         empty = [] if kind == "array" else {}
-        empty_literal = "[]" if kind == "array" else "{}"
         base_trace = dict(complete_kwargs.pop("trace_context", {}) or {})
         base_meta = dict(base_trace.get("metadata") or {})
         for attempt in range(2):
@@ -821,8 +820,8 @@ class LLMClient:
             parsed = parse(raw)
             if parsed:
                 return parsed
-            if empty_literal in re.sub(r"\s+", "", raw or ""):
-                return empty  # genuine empty answer — not a parse miss, don't re-roll
+            if is_empty_json_literal(raw, kind):
+                return empty  # whole reply IS [] / {} — genuine empty, not a parse miss
             logging.warning(f"_complete_json({kind}) parse miss (attempt {attempt + 1}/2)")
         return empty
 

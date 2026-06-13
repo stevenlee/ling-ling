@@ -54,6 +54,23 @@ def test_object_literal_empty_no_reroll():
     assert c._calls["n"] == 1
 
 
+def test_array_substring_bracket_is_not_genuine_empty_rerolls():
+    # Audit B1: a parse-miss reply that merely *contains* "[]" as a substring
+    # (wrong shape) must re-roll, not be accepted as a genuine empty array.
+    c = _client(['{"items": []}', json.dumps([{"a": 1}])])
+    out = c._complete_json(kind="array", system_prompt="s", user_msg="u")
+    assert out == [{"a": 1}]
+    assert c._calls["n"] == 2
+
+
+def test_array_fenced_empty_is_genuine_no_reroll():
+    # A fenced/padded literal [] is still a genuine empty — no re-roll.
+    c = _client(["```json\n[]\n```"])
+    out = c._complete_json(kind="array", system_prompt="s", user_msg="u")
+    assert out == []
+    assert c._calls["n"] == 1
+
+
 def test_object_two_misses_returns_empty():
     c = _client(["nope", "still nope"])
     out = c._complete_json(kind="object", system_prompt="s", user_msg="u")

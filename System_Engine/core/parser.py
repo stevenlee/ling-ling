@@ -1230,3 +1230,22 @@ def extract_json_object(text: str) -> dict:
             if isinstance(parsed, dict):
                 return parsed
     return {}
+
+
+_CODE_FENCE_RE = re.compile(r'^```(?:json)?\s*|\s*```$', re.IGNORECASE)
+
+
+def is_empty_json_literal(text: str, kind: str = "array") -> bool:
+    """True only when the WHOLE reply is a genuine empty JSON literal.
+
+    Distinguishes a real empty answer (the model emitted `[]` / `{}`, perhaps
+    fenced or padded) from a parse miss whose text merely *contains* `[]`/`{}`
+    as a substring (e.g. `{"items": []}`). Callers use this to decide whether
+    a re-roll is warranted: a substring check wrongly suppresses the retry and
+    masks parse failures (audit B1).
+    """
+    if not text:
+        return False
+    stripped = _CODE_FENCE_RE.sub("", text.strip()).strip()
+    stripped = re.sub(r"\s+", "", stripped)
+    return stripped == ("[]" if kind == "array" else "{}")
