@@ -133,3 +133,51 @@ def test_full_insight_date_part_supports_old_and_new_filenames():
         MaintenanceScheduler._full_insight_date_part(Path("[20260530][Vault][insight-recency].md"))
         is None
     )
+
+
+# ── R7-E: busy-lock acquisition must not stomp a concurrent owner ──────
+
+from watchers.maintenance_scheduler import global_busy_state
+
+
+def _result_action(calls):
+    def action():
+        calls.append(1)
+        return MaintenanceResult(status="succeeded", summary="ok")
+    return action
+
+
+def test_idle_task_skips_when_owner_already_busy(tmp_path):
+    calls = []
+    task = MaintenanceTask(name="idle_t", action=_result_action(calls), idle_required=True)
+    scheduler = make_scheduler(tmp_path, task)
+    assert global_busy_state.try_set_busy() is True   # a user/other owner holds busy
+    try:
+        scheduler._run_task(task, datetime(2026, 6, 13, 3, 0))
+        assert calls == []                            # task did not run
+        assert global_busy_state.is_busy() is True    # owner's lock untouched
+    finally:
+        global_busy_state.set_busy(False)
+
+
+def test_non_idle_task_runs_but_does_not_release_foreign_lock(tmp_path):
+    calls = []
+    task = MaintenanceTask(name="bench", action=_result_action(calls), idle_required=False)
+    scheduler = make_scheduler(tmp_path, task)
+    assert global_busy_state.try_set_busy() is True
+    try:
+        scheduler._run_task(task, datetime(2026, 6, 13, 3, 0))
+        assert calls == [1]                           # non-idle task ran anyway
+        assert global_busy_state.is_busy() is True    # but did NOT clear the owner's lock
+    finally:
+        global_busy_state.set_busy(False)
+
+
+def test_task_acquires_and_releases_when_idle(tmp_path):
+    calls = []
+    task = MaintenanceTask(name="idle_t", action=_result_action(calls), idle_required=True)
+    scheduler = make_scheduler(tmp_path, task)
+    assert global_busy_state.is_busy() is False
+    scheduler._run_task(task, datetime(2026, 6, 13, 3, 0))
+    assert calls == [1]
+    assert global_busy_state.is_busy() is False       # acquired then released

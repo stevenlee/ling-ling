@@ -53,7 +53,7 @@ def _get_tag_manager():
 
 # ─── Frontmatter ───────────────────────────────────────────────────────
 
-_FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*\n', re.DOTALL)
+_FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*(?:\n|$)', re.DOTALL)
 # Body hashtag: `#word` preceded by SOL or whitespace.  CJK ranges included.
 _HASHTAG_RE = re.compile(r'(?:^|\s)#([\w一-鿿]+)')
 
@@ -446,6 +446,10 @@ def _quote_labels_in_line(line: str) -> tuple[str, bool]:
                     changed = True
                 else:
                     out.append(code_part[i:close_at + len(closer)])
+            else:
+                # Empty label (e.g. `A[]`): preserve the shape verbatim.
+                # Without this the span was silently dropped (audit R7-E).
+                out.append(code_part[i:close_at + len(closer)])
             i = close_at + len(closer)
             matched = True
             break

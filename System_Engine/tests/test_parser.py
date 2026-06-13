@@ -426,3 +426,19 @@ class TestTableRepair:
         res, fixes = repair_markdown_tables(text)
         assert res == text
         assert not fixes
+
+
+# ── R7-E: frontmatter + mermaid empty-label edge cases ──────────────────
+
+def test_frontmatter_without_trailing_newline():
+    from core.parser import parse_markdown_metadata
+    meta = parse_markdown_metadata("---\ntitle: X\ntags: [a]\n---")  # no trailing \n
+    assert meta.get("title") == "X"
+    assert "a" in meta.get("tags", [])
+
+
+def test_mermaid_empty_label_preserved():
+    from core.parser import _quote_labels_in_line
+    out, changed = _quote_labels_in_line("A[]")
+    assert out == "A[]"          # shape preserved, not dropped
+    assert changed is False
