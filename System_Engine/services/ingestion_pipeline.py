@@ -400,6 +400,15 @@ class IngestionPipeline:
                     raise ValueError("LLM generation failed.")
 
             base_title = source_filepath.stem.strip().replace("/", "-").replace("\\", "-")
+            # Naming convention (NOT a bug — audit A1, deliberately kept): a
+            # short doc's single page is the canonical "(Synthesis)" page for
+            # that stem. Resolvers depend on this — load_sources
+            # (builtin_adapters) looks up `{title} (Synthesis).md` with no bare
+            # `{title}.md` fallback, ReadingIndex (vault_utils) links by this
+            # name, and users may have `[[X (Synthesis)]]` wikilinks. Renaming
+            # short docs to `{stem}` would break all three for cosmetic gain, so
+            # the suffix stays. A given stem is either short (one Synthesis page,
+            # no Parts) or long (Parts + a real Synthesis), never both.
             title = f"{base_title} (Part {part_info['current']})" if part_info else f"{base_title} (Synthesis)"
 
             tags = (part_info or {}).get("master_tags") or llm_result.get("tags", [])
