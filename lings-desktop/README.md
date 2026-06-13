@@ -117,6 +117,7 @@ Confidence: medium
 - `@ling-do`：執行 `@ling-plan` 產出的工作流腳本。
 - `@ling-profiles`：管理文件路由 Profiles。`pending` 看待審草稿、`approve <名稱>` 一鍵生效。
 - `@ling-cortex`：對 Cortex 長期記憶層跑三層驗證（紅線/品質/檢索效益），報告含狀態分佈、矛盾對與人工抽查清單。
+- `@ling-recall`：回想——給一個主題，撈出 Cortex 中最相關的蒸餾主張（連同信心、可反駁性、反例、證據鏈與矛盾）。與 `@ling` 問答不同：問答從原始筆記答，recall 從**蒸餾過的信念**答。
 - `@ling-zip` / `@ling-unzip`：備份與還原知識庫。
 - `@ling-RESET`：清除內容前會先強制備份。
 
