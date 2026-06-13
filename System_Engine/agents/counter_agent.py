@@ -6,7 +6,7 @@ from pathlib import Path
 
 from agents.base_agent import BaseAgent
 from core.config import PAGES_DIR, RAW_CONSOLIDATE_DIR, WIKI_VAULT_DIR
-from core.parser import extract_json_array, extract_json_object
+from core.parser import extract_json_array, extract_json_object, is_empty_json_literal
 from core.ui import ui
 from services.text_splitter import TextSplitter
 
@@ -334,7 +334,7 @@ class CounterAgent(BaseAgent):
                 logging.error(f"LingLens extraction failed for chunk {part}: {e}")
                 return []
             instances = extract_json_array(raw)
-            if instances or "[]" in _WS_RE.sub("", raw):
+            if instances or is_empty_json_literal(raw, "array"):
                 break
             logging.warning(
                 f"LingLens chunk {part}: reply had no JSON array (attempt {attempt + 1})."
