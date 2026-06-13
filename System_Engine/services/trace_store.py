@@ -145,6 +145,17 @@ class TraceStore:
                 CREATE INDEX IF NOT EXISTS idx_llm_calls_operation ON llm_calls(operation);
                 CREATE INDEX IF NOT EXISTS idx_artifacts_run_id ON artifacts(run_id);
                 CREATE INDEX IF NOT EXISTS idx_retrieval_events_run_id ON retrieval_events(run_id);
+
+                -- Time-window indexes (audit R7-F). The trace DB grows
+                -- unboundedly; every time-windowed query (analytics, memoir,
+                -- prune) previously full-scanned. Composites serve the
+                -- filter+range+ORDER BY ts analytics queries; the plain ts
+                -- indexes serve the prune deletes (WHERE ts < ?).
+                CREATE INDEX IF NOT EXISTS idx_llm_calls_ts ON llm_calls(ts);
+                CREATE INDEX IF NOT EXISTS idx_llm_calls_stage_ts ON llm_calls(stage, ts);
+                CREATE INDEX IF NOT EXISTS idx_artifacts_ts ON artifacts(ts);
+                CREATE INDEX IF NOT EXISTS idx_artifacts_type_ts ON artifacts(artifact_type, ts);
+                CREATE INDEX IF NOT EXISTS idx_retrieval_events_ts ON retrieval_events(ts);
                 """
             )
             # Phase 5C migration: add parent_run_id column to existing DBs.
