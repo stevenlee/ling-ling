@@ -254,17 +254,34 @@ class TestRAGManagerLogic:
         manager.delete_document(doc_id)
         assert manager.collection.deleted == [{"doc_id": doc_id}]
 
-    def test_add_document_cleans_doc_id_and_legacy_title(self, tmp_path):
+    def test_add_document_cleans_doc_id_and_only_legacy_title_chunks(self, tmp_path):
+        # Audit A2: legacy title cleanup must be SCOPED to doc_id-less chunks.
+        # A same-title chunk that carries a (different) doc_id belongs to
+        # another document and must survive. The old blanket delete-by-title
+        # wiped it; the test now pins the corrected scoped behavior.
+        sibling_doc_id = "f" * 64  # an unrelated document sharing the title
+
         class FakeCollection:
             def __init__(self):
-                self.deleted = []
+                self.deleted = []        # where-clause deletes
+                self.deleted_ids = []    # id-list deletes
                 self.upserts = []
 
             def get(self, **kwargs):
-                return {"metadatas": []}
+                # Two same-title chunks: one legacy (no doc_id), one sibling.
+                return {
+                    "ids": ["legacy_chunk", "sibling_chunk"],
+                    "metadatas": [
+                        {"title": "Legacy Title"},
+                        {"title": "Legacy Title", "doc_id": sibling_doc_id},
+                    ],
+                }
 
-            def delete(self, where):
-                self.deleted.append(where)
+            def delete(self, where=None, ids=None):
+                if ids is not None:
+                    self.deleted_ids.extend(ids)
+                if where is not None:
+                    self.deleted.append(where)
 
             def upsert(self, **kwargs):
                 self.upserts.append(kwargs)
@@ -286,8 +303,12 @@ class TestRAGManagerLogic:
         manager.add_document(path, "Legacy Title", "fresh content", tags=["AI"], strict=True)
 
         expected_doc_id = RAGManager._get_doc_id(path)
+        # Own chunks cleared by doc_id.
         assert {"doc_id": expected_doc_id} in manager.collection.deleted
-        assert {"title": "Legacy Title"} in manager.collection.deleted
+        # Blanket delete-by-title must NOT happen anymore.
+        assert {"title": "Legacy Title"} not in manager.collection.deleted
+        # Only the doc_id-less legacy chunk is removed; the sibling survives.
+        assert manager.collection.deleted_ids == ["legacy_chunk"]
         assert len(manager.collection.upserts) == 1
 
 

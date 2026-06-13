@@ -258,6 +258,13 @@ lings-desktop/
 - `rank_bm25` 已加入 `requirements.txt`（純 Python，~10KB）。
 - `sentence-transformers` 列為選用依賴；只在需要 reranker 時手動 `pip install`。
 
+### 2026-06-13 全模組稽核後續（batch-A 資料完整性）
+
+- **B1（迴歸修正）**：`is_empty_json_literal(text, kind)` 取代「子字串含 `[]`/`{}`」的判斷——只有整段（去空白去 code fence 後）等於 `[]`/`{}` 才算真零、不 re-roll。修掉 `_complete_json`(R4) 與 lens extraction(batch-3) 會把 `{"items":[]}` 誤判成空集合、遮蔽 parse 失敗的問題。
+- **B2**：LingLens 的 RAG fallback 改用 `query_notes` dict API，餵原始 chunk 文字 + metadata 真標題，不再把 `query_similar_notes` 的格式化 markdown（`### [來自筆記…]`）當原文污染 grounding。
+- **A2**：`add_document` 的 legacy title 清理改為 scoped——只刪「同名 AND 無 doc_id」的舊 chunk（`_delete_legacy_title_chunks`），不再無差別 delete-by-title 而誤刪同名的不同文件。
+- **A1（慣例，刻意不改）**：短文件的單一頁面命名為 `{stem} (Synthesis)` 是**正式慣例**，不是 bug。load_sources（`builtin_adapters`）以 `{title} (Synthesis).md` 找頁且無 `{title}.md` fallback、ReadingIndex（`vault_utils`）以此名連結、使用者 vault 可能有 `[[X (Synthesis)]]` wikilink。改名的 churn 與破壞性遠大於「名稱看起來怪」的收益，故保留並於 `ingestion_pipeline` 標注。
+
 ### 2026-06-13 R4：Reasoning-channel JSON 防禦統一
 
 - **`LLMClient._complete_json` 新 helper**：統一「呼叫 → 解析 JSON → 解析失敗 re-roll 一次」的防禦。reasoning 模型（gemma via Ollama）偶爾把整段回覆塞進 reasoning channel、content 無可解析 JSON 又不報錯（就是 batch-3 默默把 LingLens extraction 歸零的同一個失敗）。literal `[]`/`{}` 視為「真的空答案」不 re-roll，避免把合法零當成解析失敗。

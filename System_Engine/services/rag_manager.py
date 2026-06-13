@@ -421,8 +421,15 @@ class RAGManager:
                     logging.info(f"Skipped '{title}' ({doc_id[:8]}): content unchanged")
                     return
 
+            # doc_id is the sha256 of the vault-relative path, so re-ingesting a
+            # file always hits the same doc_id and clears its own chunks.
             self.delete_document(doc_id)
-            self.delete_document(title)
+            # Legacy cleanup, SCOPED: chunks indexed before doc_id existed were
+            # keyed by title only. Delete just those — a blanket
+            # delete-by-title would also wipe an unrelated document that happens
+            # to share this title (audit A2). ChromaDB has no "field absent"
+            # filter, so fetch by title and keep only the doc_id-less rows.
+            self._delete_legacy_title_chunks(title)
 
             try:
                 rel_path = Path(filepath).resolve().relative_to(WIKI_VAULT_DIR.resolve())
@@ -1144,6 +1151,33 @@ class RAGManager:
             "deleted_chunks": len(orphan_ids),
             "titles": sorted(orphan_titles),
         }
+
+    def _delete_legacy_title_chunks(self, title: str) -> None:
+        """Delete only the doc_id-less (pre-doc_id era) chunks for `title`.
+
+        Scoped legacy cleanup for add_document: same-title chunks that DO carry
+        a doc_id belong to other documents and must be left alone (audit A2).
+        ChromaDB lacks a "field absent" operator, so we fetch by title and
+        filter in Python rather than expressing it as a where clause.
+        """
+        if not title:
+            return
+        try:
+            rows = self.collection.get(where={"title": title})
+        except Exception as e:
+            logging.debug(f"legacy title cleanup fetch failed for '{title}': {e}")
+            return
+        ids = rows.get("ids") or []
+        metas = rows.get("metadatas") or []
+        legacy_ids = [
+            cid for cid, md in zip(ids, metas) if not (md or {}).get("doc_id")
+        ]
+        if legacy_ids:
+            try:
+                self.collection.delete(ids=legacy_ids)
+                logging.info(f"Deleted {len(legacy_ids)} legacy (doc_id-less) chunk(s) for title '{title}'")
+            except Exception as e:
+                logging.debug(f"legacy title cleanup delete failed for '{title}': {e}")
 
     @retry_on_db_lock()
     def delete_document(self, doc_id_or_title: str | Path):
