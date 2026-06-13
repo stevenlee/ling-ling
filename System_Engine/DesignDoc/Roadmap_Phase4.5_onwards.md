@@ -143,9 +143,10 @@ A3 + A4 are orthogonal — slot them in opportunistically.
 |---|---|---|---|
 | R1 | **Falsifiability 假設驗證**：doc-anchored seeds 是否產出更可反駁的主張（兩組分佈比較 + 黃線比例 + 0612 前 baseline） | S | ✅ 已排程 2026-06-26 09:00 一次性 scheduled task（純唯讀統計，報告進 scratch/） |
 | R2 | **Planner learning loop**（停車場 D4）：把 quality_verdict traces 餵回 planner prompt 自我調校 | M | verdict 數據現在從三個來源累積（synthesis critique、lens quote verification、planner pipelines）；等量夠了再立案——建議 R1 跑完一併看數據量 |
-| R3 | **Lens tally 路徑補 retry**：`_tally_instances` 的 LLM 去重路徑（>3 實例）沒有 extraction 那層「無 array 重試一次」防禦，同樣暴露在 gemma reasoning-channel 間歇失敗下 | S | 隨手可做 |
+| R3 | ~~**Lens tally 路徑補 retry**~~ ✅ 2026-06-13 — `_tally_instances` LLM 去重路徑補上與 extraction 同款的「無 object 重試一次、再 fallback 本地去重」防禦 + 守護測試 | S | 完成 |
 | R4 | **Reasoning-channel 強健性盤點**：全面盤點 `_complete_text` 的 JSON 端呼叫（extract_claims、adjudicate_claims、generate_part_digest、translate_tags…）哪些缺「解析失敗重試」，統一防禦模式 | M | batch-3 證實此失敗模式發生率不低（單日 live 三發中兩發）；建議下一批 |
 | R5 | **LENS_QUOTE_MIN_GROUNDED_RATIO 調參**：0.8 是拍腦袋預設；翻譯文章的引文錨定率天然偏低 | S | 等 lens verdict 數據累積幾週後用實際分佈校準 |
+| R6 | **檢索品質漂移**：bench 100%（5月底）→ 73%（6/11+）。**已診斷（2026-06-13），非 code 回歸**：純 hybrid（vector+BM25）檢索隨索引增長碰撞加劇，cross-encoder reranker 未裝也未開（`RERANKER_ENABLED=false`、`sentence-transformers` 未安裝）。失敗模式：同一母文件 chunk 洗版（Hardy Synthesis 6 個 chunk 佔 rank 2–8），把預期文件擠到 rank 9–10。**per-doc cap 不可行**——會打爛合法依賴同文件多 chunk 的查詢（Lax-Milgram 的 top-5 正是同一本書 5 個 chunk）。Trench 對 Taylor 查詢甚至不在 top-30（embedder recall 缺口，中文查詢更明顯：弱解→Hamlet）。**真正的修法是基建決策**：裝並開 cross-encoder reranker（`_get_reranker` 已能在缺套件時優雅降級），和／或換更強的 embedder（現為 nomic-embed-text）。 | M–L | **卡在依賴決策**：reranker 需 `pip install sentence-transformers` + 下載 BAAI/bge-reranker-v2-m3（~2GB），由 Steven 拍板 |
 
 ## Resolved decisions
 
