@@ -19,7 +19,7 @@ class _RetryStubLLM:
         self.synthesis_calls = []
 
     @staticmethod
-    def _format_part_digest_for_prompt(digest):
+    def format_digest_for_prompt(digest):
         return f"DIGEST::{digest}"
 
     def generate_synthesis(self, title, part_digests, final_concepts,

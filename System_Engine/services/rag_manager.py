@@ -1041,6 +1041,57 @@ class RAGManager:
                 best = (start, candidate)
         return best[1] if best else None
 
+    def _leading_chunks_for_docs(
+        self, doc_ids: list[str], need_embeddings: bool = False
+    ) -> dict[str, dict]:
+        """Batch variant of _first_chunk_of_doc: one collection.get for many
+        doc_ids (audit R7-C). Returns {doc_id: leading-real-chunk candidate}.
+
+        Previously _dereference_facets issued one get() per facet hit, so N
+        facets pointing at M parents cost N round-trips with repeats; this
+        collapses them to a single $in query.
+        """
+        unique = [d for d in dict.fromkeys(doc_ids) if d]
+        if not unique:
+            return {}
+        try:
+            include = ["documents", "metadatas"]
+            if need_embeddings:
+                include.append("embeddings")
+            results = self.collection.get(where={"doc_id": {"$in": unique}}, include=include)
+        except Exception as e:
+            logging.debug(f"Batch facet-parent fetch failed: {e}")
+            return {}
+
+        ids = results.get("ids") or []
+        documents = results.get("documents") or []
+        metadatas = results.get("metadatas") or []
+        embeddings = results.get("embeddings") if need_embeddings else None
+
+        # Per doc_id, keep the lowest start_offset non-facet chunk (same rule
+        # as _first_chunk_of_doc).
+        best: dict[str, tuple[int, dict]] = {}
+        for i, cid in enumerate(ids):
+            meta = metadatas[i] if i < len(metadatas) else {}
+            meta = meta or {}
+            if meta.get("role") == "facet":
+                continue
+            did = meta.get("doc_id")
+            if not did:
+                continue
+            start = meta.get("start_offset", 0) or 0
+            if did not in best or start < best[did][0]:
+                candidate = {
+                    "text": documents[i] if i < len(documents) else "",
+                    "metadata": meta,
+                    "distance": 0.0,
+                    "id": cid,
+                }
+                if embeddings is not None and i < len(embeddings):
+                    candidate["embedding"] = embeddings[i]
+                best[did] = (start, candidate)
+        return {did: cand for did, (_, cand) in best.items()}
+
     def _dereference_facets(
         self,
         candidates: list[dict],
@@ -1062,6 +1113,15 @@ class RAGManager:
         Dedup: a parent already present as a direct hit wins; dangling
         facets (parent vanished) are dropped.
         """
+        # One batched fetch for every facet parent up front, instead of one
+        # collection.get per facet hit (audit R7-C).
+        facet_doc_ids = [
+            (c.get("metadata") or {}).get("doc_id")
+            for c in candidates
+            if (c.get("metadata") or {}).get("role") == "facet"
+        ]
+        parents = self._leading_chunks_for_docs(facet_doc_ids, need_embeddings)
+
         direct: list[dict] = []
         rescued: list[dict] = []
         seen: set[str] = set()
@@ -1073,9 +1133,12 @@ class RAGManager:
                     direct.append(c)
                 continue
 
-            parent = self._first_chunk_of_doc(meta.get("doc_id"), need_embeddings)
-            if parent is None:
+            base = parents.get(meta.get("doc_id"))
+            if base is None:
                 continue
+            # Copy: multiple facets can share a parent, and we stamp per-facet
+            # signals onto it (the dedup below keeps the first).
+            parent = dict(base)
             parent["distance"] = c.get("distance", 0.0)
             parent["matched_facet"] = c.get("text", "")
             rescued.append((c["id"], parent))

@@ -16,17 +16,24 @@ class FakeCollection:
 
     def __init__(self):
         self.store = {}  # id -> {"text", "meta"}
+        self.get_calls = 0
 
     def upsert(self, documents, metadatas, ids):
         for cid, doc, meta in zip(ids, documents, metadatas):
             self.store[cid] = {"text": doc, "meta": meta}
 
     def get(self, where=None, include=None, limit=None, ids=None):
+        self.get_calls += 1
         items = self.store.items()
         if ids is not None:
             items = [(cid, v) for cid, v in items if cid in set(ids)]
         if where and "doc_id" in where:
-            items = [(cid, v) for cid, v in items if v["meta"].get("doc_id") == where["doc_id"]]
+            cond = where["doc_id"]
+            if isinstance(cond, dict) and "$in" in cond:
+                wanted = set(cond["$in"])
+                items = [(cid, v) for cid, v in items if v["meta"].get("doc_id") in wanted]
+            else:
+                items = [(cid, v) for cid, v in items if v["meta"].get("doc_id") == cond]
         items = list(items)
         if limit:
             items = items[:limit]
@@ -153,6 +160,22 @@ class TestDereference:
         a = {"id": "a", "text": "A", "metadata": {}, "distance": 0.1}
         out = rag._dereference_facets([a, dict(a)], {})
         assert [c["id"] for c in out] == ["a"]
+
+    def test_many_facets_batch_into_one_get(self, tmp_path):
+        """Audit R7-C: N facets across M parents → a single collection.get,
+        not one per facet. Two parents, three facets (2→A, 1→B)."""
+        rag = _rag()
+        a_id = self._seed_parent(rag, tmp_path / "a.md", n_chunks=2)
+        b_id = self._seed_parent(rag, tmp_path / "b.md", n_chunks=1)
+        facets = [
+            {"id": f"{a_id}_facet_1", "text": "A1", "metadata": {"role": "facet", "doc_id": a_id}, "distance": 0.1},
+            {"id": f"{a_id}_facet_2", "text": "A2", "metadata": {"role": "facet", "doc_id": a_id}, "distance": 0.2},
+            {"id": f"{b_id}_facet_1", "text": "B1", "metadata": {"role": "facet", "doc_id": b_id}, "distance": 0.3},
+        ]
+        rag.collection.get_calls = 0
+        out = rag._dereference_facets(facets, {})
+        assert rag.collection.get_calls == 1                       # one batched fetch
+        assert {c["id"] for c in out} == {f"{a_id}_chunk_0_99", f"{b_id}_chunk_0_99"}  # deduped parents
 
 
 class TestContentHashSkipsFacets:

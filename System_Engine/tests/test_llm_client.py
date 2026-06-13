@@ -158,7 +158,7 @@ class TestPartDigest:
         assert result["key_points"] == ["a", "b"]
 
     def test_format_string_passthrough(self):
-        assert LLMClient._format_part_digest_for_prompt("raw text") == "raw text"
+        assert LLMClient.format_digest_for_prompt("raw text") == "raw text"
 
     def test_format_dict_emits_sections(self):
         digest = {
@@ -171,7 +171,7 @@ class TestPartDigest:
             "open_questions": [],
             "handoff": "next",
         }
-        text = LLMClient._format_part_digest_for_prompt(digest)
+        text = LLMClient.format_digest_for_prompt(digest)
         assert "### Part 2: Intro" in text
         assert "Thesis: Central claim." in text
         assert "- one" in text
@@ -180,8 +180,8 @@ class TestPartDigest:
         assert "next" in text
 
     def test_format_none_safe(self):
-        assert "(empty digest)" in LLMClient._format_part_digest_for_prompt(None)
-        assert "(empty digest)" not in LLMClient._format_part_digest_for_prompt("x")
+        assert "(empty digest)" in LLMClient.format_digest_for_prompt(None)
+        assert "(empty digest)" not in LLMClient.format_digest_for_prompt("x")
 
 
 # ── Language hint ───────────────────────────────────────────────────
