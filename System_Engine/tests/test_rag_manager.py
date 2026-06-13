@@ -474,3 +474,35 @@ class TestRAGExplainMode:
         import shutil
         shutil.rmtree(db_path, ignore_errors=True)
 
+
+
+# ── R7-C-2: public chunk accessors (insight no longer touches .collection) ──
+
+class TestPublicChunkAccessors:
+    def _rag(self):
+        rag = RAGManager.__new__(RAGManager)
+
+        class C:
+            def __init__(self): self.calls = []
+            def get(self, where=None, include=None, limit=None):
+                self.calls.append({"where": where, "include": include, "limit": limit})
+                return {"ids": [], "documents": [], "metadatas": []}
+
+        rag.collection = C()
+        return rag
+
+    def test_all_chunks_default_and_metadata_only(self):
+        rag = self._rag()
+        rag.all_chunks()
+        rag.all_chunks(include=("metadatas",))
+        assert rag.collection.calls[0]["include"] == ["metadatas", "documents"]
+        assert rag.collection.calls[0]["where"] is None
+        assert rag.collection.calls[1]["include"] == ["metadatas"]
+
+    def test_chunks_by_title_with_and_without_limit(self):
+        rag = self._rag()
+        rag.chunks_by_title("Doc A")
+        rag.chunks_by_title("Doc B", limit=5)
+        assert rag.collection.calls[0] == {"where": {"title": "Doc A"}, "include": ["metadatas", "documents"], "limit": None}
+        assert rag.collection.calls[1]["where"] == {"title": "Doc B"}
+        assert rag.collection.calls[1]["limit"] == 5
