@@ -377,20 +377,27 @@ class CounterAgent(BaseAgent):
             "}\n"
             "Return ONLY the JSON object.\n"
         )
-        try:
-            # JSON output: same template/persona opt-out as _extract_from_chunk.
-            raw = self.llm.answer_query(
-                user_prompt,
-                wiki_context="",
-                custom_instruction=system_prompt,
-                forced_template="none",
-                persona="none",
-            )
-            tally = extract_json_object(raw)
-            if tally and "total_count" in tally:
-                return tally
-        except Exception as e:
-            logging.error(f"LingLens tally pass failed: {e}")
+        # Same reasoning-channel hazard as _extract_from_chunk: gemma may emit
+        # the reply into the reasoning channel without the JSON object. Retry
+        # once before falling back to the cruder local dedup.
+        for attempt in range(2):
+            try:
+                # JSON output: same template/persona opt-out as _extract_from_chunk.
+                raw = self.llm.answer_query(
+                    user_prompt,
+                    wiki_context="",
+                    custom_instruction=system_prompt,
+                    forced_template="none",
+                    persona="none",
+                )
+                tally = extract_json_object(raw)
+                if tally and "total_count" in tally:
+                    return tally
+                logging.warning(
+                    f"LingLens tally: reply had no usable JSON object (attempt {attempt + 1})."
+                )
+            except Exception as e:
+                logging.error(f"LingLens tally pass failed (attempt {attempt + 1}): {e}")
 
         return self._build_tally_locally(concept, all_instances)
 

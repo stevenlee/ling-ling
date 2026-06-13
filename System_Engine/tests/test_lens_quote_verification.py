@@ -80,12 +80,15 @@ class TestJsonCallsOptOutOfTemplateAxis:
     """
 
     class _CapturingLLM:
-        def __init__(self, reply="[]"):
+        def __init__(self, reply="[]", replies=None):
             self.reply = reply
+            self.replies = list(replies) if replies is not None else None
             self.calls = []
 
         def answer_query(self, *args, **kwargs):
             self.calls.append(kwargs)
+            if self.replies is not None:
+                return self.replies.pop(0) if self.replies else ""
             return self.reply
 
     def _agent(self, llm):
@@ -106,6 +109,45 @@ class TestJsonCallsOptOutOfTemplateAxis:
         self._agent(llm)._tally_instances("c", instances, 1)
         assert llm.calls[0]["forced_template"] == "none"
         assert llm.calls[0]["persona"] == "none"
+
+    def test_extract_from_chunk_retries_once_on_no_array(self, monkeypatch):
+        # Reasoning-channel miss (no JSON) on attempt 1, recovers on attempt 2.
+        monkeypatch.setattr(CounterAgent, "_load_prompt", lambda self, name: "")
+        llm = self._CapturingLLM(replies=[
+            "thinking out loud, no array here",
+            '[{"quote": "found", "confidence": "high"}]',
+        ])
+        out = self._agent(llm)._extract_from_chunk("c", "chunk", 1, 1, "medium")
+        assert len(llm.calls) == 2
+        assert len(out) == 1 and out[0]["quote"] == "found"
+
+    def test_extract_from_chunk_no_retry_on_genuine_empty(self, monkeypatch):
+        # A literal [] is a real zero, not a parse miss — must not retry.
+        monkeypatch.setattr(CounterAgent, "_load_prompt", lambda self, name: "")
+        llm = self._CapturingLLM(reply="[]")
+        out = self._agent(llm)._extract_from_chunk("c", "chunk", 1, 1, "medium")
+        assert len(llm.calls) == 1
+        assert out == []
+
+    def test_tally_retries_once_then_recovers(self):
+        # >3 instances → LLM tally path; first reply has no object, second works.
+        llm = self._CapturingLLM(replies=[
+            "no json object here",
+            '{"total_count": 2, "instances": [{"id": 1, "quote": "a"}, {"id": 2, "quote": "b"}]}',
+        ])
+        instances = [{"quote": f"q{i}"} for i in range(4)]
+        tally = self._agent(llm)._tally_instances("c", instances, 1)
+        assert len(llm.calls) == 2
+        assert tally["total_count"] == 2
+
+    def test_tally_falls_back_to_local_after_two_misses(self):
+        # Both attempts miss → cruder local dedup (4 distinct quotes survive).
+        llm = self._CapturingLLM(replies=["nope", "still nope"])
+        instances = [{"quote": f"q{i}", "confidence": "low"} for i in range(4)]
+        tally = self._agent(llm)._tally_instances("c", instances, 1)
+        assert len(llm.calls) == 2
+        assert tally["total_count"] == 4  # local fallback kept all distinct quotes
+        assert "deduplicated by exact quote" in tally["methodology_note"]
 
 
 class TestFormatQuoteVerification:
