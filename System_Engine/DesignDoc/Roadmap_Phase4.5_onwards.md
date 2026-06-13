@@ -148,6 +148,22 @@ A3 + A4 are orthogonal — slot them in opportunistically.
 | R5 | **LENS_QUOTE_MIN_GROUNDED_RATIO 調參**：0.8 是拍腦袋預設；翻譯文章的引文錨定率天然偏低 | S | 等 lens verdict 數據累積幾週後用實際分佈校準 |
 | R6 | **檢索品質漂移**：bench 100%（5月底）→ 73%（6/11+）。**已診斷（2026-06-13），非 code 回歸**：純 hybrid（vector+BM25）檢索隨索引增長碰撞加劇，cross-encoder reranker 未裝也未開（`RERANKER_ENABLED=false`、`sentence-transformers` 未安裝）。失敗模式：同一母文件 chunk 洗版（Hardy Synthesis 6 個 chunk 佔 rank 2–8），把預期文件擠到 rank 9–10。**per-doc cap 不可行**——會打爛合法依賴同文件多 chunk 的查詢（Lax-Milgram 的 top-5 正是同一本書 5 個 chunk）。Trench 對 Taylor 查詢甚至不在 top-30（embedder recall 缺口，中文查詢更明顯：弱解→Hamlet）。**真正的修法是基建決策**：裝並開 cross-encoder reranker（`_get_reranker` 已能在缺套件時優雅降級），和／或換更強的 embedder（現為 nomic-embed-text）。 | M–L | **卡在依賴決策**：reranker 需 `pip install sentence-transformers` + 下載 BAAI/bge-reranker-v2-m3（~2GB），由 Steven 拍板 |
 
+## R7 — 全模組稽核後續（2026-06-13，見 [SystemEngine_audit_20260613.md](SystemEngine_audit_20260613.md)）
+
+Workflow 稽核（10 reader → dedup → 對抗式驗證 → 彙整）。99 raw → **41 confirmed**（全 10 子系統皆已驗證；第二輪 resume 補完前次因 session 額度中斷的 5 塊）。
+
+**已處理（batch-A 資料完整性）**：B1 空陣列偵測、B2 lens RAG fallback、A2 同名 scoped 清理 → 已修；A1 (Synthesis) 命名 → 確認為慣例、文件化。
+
+**剩餘批次**：
+
+| 批次 | 內容 | 風險 |
+|---|---|---|
+| R7-B | LLM fan-out 並行化：lens 逐 chunk(P1)、`digest_sources`(P2)、`_expand_seed`(P3) | 中（ThreadPool + flag） |
+| R7-C | ChromaDB/FS 收斂 + adapter 邊界：facet deref 批次、vault filename index、`format_digest_for_prompt` 公開化、insight 繞過 `rag.collection` | 低–中 |
+| R7-D | 純清理：signals/pair-key helper 抽取、多語 falsifier、廉價 perf | 低 |
+| R7-E | **新確認的 correctness（5 塊補驗證後）**：`profile_manager` 大小寫 get() 全 miss、`maintenance_scheduler:389` set_busy 搶占、`prompt_watcher:81` sleep 阻塞 dispatch thread、`trace_store` run() finally 遮蔽原例外、`parser:431` 空 label 節點被丟、`parser:56` 無尾換行漏 frontmatter | 低–中，多為獨立 bug |
+| R7-F | **新確認的 perf（maintenance/storage）**：`load_all_pages` 每夜 5–6 pass 重複解析 → 共用 per-cycle cache、`trace_store` 缺 ts 索引、`cortex_consolidation` N+1 embedding、`vault_utils` 每檔讀兩次 | 中，部分需小架構調整 |
+
 ## Resolved decisions
 
 1. **4.5 demo pipeline**: synthesize → critique, **fixture/dry-run only**. Must not touch `IngestionPipeline._write_synthesis` or any production private method. All capability invocations go through named adapters in a registry, not through string-matching against existing code paths.

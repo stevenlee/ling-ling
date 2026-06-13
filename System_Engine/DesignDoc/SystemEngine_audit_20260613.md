@@ -2,178 +2,223 @@
 
 ## 1. 摘要
 
-本次稽核確認 **24 項** 問題（已通過獨立 skeptic 驗證），另有 33 項低優先未驗證項目供參考。
+**確認發現（45 項，已由獨立 skeptic 驗證）依維度與嚴重度分布：**
 
-**已確認問題分布**
-
-| Dimension | High | Medium | 小計 |
+| 維度 dimension | High | Medium | 小計 |
 |---|---|---|---|
-| correctness | 4 | 3 | 7 |
-| performance | 4 | 7 | 11 |
-| architecture | 0 | 2 | 2 |
-| simplification | 0 | 3 | 3 |
-| **合計** | **8** | **15** | **23** |
+| correctness | 7 | 6 | 13 |
+| performance | 5 | 12 | 17 |
+| architecture | 0 | 3 | 3 |
+| simplification | 0 | 5 | 5 |
+| **合計** | **12** | **26** | **38 confirmed** |
 
-> 註：原始確認清單共 24 筆，其中 `_dereference_facets`、`embedding_cache` 兩項經 skeptic 下修嚴重度（見效能專節）；下表以 skeptic 校正後的 severity 為準呈現。
+（另有 33 項 low-severity 未驗證，僅列於第 5 節供參。）
 
-**最重要的一個結論**：correctness 類的高優先問題（不是效能）才是首要風險——`ingest_to_wiki` 的 `(Synthesis)` 標題誤標（`ingestion_pipeline.py:403`）、`add_document` 的同名標題誤刪（`rag_manager.py:424`）、counter_agent 的 RAG fallback 把 markdown 當原文（`counter_agent.py:250`）與空陣列偵測過寬（`counter_agent.py:337`）會**靜默損毀資料與索引**，影響範圍隨時間累積且不可逆。效能問題雖多，但多數可後修；資料正確性問題應最優先處理。
-
----
-
-## 2. 🔴 高優先（已確認）
-
-### A. 索引／資料完整性（correctness）— 最優先
-
-**A1. 短文件頁面被誤加 `(Synthesis)` 後綴 — `ingestion_pipeline.py:403`**
-- **What**：`title = ... if part_info else f"{base_title} (Synthesis)"`。短文件路徑（`:107`，`part_info=None`）的標題永遠多出 ` (Synthesis)`，頁面寫到 `PAGES_DIR/base_title/"{stem} (Synthesis).md"`（`:421`），RAG 索引與 `update_wiki_index` 都記錄錯名。
-- **Why**：與 `_write_synthesis` 為同一 stem 產生的真正 synthesis 文件衝突，且**每一個短文件頁面都被永久誤標**。
-- **Fix**：改為三分支，`else base_title`；`(Synthesis)` 命名只保留在 `_write_synthesis` 內。`_write_synthesis` 目前不經 `ingest_to_wiki`，移除 else 後綴不會回歸真正的 synthesis 頁面。
-
-**A2. `add_document` 對每次寫入都 `delete_document(title)`，會誤刪同名文件 — `rag_manager.py:424-425`**
-- **What**：依 `doc_id` 刪除後（`:424`）又無條件 `delete_document(title)`，後者執行 `collection.delete(where={'title': title})`（`:1176`）。
-- **Why**：兩篇同名（如 `Introduction`/`Overview`）的筆記中，重建其一會**靜默刪掉另一篇的 chunks**。
-- **Fix**：移除 hot path 上的 `delete_document(title)`；`doc_id` 刪除已涵蓋自身 chunks。legacy 清理改為一次性 migration，僅針對缺 `doc_id` 的列：`where={"$and":[{"title":title},{"doc_id":{"$exists":False}}]}`。注意原建議的 `{'doc_id':{'$ne':doc_id}}` 仍會誤刪有 doc_id 的兄弟文件，務必改用「不存在 doc_id」條件。
-
-### B. Lens / Counter 萃取正確性（correctness）
-
-**B1. 空陣列偵測使用去空白字串比對，遮蔽 parse 失敗 — `counter_agent.py:337`**
-- **What**：`if instances or "[]" in _WS_RE.sub("", raw):`。去除所有空白後做 substring 比對，`{"key":[]}`、markdown 表格、code block 等任何含連續 `[]` 的回覆都會 match 並抑制 retry。
-- **Why**：真正的 JSON parse 失敗被誤判為「LLM 宣告空集合」，retry 被吃掉，結果靜默為空。
-- **Fix**：要求**整段**去空白後等於 `[]`：`_ws_collapsed = _WS_RE.sub("", raw); if instances or _ws_collapsed == "[]":`。可接受 `[ ]`，排除 `{"key":[]}`／markdown 誤判。若模型常以 ```json fence 包裹，先剝除 fence 再比對。原建議的 `re.search(r'\[\s*\]', raw)` 無法修掉巢狀 `{"x":[]}`，不採用。
-
-**B2. RAG fallback 把格式化 markdown 當 `article_text` — `counter_agent.py:250`**
-- **What**：`results.append(("(RAG result)", rag_results[0], ""))`。`query_similar_notes` 回傳的是已格式化 markdown（`### [來自筆記: {title}]\n{doc}`），卻被當原文餵進 `TextSplitter.split_text` 與萃取 prompt。
-- **Why**：注入的 `### ` heading 會污染 grounding 錨點與抽出的 quotes；且 `top_k=1` 不論文章長度只取單一 chunk。
-- **Fix**：改用 dict API：`rag_results = self.rag.query_notes(user_directive, top_k=1)`，append `rag_results[0]["text"]`，title 取 `metadata.get("title")` 取代字面 `"(RAG result)"`。或在 append 前剝除注入的 header line。可考慮提高 `top_k` 或 chunk-join 避免多 chunk 文章被截斷。
-
-### C. 高影響效能（performance）— 詳見第 4 節
-
-**C1. `digest_sources` 每個 source 串行一次 LLM 呼叫 — `builtin_adapters.py:358-385`**
-- 以 `ThreadPoolExecutor` 並行各 section 的 digest，依原序收集；保留每 source 的 try/except；延遲由「總和」降為「最慢單一 source」。Adapter contract 是 `Callable[[dict],dict]`，外層無法並行化，**必須在內部做**。
-
-**C2. counter_agent 逐 chunk 串行 LLM — `counter_agent.py:171`**
-- `_run_single_count` 對每 chunk 串行 `answer_query`，50-chunk 文章光萃取就 100–200s。用 `ThreadPoolExecutor`（`max_workers≈4`）並行，依 chunk index 重組以維持 dedup 行為，旗標 `LENS_PARALLEL_CHUNKS` 可關閉。matrix 路徑（articles × concepts）效益加乘。`:175-190` 的逐 chunk 進度回報需調整。
-
-**C3. `_expand_seed` 逐 winner 串行 embedding+RAG+LLM — `insight_agent.py:1433`**
-- 在 `_expand_winners`（`:1095-1100`）以 `ThreadPoolExecutor` 並行各獨立的 expansion，注意維持輸出排序與 `ui.set_status` thread-safety。**捨棄** prompt hoist 建議——已命中 `_PROMPT_CACHE`，無重複磁碟讀取。
-
-> 註：原列為 high 的 `_resolve_target_doc` N+1（`insight_agent.py:1287`）、`_original_source_title` I/O（`counter_agent.py:771`）兩項，經 skeptic 校正為 low/medium，移至效能專節說明。
+**最重要的 takeaway：** 真正會造成資料/行為錯誤的高優先 correctness bug 集中在三處 — 並行控制（`maintenance_scheduler.py:389` 的 `set_busy` 搶佔、`prompt_watcher.py:81` 阻塞 dispatch thread）、靜默資料遺失（`ingestion_pipeline.py:403` 短文標題誤掛 `(Synthesis)`、`rag_manager.py:424` 同名文件互刪 chunk、`parser.py:431` 空 label 節點被刪、`profile_manager.py` 大小寫 key miss、`trace_store.py` finally 遮蔽原始例外）。**這些應先於所有效能優化處理**，因為它們在正常運行下就會悄悄毀損資料或狀態，而多數效能項在單機/retention-bounded 規模下其實是 low/medium 等級的 cleanup。
 
 ---
 
-## 3. 🟡 中優先（已確認，依主題分組）
+## 2. 🔴 高優先（confirmed high）
 
-### 效能（performance）
+### A. 並行與排程正確性（race / blocking）
 
-- **`rag_manager.py:1069` `_dereference_facets` 無批次／memoize**（skeptic 下修為 medium）：對每個 facet hit 呼叫 `_first_chunk_of_doc`，後者以 `collection.get(where={'doc_id':...})` 抓全文。8 個 facet 指向 3 個 parent 即 8 次往返，5 次重複。Fix：先收集 unique `doc_id`，單次 `where={'doc_id':{'$in':unique_ids}}` 批抓並 group；至少在呼叫內以 local dict memoize 消除重複往返。
-- **`rag_manager.py:763` MMR 路徑重複 embed query**：`diversity>0` 時 `self.ef([query_text])[0]` 重算 query 向量。因 `CachedEmbeddingFunction` 預設開啟，通常是 SQLite cache hit 而非網路往返。Fix：`need_embeddings` 時預先算一次 `q_emb`，以 `query_embeddings=[q_emb]` 傳入 `collection.query`（`:606`）並於 `:765` 重用。cache 開啟時現況已近最佳，屬低/選用優先。
-- **`bm25_index.py:63` rebuild 全量載入文本**：`_build()` 以 `collection.get(include=['documents'])` 無上限拉全部文本。Fix：增量維護 `_corpus_tokens`/`_chunk_ids`，add/delete 時 patch；`BM25Okapi` 仍須重建但省下全量 fetch 與重 tokenize。已有 lazy coalescing，建議僅在 10k+ chunk vault profiling 顯示明確成本時才做。
-- **`ingestion_pipeline.py:930` part file 寫後立即讀回**：`:422` 寫入後 `_append_part_digest_to_note`（`:930`）又讀回再重寫，N-part 文件 2N 次 I/O。Fix：讓 `ingest_to_wiki` 回傳組好的 body，於 `_process_parts` append digest 後單次 `write_text`。**勿**採「把 digest 傳入 `ingest_to_wiki`」變體——digest 在該呼叫回傳後才算出。屬低影響。
-- **`ingestion_pipeline.py:167` 短文件多一次 LLM 呼叫填 facet index**：`_index_short_doc_facets` 無條件 `generate_part_digest`，疊在既有 `generate_entity_page` 上，高量短文件 ingestion 成本翻倍。Fix（首選）：擴充 entity-page template 回傳結構化 `thesis`/`key_points`，餵 `_facets_from_digest` 零額外呼叫；否則須改 template，純欄位重用在現有 template 下會幾乎都落到 fallback。
-- **`insight_agent.py:1705` `_get_tag_cluster_context` 每 chunk 解析 tags 兩次**：`:1694-1698` 與 `:1705-1708` 對同一 metadatas 各 parse 一次，10k chunk 即 20k 次。Fix：`parsed = [self._parse_stored_tags(m.get("tags","")) for m in ...]` 解析一次重用。僅在 `target_tag is None` 路徑發生，屬低嚴重度 cleanup。
+**`watchers/maintenance_scheduler.py:389` — `set_busy(True)` 搶佔並行 owner**
+`_run_task` 無條件呼叫 `global_busy_state.set_busy(True)`，未檢查 flag 是否已被持有。若 vault watcher / prompt watcher 已持有 busy state，maintenance task 會靜默接管；原 owner 的 `finally` 隨後 `set_busy(False)`，在 maintenance task 仍執行中提前釋放守衛，允許第二個並行 owner。
+**修法：** 在進入 try 前以 `try_set_busy()` 取得守衛，回傳 False 時直接 `return`（不進入 try/finally，否則 finally 的 `set_busy(False)` 會釋放他人的鎖）。可順帶移除 line 347 的 `idle_required/is_busy()` 預檢，讓 `try_set_busy()` 成為唯一權威 gate（涵蓋 `idle_required=False` 的 `trace_prune_daily`）。
 
-### 正確性（correctness）
+**`watchers/prompt_watcher.py:81` — `time.sleep(1)` 阻塞 watchdog dispatch thread**
+`_handle_event` 在 watchdog observer thread 上 `time.sleep(1)`；單一 dispatch thread 被阻塞一整秒，期間 OS 緩衝後續事件，快速建檔時造成事件延遲/合併。隨後 `_drain_queue()` 又在同 thread 同步持有 busy state。
+**修法：** 移除 sleep；將 `_drain_queue()`/`process_prompt()` 移到專用 worker thread，`_handle_event` 只 enqueue 後即返回。若仍需 FS 穩定延遲，在 worker dequeue 後 re-check `filepath.exists()`，不要阻塞 dispatch thread。
 
-- **`llm_client.py:1565` `_assess_falsifiability_once` 硬編 Traditional Chinese**：prompt 不論 `settings.OUTPUT_LANGUAGE` 都產 `falsifier_zh`（繁中），Simplified/Japanese 部署會靜默產生錯誤 gloss（`:1589` 接到英文 falsifier 後）。Fix：(a) 改用 `self._get_lang_hint()` 並改名 `falsifier_localized`，當語言為英文時不加 gloss；或 (b) 從 JSON contract 移除該欄、由 render 層在地化。
-- **`insight_agent.py:1372` `_build_targeted_pairs` fallback 忽略 exclude set**：`other_docs` 與 `pairs` 皆空時 append `(target, random.choice(all_docs))` 未檢查 exclude，小 vault 會回傳已探索過的 pair，破壞跨輪 dedup。Fix：以同樣 idiom 檢查 exclude，且從 `other_docs`（或排除 self 的 pool）取樣；若小 vault 確實無新 pair，回傳空可接受（caller `:1043` 已視空為停止條件）。
+### B. 靜默資料遺失 / 損毀
 
-### 架構（architecture）
+**`System_Engine/services/ingestion_pipeline.py:403` — 短文頁面被誤命名為 `"{stem} (Synthesis)"`**
+短文路徑（line 107，`part_info=None`）走 else 分支，標題永遠加上 ` (Synthesis)` 後綴並寫入 `PAGES_DIR / base_title / "{stem} (Synthesis).md"`，RAG index 與 `update_wiki_index` 都記錄此誤名，會與後續同 stem long-doc 的真正 synthesis 文件碰撞，且每個短文頁面永久標籤錯誤。
+**修法：** 改為 `title = f"{base_title} (Part {part_info['current']})" if part_info and part_info.get('current') else base_title`，`(Synthesis)` 命名只保留在 `_write_synthesis` 內（它不經 `ingest_to_wiki`，故移除 else 分支不會回歸真正 synthesis 頁）。
 
-- **`ingestion_pipeline.py:811` 跨抽象邊界呼叫 LLM client 私有方法**：`self.llm._format_part_digest_for_prompt(d)`。Fix：將既有 `@staticmethod _format_part_digest_for_prompt` 改名為公開 `LLMClient.format_digest_for_prompt`（已是 static、無 self 依賴），更新三處呼叫：`llm_client.py:1089`、`ingestion_pipeline.py:811`、`scratch/bench_synthesis_ab.py:42`。**勿**把邏輯複製進 pipeline（synthesis 與 critique 須格式一致）。
-- **`insight_agent.py:1111` 直接存取 `rag.collection`，繞過 RAG 服務層**：此 pattern 重複於 `:1202,:1670,:1684,:1729`。Fix：在 `RagManager` 新增公開方法（沿用既有命名風格，如 `get_all_metadata()`、`get_chunks_by_title()`、`get_all_documents_with_metadata()`），讓 InsightAgent 不再依賴 ChromaDB result-dict 形狀。
+**`System_Engine/services/rag_manager.py:424` — `add_document` 每次都 `delete_document(title)`，誤刪同名他文件的 chunk**
+line 424-425 在以 `doc_id` 刪除後，又無條件呼叫 `delete_document(title)`，後者以 `collection.delete(where={'title': title})`（line 1176）刪除。兩篇皆名為 'Introduction'/'Overview' 的筆記，重建第一篇時會靜默刪掉第二篇既有 chunk。
+**修法：** 移除 hot path 的 `delete_document(title)`（doc_id 刪除已涵蓋自身 chunk）。legacy title-only chunk（無 doc_id 的舊資料）改為一次性 migration，scope 在 `where={"$and":[{"title":title},{"doc_id":{"$exists":False}}]}`。注意原建議的 `{'doc_id':{'$ne':doc_id}}` 仍會誤刪有 doc_id 的 sibling，須改用「缺 doc_id」條件。
 
-### 簡化（simplification）
+**`core/parser.py:431` — `_quote_labels_in_line` 靜默刪除空 label 節點定義**
+label 空白（如 `A[]`）時 `if stripped:` 為 False，node-ID 前綴與 shape 括號都未 append 到 `out`，但 `matched=True` 且 `i` 已前進，節點定義被靜默刪除（`A[]` 是合法 Mermaid）。
+**修法：** 為 `if stripped:` 補 else，在 `i = close_at + len(closer)` 前 `out.append(code_part[i:close_at + len(closer)])` 原樣輸出，`changed` 維持 False。
 
-- **`insight_agent.py:140` Signals 序列化區塊在兩處逐字重複**：`generate_insight`（`:140-150`）與 `generate_full_insight`（`:229-241`）byte-for-byte 相同。Fix：抽 `_compute_signals_meta(self, content, target_titles) -> dict`（含 flag 檢查），兩處呼叫 `.update(...)`。
-- **`insight_agent.py:1048` pair-key 構造重複五次**：`tuple(sorted([x["title"], y["title"]]))` 出現於 `:1048,:1233,:1348,:1361,:1370`。Fix：加 `@staticmethod _pair_key(a,b)`，五處全部改用。
+**`System_Engine/services/profile_manager.py` — profile key 以原始大小寫存、以 lowercase 查，mixed-case stem 必 miss**
+`reload()`（line 160）以 `spec.name = path.stem`（原始 stem）存入 `self._specs`，`get()`（line 165）以 `.strip().lower()` 查。`Book.md` 存為 `'Book'` 卻查 `'book'`，保證 miss。
+**修法：** 存入時正規化 key：`self._specs[spec.name.lower()] = spec`（line 160）；保留 `spec.name` 為可讀 stem 供 `selection_options()` 顯示。可額外對 lowered key 碰撞發 warning。
+
+**`System_Engine/services/trace_store.py` — `run()` finally 的 DB 例外遮蔽原始 run 例外**
+`run()` context manager（line 218-225）finally 內 `conn.execute('UPDATE runs ...')`；若 UPDATE 拋例外（DB locked / disk full），Python 以新例外取代 `yield` 的原始例外，永久遺失原錯，且 run record 永遠停在 `status='running'`。
+**修法：** 將 finally 的 UPDATE 包進自有 try/except 並 log（比照本檔 `prune_old`/`recently_retrieved_titles` 既有防禦模式），保留原始例外傳播。orphaned 'running' row 需另以啟動掃描補救（非本修法範圍）。
+
+### C. 傳輸/語意正確性（LLM client / counter）
+
+**`services/llm_client.py:829-900` — `translate_tags` 繞過 `_complete_text`，無 transport retry、trace 樣板重複**
+直接呼叫 Gemini `generate_content` / OpenAI `chat.completions.create`，繞過 `_complete_text` 與 `_complete_provider_text_with_retry`；短暫 429/503 靜默回 `{}` 而不重試，並手動重建約 35 行成功/失敗 trace 區塊。
+**修法：** 整個 body 改為單一 `_complete_json(kind="object", system_prompt=..., user_msg=f"Tags: {tags}", temperature=0.1, trace_context={"stage":"translate_tags","metadata":{"tag_count":len(tags)}})`，繼承 retry 與集中 trace/token 處理。可棄 Gemini `response_mime_type` fork（`extract_json_object` 已處理 fenced 輸出，line 900 即依賴此）；`_complete_json` parse miss 回空 dict，與現 `{}` fallback 一致。
+
+**`System_Engine/agents/counter_agent.py:337` — 空陣列檢查用去空白字串，遮蔽 parse 失敗**
+`if instances or "[]" in _WS_RE.sub("", raw):` 會讓 `{"key":[]}`、markdown 表格等任何含連續 `[]` 的回覆 short-circuit 掉 retry，誤判為「LLM 宣告空集合」而非 parse 失敗。
+**修法：** 要求整段去空白後恰等於 `[]`，而非「包含」：`_ws_collapsed = _WS_RE.sub("", raw); if instances or _ws_collapsed == "[]":`。可同時剝除前後 ```json fence 再比對。注意原建議的 `re.search(r'\[\s*\]', raw)` 仍會誤中巢狀 `{"x":[]}`，須用整串相等。
+
+**`System_Engine/agents/counter_agent.py:250` — RAG fallback 把格式化 markdown 當 article_text 傳入**
+`results.append(("(RAG result)", rag_results[0], ""))`；`query_similar_notes` 回的是已格式化 markdown（`### [來自筆記: {title}]\n{doc}`），直接餵 `TextSplitter.split_text` 與抽取 prompt，注入的 heading 會污染 quote anchor 與抽取的 quote；且 `top_k=1` 不論文章長度只取單 chunk。
+**修法：** 改用 dict API：`rag_results = self.rag.query_notes(user_directive, top_k=1)`，append `rag_results[0]["text"]`，title 取自 `rag_results[0]["metadata"].get("title")`。或剝除注入的 `### [來自筆記: ...]\n` header line。多 chunk 文章可酌量提高 top_k 或 chunk-join。
+
+### D. 高優先效能（詳見第 4 節）
+
+- `services/builtin_adapters.py:367` — `digest_sources` 每 source 一次序列 LLM 呼叫，無並行（真高優先：直接影響使用者等待延遲）。
+- `maintenance/cortex_consolidation.py` — `load_all_pages` 在每個 nightly pass 各自呼叫，整個 Cortex/ 每晚重解析 5-6 次。
+- 其餘原列為 high 但 skeptic 重分級為 low/medium 的（`rag_manager.py:1069`、`embedding_cache.py:37`、`insight_agent.py:1287`、`counter_agent.py:771`），見第 4 節說明。
 
 ---
 
-## 4. ⚡ 效能專節（所有 performance 確認項彙整）
+## 3. 🟡 中優先（confirmed medium，依主題分組）
 
-依「影響 ÷ 成本」與相依性建議的處理順序：
+### 主題一：correctness（語意/邊界）
 
-| # | 位置 | 問題 | 粗估影響 | 校正 severity |
-|---|---|---|---|---|
-| P1 | `counter_agent.py:171` | 逐 chunk 串行 LLM | **極高**：50-chunk 文章萃取 100–200s → 並行後約降至 ~1/4（max_workers=4），matrix 路徑加乘 | high |
-| P2 | `builtin_adapters.py:358` | `digest_sources` 串行 LLM | **高**：延遲從 N 個 source 總和降為最慢單一 source | high |
-| P3 | `insight_agent.py:1433` | `_expand_seed` 串行 embed+RAG+LLM | **高**：9×(embed+search+LLM) → 並行後接近單回合延遲 | high |
-| P4 | `rag_manager.py:1069` | facet deref 無批次 | 中：8→1 次 ChromaDB 往返（受 candidate pool 上限約束） | medium |
-| P5 | `insight_agent.py:1287` | `_resolve_target_doc` 重複 `.get()` | 低：受 4 個分數階梯約束，最多 3 次浪費（通常 0–1） | low（原列 high） |
-| P6 | `counter_agent.py:771` | `_original_source_title` 反覆 FS I/O | 低：每 report 一次的 stat/glob，per-instance 重解析 | low（原列 high） |
-| P7 | `counter_agent.py:279` | 每次 title-miss 全 vault `rglob` | 中：O(M×N)，大 vault 數萬 stat → 建一次 filename→path index 降為 O(1) | medium |
-| P8 | `ingestion_pipeline.py:167` | 短文件多一次 digest LLM | 中：高量 ingestion 成本翻倍（需 template 改動才能根治） | medium |
-| P9 | `rag_manager.py:763` | MMR 重複 embed query | 低：cache 開啟時僅省一次 SQLite lookup+sha256 | medium→low |
-| P10 | `bm25_index.py:63` | rebuild 全量 fetch | 中：O(N) IPC fetch + 重 tokenize（已有 lazy coalescing，profiling 驅動） | medium |
-| P11 | `ingestion_pipeline.py:930` | part file 寫後讀回 | 低：剛寫入、cache-resident 小檔，被 per-part LLM 延遲掩蓋 | medium→low |
-| P12 | `insight_agent.py:1705` | tags 解析兩次 | 低：cheap string split，被全量 fetch 掩蓋 | medium→low |
+- **`services/llm_client.py:1565` — `_assess_falsifiability_once` 在多語 codebase 硬編 Traditional Chinese。** prompt 強制 `falsifier_zh` 為「繁體中文」而不看 `settings.OUTPUT_LANGUAGE`，簡中/日文部署產出錯誤 gloss（line 1589 append）。修法：改用 `self._get_lang_hint()` 並更名為中性 `falsifier_localized`，或移除 localized 欄位改於 render 層處理；當語言為英文或已相符時 guard 不加 gloss。
+- **`System_Engine/agents/insight_agent.py:1372` — `_build_targeted_pairs` 最終 fallback 用 `random.choice(all_docs)` 忽略 exclude set。** 小型 vault 可能回傳前輪已探索過的 pair，破壞跨輪去重。修法：從 `other_docs`（或排除 self 的 `all_docs`）取樣，並以 `_pair_key` 檢查不在 exclude 才 append；全部探索完回空亦可（caller line 1043 視無 pair 為停止條件）。
+- **`maintenance/cortex_decay_pass.py:211-215` — revalidation sources 為空時靜默 `continue`，fading page 既未強化也未懲罰。** 未寫 `revalidated` timestamp，導致該頁每晚被重選，空耗 quota。修法：在 `if not contents: continue` 前先寫 `observed.setdefault(page.claim_id, {})['revalidated'] = _now_iso()`，讓 cooldown 推進；exception path 是否同樣前移視 transient 失敗是否該提早重試而定。
+- **`core/parser.py:56` — `parse_markdown_metadata` 在檔案結尾 `---` 後無換行時漏抓 frontmatter。** `_FRONTMATTER_RE` 要求閉合 `---` 後有字面 `\n`，無尾換行的檔案完全 miss，所有 frontmatter YAML key 遺失。修法：pattern 改 `r'^---\s*\n(.*?)\n---\s*(?:\n|$)'`（比照 `vault_utils._FRONTMATTER_NL_RE`、`config._FRONTMATTER_RE`）。
 
-**建議順序**：先攻 **P1→P2→P3**（三個串行 LLM fan-out，user-visible 延遲降幅最大，互相獨立可平行開工，各自旗標保護）。其次 **P4、P7**（ChromaDB / FS 往返收斂，中等成本中等收益）。**P5、P6、P9、P11、P12** 為廉價 cleanup，可併入相鄰批次順手處理。**P8、P10** 屬 profiling-driven，需 template/索引結構改動，建議排在有量測數據後再做。
+### 主題二：architecture（抽象邊界）
+
+- **`System_Engine/services/ingestion_pipeline.py:811` — `_run_synthesis_critique` 跨抽象邊界呼叫 LLM client 私有方法 `_format_part_digest_for_prompt`。** 修法：將該 `@staticmethod` 更名為 public `LLMClient.format_digest_for_prompt`，更新 call sites（`llm_client.py:1089`、`ingestion_pipeline.py:811`、`scratch/bench_synthesis_ab.py:42`）；勿把格式邏輯複製進 pipeline（synthesis 與 critique 須一致格式）。
+- **`System_Engine/agents/insight_agent.py:1111` — `_fetch_all_title_meta` 等直接 `rag.collection.get(...)`，繞過 RAG service 層。** 同型態重複於 line 1202、1670、1684、1729。修法：在 `RagManager` 加 public 包裝（如 `get_all_metadata()`、`get_chunks_by_title(...)`、`get_all_documents_with_metadata()`，命名比照既有 `get_all_indexed_titles` 風格），replace 全部 call sites，解耦對 ChromaDB result-dict 形狀的依賴。
+- **`core/vault_utils.py:321` — `update_wiki_index` 接收從不使用的 `filepath`/`title` 參數，API 誤導。** 兩參數 body 內未被引用，函式永遠做 full rglob 全掃。修法：移除 dead 參數，更新 callers（`ingestion_pipeline.py:443,553`；`vault_watcher.py:60,172,226`）；docstring 已正確標示為 full rebuild。
+
+### 主題三：simplification（重複碼）
+
+- **`System_Engine/agents/insight_agent.py:140` — signals 序列化區塊在 `generate_insight`(140-150) 與 `generate_full_insight`(229-241) 逐字重複。** 修法：抽 `_compute_signals_meta(self, content, target_titles) -> dict`（含 flag 檢查，off 時回 `{}`），兩處改 `.update(...)`。
+- **`System_Engine/agents/insight_agent.py:1048` — `tuple(sorted([a["title"], b["title"]]))` 在 1048/1233/1348/1361/1370 重複五次。** 修法：加 `@staticmethod _pair_key(a, b)`，五處全部改走它。
+- **`System_Engine/agents/counter_agent.py:770` — `_original_source_title` 與 `_resolve_original_source_path` 重複同一三步查找。** 修法：合併為 `_resolve_original_source(article_title) -> tuple[str, Path|None]`，兩者改為薄 wrapper。
+- **`watchers/prompt_watcher.py:266` — template-match regex 在 agent path(262-264) 與 default Q&A path(297-299) 逐字重複。** 修法：抽 `_extract_forced_template(lower_query)`，在分支前呼叫一次；agent arm 僅在 truthy 時設 `context["forced_template"]`。
+
+### 主題四：performance（中優先，見第 4 節彙整）
+
+`rag_manager.py:763`、`bm25_index.py:63`、`ingestion_pipeline.py:930`、`ingestion_pipeline.py:167`、`insight_agent.py:1433/1705`、`cortex_decay_pass.py:152`、`cortex_consolidation.py`（embedding scan / state 寫入）、`trace_store.py`（ts index / ContextVar）— 全數整理於第 4 節。
 
 ---
 
-## 5. 🟢 低優先（未驗證，僅供留意）
+## 4. ⚡ 效能專節
 
-- `llm_client.py` — `generate_synthesis` 重複 `_build_system_prompt` 的 template 解析（simplification）
-- `llm_client.py` — `classify_document` 是 `select_profile` 的弱化子集，可移除／統一（architecture）
-- `llm_client.py` — 多餘的 `max_tokens=None` 呼叫點（simplification）
-- `rag_manager.py` — `add_document` 的 rel_path 解析重複 `_get_doc_id` 的 try/except（simplification）
-- `rag_manager.py` — 無 embeddings 時 `_mmr_select` 靜默退化為 top-k slice（correctness）
-- `rag_manager.py` — `_first_chunk_of_doc` 與 collection internals 緊耦合（architecture）
-- `rag_manager.py` — BM25 where-filter 多一次 `collection.get` 往返驗證（performance）
-- `ingestion_pipeline.py` — `_extract_stitchable_body` 的 Path-reading 分支為 dead code（simplification）
-- `thoughtful_splitter.py` — `_section_path_at` linear scan 提早 break 漏掉後續 heading（correctness）
-- `ingestion_pipeline.py` — `_extract_stitchable_body` 重跑 `run_markdown_quality_checks`（performance）
-- `insight_agent.py` — `_cross_round_evaluation` 呼叫 `llm._get_lang_hint()` 私有方法（correctness）
-- `insight_agent.py` — `_build_targeted_pairs` 以 O(N*M) `_target_match_score` 反覆正規化標題（simplification）
-- `counter_agent.py` — `_format_matrix_report` 以相同邏輯迭代 `articles` 三次（simplification）
-- `counter_agent.py` — `_ground_tally_locations` 以全文建 fallback `_LocationIndex`（architecture）
-- `builtin_adapters.py` — source metadata dict 中 `path` 與 `loaded_chars`/`chars` 多餘欄位（correctness）
-- `planner_service.py` — `canonical_planning_patterns`／`format_capability_entry` 硬編已存於 `_BUILTIN_FACTORIES` 的 adapter 名（simplification）
-- `plan_readiness.py` — `_upstream_output_shape_warnings` 跳過不在 `expected_inputs` 的 input，遮蔽不符（correctness）
-- `pipeline_runner.py` — 非 dict adapter output 包成 `{"output": value}`，使 typed output key 在下游 placeholder 不可達（correctness）
-- `cortex_ledger.py` — 首次 ledger run 對每頁誤觸 un-merge/merge 偵測（correctness）
-- `weekly_memoir.py` — 直接 import `load_all_pages`，繞過 `cortex_store` 抽象（architecture）
-- `cortex_consolidation.py` — `_claim_hash` 每頁呼叫兩次未快取（simplification）
-- `core/parser.py` — `run_markdown_quality_checks` 為 trailing-whitespace 偵測 split 兩次（performance）
-- `core/parser.py` — `strip_body_frontmatter` 每次呼叫 inline 編譯 regex（performance）
-- `core/config.py` — `DynamicSettings.reload()` 於 lock 外讀屬性記 log（correctness）
-- `trace_store.py` — `usage_to_counts` 對 dict 輸入 getattr 先回 None（correctness）
-- `profile_manager.py` — `migrate_from_doctype` 在 `written==0` 時跳過 reload，但可能有 row 因檔案已存在被略過（correctness）
-- `md_block_scanner.py` — `_emit_simple` 與 `_emit_range` 相同，一為 dead code（simplification）
-- `cortex_store.py` — `claim_filename` 第二次碰撞靜默覆寫，僅一級 suffix fallback（correctness）
-- `vault_watcher.py` — `PAGES_DIR`/`NOTES_DIR`/`CORTEX_DIR` 每事件三處 `absolute()`（performance）
-- `maintenance_scheduler.py` — `_latest_full_insight_at` 啟動時全 dir glob（performance）
-- `prompt_watcher.py` — processed-count 以檔案不存在為條件而非處理成功（correctness）
-- `vault_watcher.py` — `VaultWatcher` 重實作 `_process_deletion` 的 orphan-sweep retry（architecture）
+所有 performance 維度 confirmed 發現彙整，含相對成本與建議處理順序。注意：多項在單機 / cache-on / retention-bounded 規模下被 skeptic 降級。
+
+| # | file:line | 真實影響 | 重分級 |
+|---|---|---|---|
+| P1 | `builtin_adapters.py:367` | 每 source 一次序列 LLM 呼叫；5 source = 5 次序列往返，直接疊加使用者等待延遲 | **真 high** |
+| P2 | `counter_agent.py:171` | `_run_single_count` 每 chunk 一次序列 LLM；50-chunk 文章僅抽取就 100-200s；matrix path 加乘 | **真 high-ish**（最大使用者體感） |
+| P3 | `cortex_consolidation.py` (load_all_pages) | 整個 Cortex/ 每晚被 5-6 個 pass 各自重解析（500 頁 ~2MB I/O + YAML/regex ×5-6） | high → 易修、低風險 |
+| P4 | `insight_agent.py:1433` | `_expand_seed` 每 winner 一次 embed+RAG+LLM，序列；3×3=9 次阻塞往返 | medium，可平行化 |
+| P5 | `rag_manager.py:1069` | `_dereference_facets` 每 facet 一次 `collection.get`（8 facet→3 parent = 5 次冗餘 full-doc fetch） | high → **medium**（受 candidate pool 上限） |
+| P6 | `insight_agent.py:1287` | `_resolve_target_doc` 掃 title_meta 時多次 `_doc_from_rag_title` | high → **low**（僅 4 score tier，最多 ~3 次冗餘） |
+| P7 | `embedding_cache.py:37` | 每次 `_batch_get/_batch_put` 開新 SQLite 連線 | high → **low/medium**（miss path 的 embedding 呼叫才是主成本；且須 thread-local） |
+| P8 | `cortex_consolidation.py` (cosine scan) | 每新 claim 對全頁 O(N) Python cosine；N=500,C=50→25k ops | medium（非 N+1，embedding 有 cache） |
+| P9 | `cortex_consolidation.py` (state 寫入) | 迴圈內每 insight 寫整份 state（含 embeddings），預設 max_insights=10 → ~10 次冗餘序列化 | medium |
+| P10 | `cortex_decay_pass.py:152` | state file 被讀兩次（`_load_state` + `load_params`） | medium，trivial 修 |
+| P11 | `bm25_index.py:63` | rebuild 全 `collection.get(include=['documents'])` 載入全文進 RAM | medium（lazy coalesce 已緩解，須 profiling 佐證） |
+| P12 | `rag_manager.py:763` | MMR path `self.ef([query_text])` 重複 embedding | medium → **low**（cache-on 時是 SQLite hit，非 API call） |
+| P13 | `ingestion_pipeline.py:930` | part 檔寫後立即讀回 append digest（2N I/O） | medium → **low**（剛寫、cache-resident 小檔，被 per-part LLM 延遲掩蓋） |
+| P14 | `ingestion_pipeline.py:167` | 每短文額外一次 `generate_part_digest` LLM 呼叫填 facet index | medium（須 template 改動才能真省） |
+| P15 | `insight_agent.py:1705` | `_get_tag_cluster_context` 每 chunk parse tags 兩次 | medium → **low**（僅 no-target path；cheap string split） |
+| P16 | `counter_agent.py:771` | `_original_source_title` 每 instance FS I/O，O(instances) 次 | medium（per-article 快取一次即可） |
+| P17 | `counter_agent.py:279` | 每 title-miss 對 PAGES_DIR 無上限 rglob，O(M×N) | medium（建 filename→path index 一次） |
+| P18 | `trace_store.py` (ts index) | 四表時間窗查詢無 ts index，full scan | medium → low（retention-bounded，便宜保險） |
+| P19 | `trace_store.py` (ContextVar) | `_CURRENT_TRACE_IDS` tuple append O(n²) 字串複製 | **micro，非真效能問題** |
+
+**建議處理順序（投報比優先）：**
+1. **P1、P2** — 並行化 `digest_sources` 與 `_run_single_count`（`ThreadPoolExecutor`, bounded `max_workers`，config flag `LENS_PARALLEL_CHUNKS`，結果按 index 重組），對使用者體感延遲影響最大。
+2. **P3、P10、P9** — Cortex nightly I/O：orchestrator 載一次 pages 並 thread 進各 pass；`load_params(parsed=state.get('params'))` 免二次讀；移除迴圈內 state 寫入。低風險、易驗證。
+3. **P5、P16、P17** — 批次/快取式的單機 I/O（facet dereference 批 `$in`、per-article 解析來源一次、vault filename index）。
+4. **P4、P8** — 平行化 `_expand_winners`、cortex cosine 改 numpy batched matmul。
+5. **其餘（P6/P7/P11/P12/P13/P15/P18/P19）** 視 profiling 結果選做，多為 low/optional cleanup；P19 可略。
+
+---
+
+## 5. 🟢 低優先（未驗證，僅供參考）
+
+- `services/llm_client.py`：`generate_synthesis` 重複 `_build_system_prompt` 的 template 解析（simplification）
+- `services/llm_client.py`：`classify_document` 為 `select_profile` 的弱化子集，可移除/統一（architecture）
+- `services/llm_client.py`：多處冗餘 `max_tokens=None`（已是預設）（simplification）
+- `rag_manager.py`：`add_document` 的 rel_path 解析重複 `_get_doc_id` 的 try/except（simplification）
+- `rag_manager.py`：`_mmr_select` 無 embeddings 時靜默退化為 top-k slice（correctness）
+- `rag_manager.py`：`_first_chunk_of_doc` 緊耦合 collection internals（architecture）
+- `rag_manager.py`：BM25 where-filter 為每個 hit 多一次 `collection.get`（performance）
+- `ingestion_pipeline.py`：`_extract_stitchable_body` 的 Path-reading 分支為 dead code（simplification）
+- `thoughtful_splitter.py`：`_section_path_at` 線性掃描提早 break 漏掉後續 heading（correctness）
+- `ingestion_pipeline.py`：`_extract_stitchable_body` stitching 時對每 part 重跑 `run_markdown_quality_checks`（performance）
+- `insight_agent.py`：`_cross_round_evaluation` 呼叫 LLM 私有 `_get_lang_hint()`（correctness）
+- `insight_agent.py`：`_build_targeted_pairs` 以 O(N*M) `_target_match_score` 過濾並重複正規化 title（simplification）
+- `counter_agent.py`：`_format_matrix_report` 對 `articles` 以相同邏輯迭代三次（simplification）
+- `counter_agent.py`：`_ground_tally_locations` 在未傳入時以全文構造 fallback `_LocationIndex`（architecture）
+- `builtin_adapters.py`：source metadata 冗餘 `path` 與 `loaded_chars`/`chars` 欄位（correctness）
+- `planner_service.py`：`canonical_planning_patterns`/`format_capability_entry` 硬編已存在於 `_BUILTIN_FACTORIES` 的 adapter 名（simplification）
+- `plan_readiness.py`：`_upstream_output_shape_warnings` 跳過不在 `expected_inputs` 的輸入，遮蔽 open-ended adapter 的 mismatch（correctness）
+- `pipeline_runner.py`：非 dict adapter 輸出被包成 `{"output": value}`，下游 placeholder 無法觸及 typed key（correctness）
+- `cortex_ledger.py`：首次 ledger run 對每頁觸發 un-merge/merge 偵測（無前次 snapshot）（correctness）
+- `weekly_memoir.py`：直接 import/呼叫 `load_all_pages`，繞過 cortex_store 抽象（architecture）
+- `cortex_consolidation.py`：`_refresh_page_embeddings` 內 `_claim_hash` 每頁呼叫兩次未快取（simplification）
+- `core/parser.py`：`run_markdown_quality_checks` 為 trailing-whitespace 偵測 split 文字兩次（performance）
+- `core/parser.py`：`strip_body_frontmatter` 每次呼叫 inline 編譯 regex（performance）
+- `core/config.py`：`DynamicSettings.reload()` 在 lock 外讀屬性做 log（correctness）
+- `trace_store.py`：`usage_to_counts` 對純 dict 輸入 getattr 先回 None（correctness）
+- `profile_manager.py`：`migrate_from_doctype` 在 `written==0` 時跳過 reload，但 row 可能因既有檔被略過（correctness）
+- `md_block_scanner.py`：`_emit_simple` 與 `_emit_range` 相同，一者為 dead code（simplification）
+- `cortex_store.py`：`claim_filename` 第二次碰撞靜默覆寫，僅一層 suffix fallback（correctness）
+- `vault_watcher.py`：`PAGES_DIR/NOTES_DIR/CORTEX_DIR` 每事件跨三 helper `absolute()`（performance）
+- `maintenance_scheduler.py`：`_latest_full_insight_at` 在 scheduler 啟動時 full directory glob（performance）
+- `prompt_watcher.py`：processed-count 增量以「檔案不存在」為門，非以成功處理為門（correctness）
+- `vault_watcher.py`：`VaultWatcher` 重實作 `_process_deletion` 已有的 orphan-sweep retry 邏輯（architecture）
 
 ---
 
 ## 6. 建議的重構批次
 
-依「可獨立出貨、相依性、是否觸及 hot path / version-locked」分組。
+依「可獨立 ship、風險相近、避免互相踩 hot path」分為四批，比照專案 batch-N 慣例。
 
-### batch-A：資料完整性修復（correctness，最優先）
-- `ingestion_pipeline.py:403`（A1 短文件標題誤標）
-- `rag_manager.py:424`（A2 同名文件誤刪）
-- `counter_agent.py:337`（B1 空陣列偵測）
-- `counter_agent.py:250`（B2 RAG fallback 原文）
-- **風險：中–高**。**觸及 hot path**（ingestion 與 RAG add/delete 是核心寫入路徑），且改動會影響**既有索引內容與頁面命名**——須附 migration 或 backfill 計畫，並驗證不回歸真正的 `_write_synthesis` 頁面。建議單獨成批、最高測試覆蓋。
+### Batch A — 並行安全 hot fix（風險：中；觸及 hot path 與 watcher 執行緒模型）
+> 純 correctness，必須先行，因為這些在正常運行下即破壞狀態。
 
-### batch-B：LLM fan-out 並行化（performance，user-visible 延遲）
-- `counter_agent.py:171`（P1）、`builtin_adapters.py:358`（P2）、`insight_agent.py:1433`（P3）
-- **風險：中**。引入 `ThreadPoolExecutor`，須保證輸出排序與 dedup 不變、`ui.set_status` thread-safe，並各以 config flag（`LENS_PARALLEL_CHUNKS` 等）保護可回退。**觸及 LLM 呼叫的 hot path**，須留意 provider rate limit。三項彼此獨立，可同批但分 commit。
+- `maintenance_scheduler.py:389` — `try_set_busy()` gate（race 搶佔）
+- `prompt_watcher.py:81` — 移除 `time.sleep(1)`，processing 移至 worker thread
+- `trace_store.py` — `run()` finally 的 UPDATE 包 try/except + log
 
-### batch-C：ChromaDB / FS 存取收斂 + 架構整理（performance + architecture）
-- `rag_manager.py:1069`（P4 facet 批次）、`counter_agent.py:279`（P7 vault index）、`rag_manager.py:763`（P9）
-- `insight_agent.py:1111`（架構：RagManager 公開方法封裝 `collection.get`）
-- `ingestion_pipeline.py:811`（架構：`format_digest_for_prompt` 公開化）
-- **風險：低–中**。多為非破壞性封裝與快取。`format_digest_for_prompt` 改名需同步 `scratch/bench_synthesis_ab.py:42`。不觸及 version-locked 行為，可漸進出貨。
+**風險說明：** 觸及多執行緒 busy-state 與 watchdog dispatch，需在真實 watcher 並行情境驗證；不涉 version-locked 程式。建議搭配並行壓力測試。
 
-### batch-D：純清理（simplification + 廉價 correctness/perf）
-- `insight_agent.py:140`（signals helper）、`:1048`（pair-key helper）、`:1705`（P12 雙重 parse）、`:1372`（fallback exclude）
-- `llm_client.py:1565`（多語 falsifier）
-- 廉價 perf：`insight_agent.py:1287`（P5）、`counter_agent.py:771`（P6）、`ingestion_pipeline.py:930`（P11）
-- **風險：低**。多為局部、無行為變更（或行為更正確）的重構。`llm_client.py:1565` 須確認 `OUTPUT_LANGUAGE=英文` 時不加 gloss 的分支。可機會性併入相鄰 PR。
+### Batch B — 靜默資料遺失修正（風險：中；觸及 ingest/index/parser hot path）
+> 修正會悄悄毀損 vault 資料的 bug，獨立於並行修正。
 
-> `ingestion_pipeline.py:167`（P8 多一次 digest LLM）與 `bm25_index.py:63`（P10 全量 rebuild）**不納入上述任一批次**：兩者需 template／索引結構變更且應 profiling-driven，建議待量測數據後另立 batch。
+- `ingestion_pipeline.py:403` — 短文標題誤掛 `(Synthesis)`
+- `rag_manager.py:424` — 移除 `delete_document(title)` hot path，legacy 改 migration
+- `parser.py:431` — 空 label 節點原樣輸出
+- `parser.py:56` — frontmatter regex 容許 EOF 無換行
+- `profile_manager.py:160` — storage key lowercase
+
+**風險說明：** 直接改 ingest/index/parse 行為，可能影響既有索引內容；建議對既有 vault 做一次 reindex 驗證標題與 frontmatter 不回歸。`rag_manager.py` 改動需確認 doc_id 刪除確實涵蓋自身 chunk。
+
+### Batch C — LLM client / agent correctness + 抽象邊界（風險：中低；部分 version-locked provider 程式）
+> 互相鄰近的 client/agent 正確性與 API 整潔。
+
+- `llm_client.py:829` — `translate_tags` 改走 `_complete_json`（**觸及 provider-specific SDK 呼叫，version-locked**）
+- `llm_client.py:1565` — `_assess_falsifiability_once` 去除硬編繁中
+- `counter_agent.py:337` — 空陣列檢查改整串相等
+- `counter_agent.py:250` — RAG fallback 傳 raw text
+- `insight_agent.py:1372` — fallback pair 尊重 exclude
+- `cortex_decay_pass.py:211` — revalidation 無 sources 時仍寫 timestamp
+- `ingestion_pipeline.py:811` + `llm_client.py:1089` — `format_digest_for_prompt` 提升為 public
+- `insight_agent.py:1111` 等 — RAG collection 存取改走 public API
+- `vault_utils.py:321` — 移除 `update_wiki_index` dead 參數
+
+**風險說明：** `translate_tags` 涉 Gemini/OpenAI SDK 路徑（version-locked），需各 provider 回歸測；其餘為純內部重構，風險低。可與 Batch A/B 並行開發（檔案重疊少，僅 `ingestion_pipeline.py`/`insight_agent.py` 需注意 merge）。
+
+### Batch D — 效能優化（風險：中；最大使用者體感、含並行化）
+> 量級最大、最值得做的效能項，獨立於正確性修正後再上。
+
+- **延遲縮減（高優先）：** `builtin_adapters.py:367`、`counter_agent.py:171` — `ThreadPoolExecutor` 並行化 + `LENS_PARALLEL_CHUNKS` flag
+- **Cortex nightly I/O：** `cortex_consolidation.py` load_all_pages 共享、state 寫入移出迴圈、cosine 改 batched matmul；`cortex_decay_pass.py:152` 免二次讀
+- **單機 I/O 批次/快取：** `rag_manager.py:1069` 批 `$in`、`counter_agent.py:771/279` per-article 快取 + filename index、`insight_agent.py:1433` 平行 expand
+- **選做（profiling 佐證後）：** `bm25_index.py:63`、`rag_manager.py:763`、`ingestion_pipeline.py:930/167`、`insight_agent.py:1705`、`trace_store.py` ts index、`embedding_cache.py:37`
+
+**風險說明：** 並行化引入 thread-safety 需求（`ui.set_status` 進度回報、結果按 index 重組以維持 dedup 行為）；建議全部以 config flag 包裹、預設保守並行度以尊重 LLM rate limit。`embedding_cache.py` 若做須用 thread-local 連線（`check_same_thread=False` 即為跨執行緒設）。P19（trace_store ContextVar）建議略過。
