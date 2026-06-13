@@ -158,7 +158,7 @@ Workflow 稽核（10 reader → dedup → 對抗式驗證 → 彙整）。99 raw
 
 | 批次 | 內容 | 風險 |
 |---|---|---|
-| R7-B | LLM fan-out 並行化：lens 逐 chunk(P1)、`digest_sources`(P2)、`_expand_seed`(P3) | 中（ThreadPool + flag） |
+| R7-B | **LLM fan-out 並行化（DEFERRED 2026-06-13，實測驅動）**：lens 逐 chunk(P1)、`digest_sources`(P2)、`_expand_seed`(P3) 確為串行 loop。但對著真實 backend 實測：單一 ollama **gemma-26B 完全串行化**——3 並發 wall-clock 7.2s vs 單發 2.6s（2.81× ≈ 全排隊），並行化只換到 **1.07×**。一個 26B 模型一張 GPU 一次只生一個請求。**收益只在 cloud（gemini）或 `OLLAMA_NUM_PARALLEL>1` + 足夠 GPU 才出現**。成本卻實在：ThreadPool worker 不繼承 trace ContextVar，要全程 `copy_context()` 傳 run_id，且 `_CURRENT_TRACE_IDS` 收集仍有缺口；外加 thread-safe ui、SQLite 並發、ordering/dedup、flag。**當下不值得**。**重啟條件**：切到 gemini，或 ollama 開 num_parallel 並驗證 backend 真能並行。 | 中 | Deferred（等 backend 能並行） |
 | R7-C | ChromaDB/FS 收斂 + adapter 邊界：facet deref 批次、vault filename index、`format_digest_for_prompt` 公開化、insight 繞過 `rag.collection` | 低–中 |
 | R7-D | 純清理：signals/pair-key helper 抽取、多語 falsifier、廉價 perf | 低 |
 | R7-E | ~~**新確認的 correctness（5 塊補驗證後）**~~ ✅ 2026-06-13 — 修了 5 條獨立 bug：`profile_manager` 大小寫 key（get() 對混合大小寫 stem 全 miss）、`maintenance_scheduler:389` set_busy→try_set_busy（acquired-guard 防搶占 + 不釋放非自有 lock）、`trace_store` run() finally 包 try/except（不再遮蔽 body 原例外）、`parser:431` 空 label 節點保留原樣、`parser:56` frontmatter regex 允許無尾換行。+7 pinned tests，902 passed。 | 低–中 | 完成 |
