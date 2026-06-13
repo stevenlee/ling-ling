@@ -161,8 +161,9 @@ Workflow 稽核（10 reader → dedup → 對抗式驗證 → 彙整）。99 raw
 | R7-B | LLM fan-out 並行化：lens 逐 chunk(P1)、`digest_sources`(P2)、`_expand_seed`(P3) | 中（ThreadPool + flag） |
 | R7-C | ChromaDB/FS 收斂 + adapter 邊界：facet deref 批次、vault filename index、`format_digest_for_prompt` 公開化、insight 繞過 `rag.collection` | 低–中 |
 | R7-D | 純清理：signals/pair-key helper 抽取、多語 falsifier、廉價 perf | 低 |
-| R7-E | **新確認的 correctness（5 塊補驗證後）**：`profile_manager` 大小寫 get() 全 miss、`maintenance_scheduler:389` set_busy 搶占、`prompt_watcher:81` sleep 阻塞 dispatch thread、`trace_store` run() finally 遮蔽原例外、`parser:431` 空 label 節點被丟、`parser:56` 無尾換行漏 frontmatter | 低–中，多為獨立 bug |
+| R7-E | ~~**新確認的 correctness（5 塊補驗證後）**~~ ✅ 2026-06-13 — 修了 5 條獨立 bug：`profile_manager` 大小寫 key（get() 對混合大小寫 stem 全 miss）、`maintenance_scheduler:389` set_busy→try_set_busy（acquired-guard 防搶占 + 不釋放非自有 lock）、`trace_store` run() finally 包 try/except（不再遮蔽 body 原例外）、`parser:431` 空 label 節點保留原樣、`parser:56` frontmatter regex 允許無尾換行。+7 pinned tests，902 passed。 | 低–中 | 完成 |
 | R7-F | **新確認的 perf（maintenance/storage）**：`load_all_pages` 每夜 5–6 pass 重複解析 → 共用 per-cycle cache、`trace_store` 缺 ts 索引、`cortex_consolidation` N+1 embedding、`vault_utils` 每檔讀兩次 | 中，部分需小架構調整 |
+| R7-G | **prompt_watcher dispatch-thread 阻塞**（從 R7-E 分出）：`_handle_event`→`_drain_queue`→`process_prompt` 把**整段 LLM 處理**（不只 `time.sleep(1)`）跑在 watchdog 單一 dispatch thread 上，阻塞後續所有檔案事件。**非小修**——需把處理移到專屬 worker thread，動到 watcher 並發模型（ordering、busy-state、`scan_existing` idle callback 互動），該獨立謹慎處理。 | M | 待排 |
 
 ## Resolved decisions
 

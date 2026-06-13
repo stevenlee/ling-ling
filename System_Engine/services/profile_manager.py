@@ -157,7 +157,12 @@ class ProfileManager:
                 continue
             spec = _parse_profile_file(path)
             if spec:
-                self._specs[spec.name] = spec
+                # Key case-insensitively: get() lowercases its argument, and
+                # select_profile is instructed to return a lowercase token, so a
+                # mixed-case stem (e.g. "Academic.md") would otherwise be
+                # unreachable (audit R7-E). spec.name keeps its original case for
+                # display in selection_options.
+                self._specs[spec.name.strip().lower()] = spec
 
     def get(self, name: str | None) -> ProfileSpec | None:
         if not name:

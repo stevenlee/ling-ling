@@ -386,7 +386,17 @@ class MaintenanceScheduler(threading.Thread):
 
     def _run_task(self, task: MaintenanceTask, now: datetime) -> None:
         logging.info("MaintenanceScheduler: running task %s", task.name)
-        global_busy_state.set_busy(True)
+        # Acquire the busy lock atomically. set_busy(True) used to stomp it: a
+        # user prompt could grab busy between the is_busy() gate in
+        # run_due_once and here, and the task's final set_busy(False) would then
+        # release a lock it never owned (audit R7-E). try_set_busy closes that
+        # race. An idle_required task that loses the race skips entirely; a
+        # non-idle task (e.g. retrieval_bench) still runs but must NOT clear a
+        # lock it didn't acquire — only the owner does.
+        acquired = global_busy_state.try_set_busy()
+        if task.idle_required and not acquired:
+            logging.debug("MaintenanceScheduler: task %s skipped; system became busy.", task.name)
+            return
         status = "failed"
         summary = ""
         try:
@@ -424,7 +434,8 @@ class MaintenanceScheduler(threading.Thread):
                 }
                 self._save_state()
             ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)
-            global_busy_state.set_busy(False)
+            if acquired:
+                global_busy_state.set_busy(False)
 
     @staticmethod
     def _latest_full_insight_at() -> str | None:

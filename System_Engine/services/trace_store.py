@@ -218,11 +218,17 @@ class TraceStore:
         finally:
             _CURRENT_TRACE_IDS.reset(trace_token)
             _CURRENT_RUN_ID.reset(run_token)
-            with self._connect() as conn:
-                conn.execute(
-                    "UPDATE runs SET status = ?, ended_at = ?, error = ? WHERE run_id = ?",
-                    (status, _utc_now(), error, run_id),
-                )
+            # Guard the finalize write: if the body raised, that exception is
+            # propagating now, and an unguarded DB error here would replace it
+            # — masking the real failure (audit R7-E). Log and swallow instead.
+            try:
+                with self._connect() as conn:
+                    conn.execute(
+                        "UPDATE runs SET status = ?, ended_at = ?, error = ? WHERE run_id = ?",
+                        (status, _utc_now(), error, run_id),
+                    )
+            except Exception as db_err:
+                logging.error(f"TraceStore: failed to finalize run {run_id}: {db_err}")
 
     def current_run_id(self) -> str | None:
         return _CURRENT_RUN_ID.get()

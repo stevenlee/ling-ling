@@ -185,3 +185,15 @@ class TestPendingQueue:
         )
         pm.reload()
         assert pm.get("diary") is None
+
+
+# ── R7-E: get() is case-insensitive even for mixed-case file stems ──────
+
+def test_mixed_case_profile_stem_is_resolvable(tmp_path):
+    _write_profile(tmp_path, "Academic", persona="scholar", template="wiki-note")
+    pm = ProfileManager(tmp_path)
+    # select_profile returns a lowercase token; the stem is "Academic".
+    assert pm.get("academic") is not None
+    assert pm.get("Academic") is not None
+    # Original case preserved for display.
+    assert pm.get("academic").name == "Academic"

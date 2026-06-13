@@ -140,3 +140,28 @@ class TestPruning:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ── R7-E: a finalize-write failure must not mask the body exception ─────
+
+def test_run_body_exception_not_masked_by_finalize_db_error(tmp_path):
+    import contextlib
+    ts = TraceStore(db_path=tmp_path / "trace.sqlite", retention_days=0)
+
+    real_connect = ts._connect
+    calls = {"n": 0}
+
+    def flaky_connect(*a, **k):
+        # First connect (INSERT runs row) succeeds; the finalize connect raises.
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise sqlite3.OperationalError("database is locked")
+        return real_connect(*a, **k)
+
+    ts._connect = flaky_connect
+
+    # The body raises; the finalize UPDATE will hit the locked DB. The ORIGINAL
+    # ValueError must propagate, not the OperationalError from the finally.
+    with pytest.raises(ValueError, match="boom"):
+        with ts.run(intent="x"):
+            raise ValueError("boom")
