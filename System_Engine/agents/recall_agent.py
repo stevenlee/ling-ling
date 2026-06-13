@@ -1,11 +1,15 @@
 """RecallAgent — `@ling-recall`: the system's distilled worldview on a topic.
 
 The READ side of Cortex long-term memory (Phase 5, F2). Unlike `@ling` Q&A
-(which answers from raw notes), recall answers from *consolidated beliefs* —
-the Cortex claims most relevant to the query, shown WITH their epistemics:
-confidence, falsifiability, the concrete falsifier, evidence chain, and any
-contradictions. Surfacing the falsifier and contradictions is deliberate: it
-keeps recall a self-critical mirror, not a confidence amplifier.
+(which answers from raw notes), recall answers from *consolidated beliefs*.
+
+Design (after live feedback): at Cortex's current scale the whole corpus fits
+in one prompt, so recall feeds ALL claims to the LLM and lets it select +
+answer — that handles typos ("Hibert"→Hilbert), conceptual matches, and
+conversational framing that embedding/BM25 retrieval over a tiny corpus could
+not. Retrieval (hybrid `recall_claims`) is only a pre-filter once the corpus
+outgrows the context budget. The answer deliberately surfaces falsifiers and
+contradictions — a self-critical mirror, not a confidence amplifier.
 """
 
 from __future__ import annotations
@@ -13,13 +17,31 @@ from __future__ import annotations
 import re
 
 from agents.base_agent import BaseAgent
-from core.config import CORTEX_DIR, CORTEX_RECALL_TOP_K
+from core.config import (
+    CORTEX_DIR,
+    CORTEX_RECALL_LLM_MAX,
+    CORTEX_RECALL_PREFILTER,
+)
 from core.ui import ui
 from services.cortex_recall import recall_claims
 from services.cortex_store import load_all_pages
 
 _CMD_TOKEN_RE = re.compile(r'(?:@ling-recall|/recall)\b', re.IGNORECASE)
 _STATUS_BADGE = {"active": "🟢", "dormant": "💤", "falsified": "🪦"}
+_CITE_RE = re.compile(r'#(\d+)')
+
+_SYSTEM_PROMPT = (
+    "你是 Ling-Ling 的長期記憶回想介面。使用者給一個主題，user message 裡附上系統蒸餾過的"
+    "所有信念（每條編號 [#N]，含信心/可反駁性/反例）。\n\n"
+    "規則：\n"
+    "1. 挑出**真正相關**的主張，用 [#N] 引用。寧缺勿濫——若沒有相關的，只回一句"
+    "「Cortex 中沒有與此主題相關的信念。」\n"
+    "2. 容錯：使用者可能拼錯字或用不同說法，依語意對應（例如把 Hibert 對應到 Hilbert）。\n"
+    "3. 用繁體中文、用你自己的話綜述「關於這個主題，系統相信什麼」，主動點出不確定性與矛盾"
+    "（自我批判的鏡子，不是附和）。每個論點標 [#N] 溯源。\n\n"
+    "嚴格輸出要求：**只輸出最終綜述本身**。不要輸出你的推理過程、自我檢查、草稿、"
+    "逐條 relevant/irrelevant 清單，也不要任何圖表（Mermaid）。直接從綜述第一句開始。"
+)
 
 
 class RecallAgent(BaseAgent):
@@ -35,64 +57,84 @@ class RecallAgent(BaseAgent):
             )[1]
 
         ui.set_status(f"🧠 回想：{query[:40]}")
-        hits = recall_claims(self.rag, query, cortex_dir=CORTEX_DIR, top_k=CORTEX_RECALL_TOP_K)
+        pages = [
+            p for p in load_all_pages(CORTEX_DIR)
+            if p.claim.strip() and p.status in ("active", "dormant")
+        ]
+        if not pages:
+            return self._write_report(
+                f"Cortex Recall: {query[:50]}",
+                f"# 🧠 Cortex 回想：{query}\n\nCortex 目前是空的，還沒累積任何主張。",
+                "cortex_recall", {"query": query, "claims_returned": 0},
+            )[1]
 
-        # Resolve contradiction claim_ids → claim text (cheap; few dozen pages).
-        id_to_claim = {p.claim_id: p.claim for p in load_all_pages(CORTEX_DIR)}
+        # Whole corpus when it fits; hybrid pre-filter only when it doesn't.
+        if len(pages) <= CORTEX_RECALL_LLM_MAX:
+            candidates = pages
+        else:
+            candidates = [p for _, p in recall_claims(
+                self.rag, query, cortex_dir=CORTEX_DIR, top_k=CORTEX_RECALL_PREFILTER
+            )] or pages[:CORTEX_RECALL_PREFILTER]
 
-        body = self._render(query, hits, id_to_claim)
-        meta = {"query": query, "claims_returned": len(hits)}
+        numbered = list(enumerate(candidates, 1))
+        source_block = self._claims_block(numbered)
+        # Lean completion (NOT answer_query): a caller-supplied system prompt
+        # with no template/persona/visualization scaffolding, so the model
+        # selects + summarizes instead of chasing a Mermaid diagram.
+        user_msg = f"主題：{query}\n\n系統的所有信念：\n{source_block}"
+        answer = self.llm.complete(
+            _SYSTEM_PROMPT, user_msg, temperature=0.2, stage="cortex_recall"
+        ) or "（回想時 LLM 呼叫失敗。）"
+
+        body = self._render(query, answer, numbered)
         _, full_markdown = self._write_report(
-            f"Cortex Recall: {query[:50]}", body, "cortex_recall", meta
+            f"Cortex Recall: {query[:50]}", body, "cortex_recall",
+            {"query": query, "candidates": len(candidates)},
         )
-        ui.success(f"🧠 回想完成：{len(hits)} 條相關主張 → fromLingLing/")
+        ui.success(f"🧠 回想完成：掃過 {len(candidates)} 條信念 → fromLingLing/")
         return full_markdown
 
-    def _render(self, query: str, hits: list, id_to_claim: dict) -> str:
+    @staticmethod
+    def _claims_block(numbered: list) -> str:
+        lines = []
+        for n, p in numbered:
+            fz = "—" if p.falsifiability is None else f"{p.falsifiability:.2f}"
+            parts = [
+                f"[#{n}] {p.claim.strip()}",
+                f"（信心 {p.confidence:.2f}；可反駁性 {fz}；狀態 {p.status}）",
+            ]
+            if p.falsifier:
+                parts.append(f"反例：{p.falsifier}")
+            lines.append(" ".join(parts))
+        return "\n".join(lines)
+
+    def _render(self, query: str, answer: str, numbered: list) -> str:
         lines = [
             f"# 🧠 Cortex 回想：{query}",
             "",
-            "> 這是系統**蒸餾過的信念**（Cortex 長期記憶），不是原始筆記檢索。"
-            "每條主張附上信心、可反駁性與反例——刻意把不確定性一起攤開。",
+            "> 這是 LLM 讀過系統**蒸餾信念**後的綜述（不是原始筆記檢索）。每個論點標 [#編號] 溯源。",
             "",
+            answer.strip(),
         ]
-        if not hits:
-            lines.append("（Cortex 中沒有與此主題相關的主張。可能是這個領域還沒累積足夠的洞察。）")
-            return "\n".join(lines)
-
-        for rank, (score, page) in enumerate(hits, 1):
-            badge = _STATUS_BADGE.get(page.status, "")
-            claim = page.claim.strip().replace("\n", " ")
-            lines.append(f"## {rank}. {badge} {claim}")
-            if page.applies_when:
-                lines.append(f"> 適用情境：{page.applies_when}")
-            lines.append("")
-
-            fz = "—" if page.falsifiability is None else f"{page.falsifiability:.2f}"
-            lines.append(
-                f"- **相關度** {score:.2f} · **信心** {page.confidence:.2f} · "
-                f"**可反駁性** {fz} · **強度 S** {page.S:.2f} · 狀態 `{page.status}`"
-            )
-            if page.falsifier:
-                lines.append(f"- **反例（能推翻它的觀察）**：{page.falsifier}")
-
-            # Evidence chain — wikilinks back to the source insights.
-            ev_links = []
-            for ev in (page.evidence or [])[:3]:
-                src = ev.get("insight") if isinstance(ev, dict) else None
-                if src:
-                    stem = src[:-3] if src.endswith(".md") else src
-                    ev_links.append(f"[[{stem}]]")
-            if ev_links:
-                lines.append(f"- **證據**：{' · '.join(ev_links)}")
-
-            # Contradictions — the anti-echo-chamber surface.
-            if page.contradictions:
-                conflict = []
-                for cid in page.contradictions[:3]:
-                    txt = id_to_claim.get(cid, cid)
-                    conflict.append(txt.strip().replace("\n", " ")[:80])
-                lines.append("- ⚔️ **與此衝突**：" + "；".join(conflict))
-            lines.append("")
-
+        cited = sorted({int(m) for m in _CITE_RE.findall(answer)
+                        if 1 <= int(m) <= len(numbered)})
+        if cited:
+            by_num = dict(numbered)
+            lines += ["", "---", "## 📎 引用的主張（含知識論）", ""]
+            for n in cited:
+                p = by_num[n]
+                badge = _STATUS_BADGE.get(p.status, "")
+                fz = "—" if p.falsifiability is None else f"{p.falsifiability:.2f}"
+                lines.append(f"- **[#{n}]** {badge} {p.claim.strip()}")
+                lines.append(
+                    f"  - 信心 {p.confidence:.2f} · 可反駁性 {fz} · S {p.S:.2f} · `{p.status}`"
+                )
+                if p.falsifier:
+                    lines.append(f"  - 反例：{p.falsifier}")
+                ev = [
+                    f"[[{(e.get('insight') or '')[:-3] if (e.get('insight') or '').endswith('.md') else e.get('insight')}]]"
+                    for e in (p.evidence or [])[:3] if isinstance(e, dict) and e.get("insight")
+                ]
+                if ev:
+                    lines.append(f"  - 證據：{' · '.join(ev)}")
         return "\n".join(lines)

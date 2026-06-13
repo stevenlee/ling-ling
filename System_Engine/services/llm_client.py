@@ -785,6 +785,34 @@ class LLMClient:
             logging.error(f"LLM Error in answer_query: {e}")
             return f"Error: {e}"
 
+    def complete(
+        self,
+        system_prompt: str,
+        user_msg: str,
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        stage: str = "complete",
+    ) -> str:
+        """Lean completion with a caller-supplied system prompt.
+
+        Unlike answer_query, this injects NO persona / template / visualization
+        scaffolding — the system prompt is used verbatim. For controlled tasks
+        (e.g. Cortex recall's select-and-summarize) that must not inherit the
+        Q&A document machinery (which made the model chase a Mermaid diagram and
+        dump its scratchpad). Returns "" on failure (fail-open)."""
+        try:
+            return self._complete_text(
+                system_prompt=system_prompt,
+                user_msg=user_msg,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                trace_context={"stage": stage, "metadata": {}},
+            )
+        except Exception as e:
+            logging.error(f"LLM Error in complete ({stage}): {e}")
+            return ""
+
     def _complete_json(self, *, kind: str = "object", **complete_kwargs):
         """Complete a JSON-output prompt with one reasoning-channel re-roll.
 
