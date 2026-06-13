@@ -241,13 +241,20 @@ class CounterAgent(BaseAgent):
         if not results and self.rag and user_directive:
             ui.info("   🔍 檔案系統未找到任何文章，嘗試 RAG 語意檢索...")
             try:
-                rag_results = self.rag.query_similar_notes(user_directive, top_k=1)
+                # Use the dict API, not query_similar_notes: the latter returns
+                # markdown-formatted strings ("### [來自筆記: ...]\n{doc}"), and
+                # feeding that as article_text injects heading noise into the
+                # grounding anchors and extracted quotes (audit B2). Take the raw
+                # chunk text and the real title from metadata instead.
+                rag_results = self.rag.query_notes(user_directive, top_k=1)
             except Exception as e:
                 logging.debug(f"LingLens: RAG fallback failed: {e}")
                 rag_results = []
             if rag_results:
                 ui.info("   📡 RAG 檢索成功")
-                results.append(("(RAG result)", rag_results[0], ""))
+                top = rag_results[0]
+                art_title = (top.get("metadata") or {}).get("title") or "(RAG result)"
+                results.append((art_title, top.get("text", ""), ""))
 
         return results
 

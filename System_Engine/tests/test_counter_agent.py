@@ -335,5 +335,39 @@ class TestDualLink:
         assert "#L1-L3" in rendered
 
 
+class TestRagFallbackArticleText:
+    """Audit B2: the RAG fallback must feed raw chunk text + real title,
+    not query_similar_notes' markdown-formatted string."""
+
+    def test_uses_raw_text_and_metadata_title(self):
+        agent = CounterAgent.__new__(CounterAgent)
+        agent._find_in_pages = lambda title: ("", "")  # force the RAG fallback
+
+        class FakeRAG:
+            def query_notes(self, query, top_k=1):
+                return [{"text": "raw chunk body, no heading", "metadata": {"title": "Real Title"}}]
+
+        agent.rag = FakeRAG()
+        results = agent._resolve_articles(["Missing Doc"], "a semantic query")
+        assert len(results) == 1
+        title, text, _ = results[0]
+        assert title == "Real Title"            # not the literal "(RAG result)"
+        assert text == "raw chunk body, no heading"
+        assert "### [來自筆記" not in text        # no injected markdown heading
+
+    def test_missing_metadata_title_falls_back_to_label(self):
+        agent = CounterAgent.__new__(CounterAgent)
+        agent._find_in_pages = lambda title: ("", "")
+
+        class FakeRAG:
+            def query_notes(self, query, top_k=1):
+                return [{"text": "body", "metadata": {}}]
+
+        agent.rag = FakeRAG()
+        title, text, _ = agent._resolve_articles(["Missing"], "q")[0]
+        assert title == "(RAG result)"
+        assert text == "body"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
