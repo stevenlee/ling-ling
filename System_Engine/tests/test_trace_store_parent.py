@@ -165,3 +165,30 @@ def test_run_body_exception_not_masked_by_finalize_db_error(tmp_path):
     with pytest.raises(ValueError, match="boom"):
         with ts.run(intent="x"):
             raise ValueError("boom")
+
+
+# ── R7-F: time-window indexes exist and are used (not full scans) ───────
+
+def test_ts_indexes_present_and_used(tmp_path):
+    import sqlite3
+    ts = TraceStore(db_path=tmp_path / "trace.sqlite", retention_days=30)
+    con = sqlite3.connect(str(ts.db_path))
+    names = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'"
+    )}
+    for idx in ("idx_artifacts_type_ts", "idx_llm_calls_stage_ts",
+                "idx_retrieval_events_ts", "idx_llm_calls_ts", "idx_artifacts_ts"):
+        assert idx in names, f"missing {idx}"
+
+    def plan(q, p):
+        return " | ".join(r[-1] for r in con.execute("EXPLAIN QUERY PLAN " + q, p))
+
+    # Windowed analytics + prune queries must use an index, not a full scan.
+    assert "USING INDEX" in plan(
+        "SELECT * FROM artifacts WHERE artifact_type=? AND ts>=? ORDER BY ts DESC", ("x", "2026-01-01"))
+    assert "USING INDEX" in plan(
+        "SELECT * FROM llm_calls WHERE stage=? AND ts>=? ORDER BY ts DESC", ("x", "2026-01-01"))
+    assert "USING INDEX" in plan(
+        "SELECT query_text FROM retrieval_events WHERE ts>=? ORDER BY ts DESC", ("2026-01-01",))
+    assert "SCAN" not in plan("DELETE FROM llm_calls WHERE ts<?", ("2026-01-01",))
+    con.close()
