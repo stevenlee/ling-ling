@@ -58,6 +58,12 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
         self._job_queue: queue.Queue[Path] = queue.Queue()
         self._queued_paths: set[str] = set()
         self._queue_lock = threading.Lock()
+        # ── Worker thread (audit R7-G) ── processing must NOT run on the
+        # watchdog dispatch thread; _handle_event only enqueues + wakes this.
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._worker: threading.Thread | None = None
+        self._stability_delay = 1.0  # filesystem-settle wait; 0 in tests
 
     def on_created(self, event):
         self._handle_event(event)
@@ -77,14 +83,45 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
         if filepath.suffix.lower() not in ('.md', '.txt'):
             return
 
-        # Small delay for filesystem stability
-        time.sleep(1)
+        # Enqueue and wake the worker; do NOT process here (audit R7-G). This
+        # runs on the watchdog dispatch thread — processing is seconds of LLM
+        # work and would block every subsequent filesystem event. The worker
+        # applies the stability delay and the existence check before running.
+        if self._enqueue(filepath):
+            self._wake.set()
 
-        if not filepath.exists():
+    # ── Worker thread ─────────────────────────────────────────────────
+
+    def start(self) -> None:
+        """Spawn the background worker that drains the queue off the dispatch
+        thread. Idempotent."""
+        if self._worker and self._worker.is_alive():
             return
+        self._stop.clear()
+        self._worker = threading.Thread(
+            target=self._run_worker, name="PromptWatcherWorker", daemon=True
+        )
+        self._worker.start()
 
-        self._enqueue(filepath)
-        self._drain_queue()
+    def stop(self) -> None:
+        """Signal the worker to exit and join it."""
+        self._stop.set()
+        self._wake.set()
+        if self._worker:
+            self._worker.join(timeout=5)
+
+    def _run_worker(self) -> None:
+        while not self._stop.is_set():
+            # Wake on new work; the timeout also lets a late enqueue (set
+            # before the worker armed the wait) get picked up promptly.
+            if not self._wake.wait(timeout=1.0):
+                continue
+            self._wake.clear()
+            if self._stop.is_set():
+                break
+            if self._stability_delay:
+                time.sleep(self._stability_delay)  # let the filesystem settle
+            self._drain_queue()
 
     # ── Job queue internals ──────────────────────────────────────────
 

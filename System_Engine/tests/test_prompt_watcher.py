@@ -187,3 +187,52 @@ class TestPromptWatcherProcessPrompt:
         assert "type: chat" not in written
         assert "> 請根據" not in written
         assert written.count("---\n") == 2  # only the template's own frontmatter
+
+
+# ── R7-G: processing runs on a worker, not the watchdog dispatch thread ──
+
+import threading
+import time
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+
+class TestPromptWatcherWorker:
+    def _watcher(self):
+        return PromptWatcher(MagicMock(), MagicMock())
+
+    def test_handle_event_enqueues_without_processing(self, tmp_path):
+        w = self._watcher()
+        drained = []
+        w._drain_queue = lambda: drained.append(1)
+        f = tmp_path / "cmd.md"
+        f.write_text("hi", encoding="utf-8")
+
+        w._handle_event(SimpleNamespace(is_directory=False, src_path=str(f)))
+
+        assert str(f) in w._queued_paths   # enqueued
+        assert w._wake.is_set()            # worker signaled
+        assert drained == []               # NOT processed on the dispatch thread
+
+    def test_non_prompt_suffix_ignored(self, tmp_path):
+        w = self._watcher()
+        f = tmp_path / "image.png"
+        f.write_text("x", encoding="utf-8")
+        w._handle_event(SimpleNamespace(is_directory=False, src_path=str(f)))
+        assert str(f) not in w._queued_paths
+        assert not w._wake.is_set()
+
+    def test_worker_drains_off_thread(self, tmp_path):
+        w = self._watcher()
+        w._stability_delay = 0
+        drained = threading.Event()
+        w._drain_queue = lambda: drained.set()
+        w.start()
+        try:
+            f = tmp_path / "cmd.md"
+            f.write_text("hi", encoding="utf-8")
+            w._handle_event(SimpleNamespace(is_directory=False, src_path=str(f)))
+            assert drained.wait(timeout=3)   # worker picked it up and drained
+        finally:
+            w.stop()
+        assert not w._worker.is_alive()      # stop() joined the worker
