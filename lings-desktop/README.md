@@ -258,6 +258,12 @@ lings-desktop/
 - `rank_bm25` 已加入 `requirements.txt`（純 Python，~10KB）。
 - `sentence-transformers` 列為選用依賴；只在需要 reranker 時手動 `pip install`。
 
+### 2026-06-13 R4：Reasoning-channel JSON 防禦統一
+
+- **`LLMClient._complete_json` 新 helper**：統一「呼叫 → 解析 JSON → 解析失敗 re-roll 一次」的防禦。reasoning 模型（gemma via Ollama）偶爾把整段回覆塞進 reasoning channel、content 無可解析 JSON 又不報錯（就是 batch-3 默默把 LingLens extraction 歸零的同一個失敗）。literal `[]`/`{}` 視為「真的空答案」不 re-roll，避免把合法零當成解析失敗。
+- 盤點後 6 個原本只解析一次、失敗即 fail-open 的呼叫改走它：`generate_part_digest`、`find_topic_shifts`、`summarize_for_context`、`extract_claims`、`adjudicate_claims`、`generate_persona_and_template`。
+- 刻意保留 bespoke：`score_text_quality`（`reason` 需區分 transport error 與 parse miss，但仍補了 parse-miss re-roll）、`_assess_falsifiability_once`（re-roll 條件更嚴）。已知缺口：`translate_tags` 走 provider dispatch 不經 `_complete_text`，未納入（已設 `response_format=json_object`，曝險較低）。
+
 ### 2026-06-12 backlog batch-3：Lens 引文驗證
 
 - **LingLens Quote Verification**: `_ground_tally_locations` 原本就會嘗試把每條引文定位回原文，但「定位失敗」這個負訊號被默默吞掉。現在報告尾端新增 `## 🔍 Quote Verification` 節：統計錨定比例、列出無法定位的引文（可能是改寫、翻譯或虛構，提示人工抽查）；metadata 寫入 `quotes_grounded`/`quotes_total` 與 `quality_verdict`（比例低於 `LENS_QUOTE_MIN_GROUNDED_RATIO`，預設 0.8 → `revise`），與 synthesis critique 共用同一套 verdict 詞彙，artifact 層可跨報告型態比較。停車場 D2 的 Insight 半邊由 Phase 2.5/3 的 groundedness/refute 訊號涵蓋，不另做。
