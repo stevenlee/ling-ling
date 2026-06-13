@@ -93,9 +93,10 @@ def main():
     scheduler = MaintenanceScheduler(PROJECT_ROOT, llm_client, rag_manager)
     scheduler.start()
 
-    # 5.05. Start the prompt worker so runtime file events are processed off
-    # the watchdog dispatch thread, not on it (audit R7-G).
+    # 5.05. Start the prompt + clipping workers so runtime file events are
+    # processed off the watchdog dispatch thread, not on it (audit R7-G/R7-G-2).
     event_handler_prompts.start()
+    event_handler_clippings.start()
 
     # 5.1. Startup kick: covers the daemon-starts-idle case where no
     # busy→idle edge would otherwise wake the pump.
@@ -110,6 +111,7 @@ def main():
     except KeyboardInterrupt:
         observer.stop()
         event_handler_prompts.stop()
+        event_handler_clippings.stop()
         ui.stop()
         ui.info("まだね~ Another 40-hours-practice day! (๑˃̵ᴗ˂̵)و ✨")
     observer.join()

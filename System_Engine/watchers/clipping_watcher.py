@@ -38,6 +38,12 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
         self._job_queue: queue.Queue[Path] = queue.Queue()
         self._queued_paths: set[str] = set()
         self._queue_lock = threading.Lock()
+        # ── Worker thread (audit R7-G-2) ── processing must NOT run on the
+        # watchdog dispatch thread; _handle_event only enqueues + wakes this.
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._worker: threading.Thread | None = None
+        self._stability_delay = 1.0  # filesystem-settle wait; 0 in tests
 
     # ── FSEvent handlers ─────────────────────────────────────────────
 
@@ -62,13 +68,43 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
         if filepath.suffix.lower() not in self._SUPPORTED_EXTENSIONS:
             return
 
-        # Small delay for filesystem stability (file may still be written)
-        time.sleep(1)
-        if not filepath.exists():
-            return
+        # Enqueue and wake the worker; do NOT process here (audit R7-G-2). This
+        # runs on the watchdog dispatch thread — ingestion is heavy work and
+        # would block every subsequent filesystem event. The worker applies the
+        # stability delay and the existence check before running.
+        if self._enqueue(filepath):
+            self._wake.set()
 
-        self._enqueue(filepath)
-        self._drain_queue()
+    # ── Worker thread ─────────────────────────────────────────────────
+
+    def start(self) -> None:
+        """Spawn the background worker that drains the queue off the dispatch
+        thread. Idempotent."""
+        if self._worker and self._worker.is_alive():
+            return
+        self._stop.clear()
+        self._worker = threading.Thread(
+            target=self._run_worker, name="ClippingWatcherWorker", daemon=True
+        )
+        self._worker.start()
+
+    def stop(self) -> None:
+        """Signal the worker to exit and join it."""
+        self._stop.set()
+        self._wake.set()
+        if self._worker:
+            self._worker.join(timeout=5)
+
+    def _run_worker(self) -> None:
+        while not self._stop.is_set():
+            if not self._wake.wait(timeout=1.0):
+                continue
+            self._wake.clear()
+            if self._stop.is_set():
+                break
+            if self._stability_delay:
+                time.sleep(self._stability_delay)  # let the filesystem settle
+            self._drain_queue()
 
     # ── Job queue internals ──────────────────────────────────────────
 
