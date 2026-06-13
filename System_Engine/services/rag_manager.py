@@ -1004,6 +1004,26 @@ class RAGManager:
             })
         return out
 
+    def all_chunks(self, include: tuple[str, ...] = ("metadatas", "documents")) -> dict:
+        """Every indexed chunk's fields, as ChromaDB's {ids, documents,
+        metadatas} dict. A named accessor so callers (e.g. InsightAgent's
+        sampling/context builders) don't reach into `.collection` directly and
+        couple to the vector store (audit R7-C-2)."""
+        return self.collection.get(include=list(include))
+
+    def chunks_by_title(
+        self,
+        title: str,
+        *,
+        include: tuple[str, ...] = ("metadatas", "documents"),
+        limit: int | None = None,
+    ) -> dict:
+        """Chunks for one exact indexed title, same dict shape as all_chunks."""
+        kwargs: dict = {"where": {"title": title}, "include": list(include)}
+        if limit is not None:
+            kwargs["limit"] = limit
+        return self.collection.get(**kwargs)
+
     def _first_chunk_of_doc(self, doc_id: str | None, need_embeddings: bool = False) -> dict | None:
         """Fetch the parent document's leading real chunk (for facet
         dereferencing). Returns the same candidate shape query_notes uses."""

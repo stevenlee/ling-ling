@@ -1108,7 +1108,7 @@ class InsightAgent(BaseAgent):
         Monte Carlo run with N targets doesn't issue N+1 full scans.
         """
         try:
-            results = self.rag.collection.get(include=["metadatas"])
+            results = self.rag.all_chunks(include=("metadatas",))
             metadatas = results.get("metadatas", []) or []
         except Exception as e:
             logging.error(f"Monte Carlo: failed to fetch metadata: {e}")
@@ -1199,10 +1199,7 @@ class InsightAgent(BaseAgent):
     def _doc_from_rag_title(self, title: str, tags: list[str] | None = None) -> dict | None:
         """Fetch one representative chunk for an exact indexed title."""
         try:
-            chunk_results = self.rag.collection.get(
-                where={"title": title},
-                include=["documents", "metadatas"],
-            )
+            chunk_results = self.rag.chunks_by_title(title, include=("documents", "metadatas"))
         except Exception as e:
             logging.debug(f"Monte Carlo: failed to fetch chunk for '{title}': {e}")
             return None
@@ -1667,7 +1664,7 @@ class InsightAgent(BaseAgent):
 
     def _get_recent_context(self, limit: int) -> str:
         try:
-            results = self.rag.collection.get(include=["metadatas", "documents"])
+            results = self.rag.all_chunks()
             if not results.get("documents"):
                 return "No documents found."
             docs_with_meta = list(zip(results["documents"], results["metadatas"]))
@@ -1681,7 +1678,7 @@ class InsightAgent(BaseAgent):
 
     def _get_tag_cluster_context(self, limit: int, target_tag: str | None = None) -> str:
         try:
-            results = self.rag.collection.get(include=["metadatas", "documents"])
+            results = self.rag.all_chunks()
             if not results.get("metadatas"):
                 return self._get_random_sample_context(limit)
 
@@ -1717,7 +1714,7 @@ class InsightAgent(BaseAgent):
     def _get_island_context(self, limit: int, target_island: str | None = None) -> str:
         if target_island:
             try:
-                results = self.rag.collection.get(where={"title": target_island}, limit=limit)
+                results = self.rag.chunks_by_title(target_island, limit=limit)
             except Exception as e:
                 logging.debug(f"InsightAgent: targeted island fetch failed: {e}")
                 results = {}
@@ -1726,7 +1723,7 @@ class InsightAgent(BaseAgent):
                 return f"Analysis target (Knowledge Island): [[{target_island}]]\n\n" + "\n---\n".join(docs)
 
         try:
-            results = self.rag.collection.get(include=["metadatas", "documents"])
+            results = self.rag.all_chunks()
             if not results.get("documents"):
                 return self._get_random_sample_context(limit)
 
@@ -1770,11 +1767,11 @@ class InsightAgent(BaseAgent):
     def _get_random_sample_context(self, limit: int, target_file: str | None = None) -> str:
         try:
             if target_file:
-                results = self.rag.collection.get(where={"title": target_file})
+                results = self.rag.chunks_by_title(target_file)
                 docs = results.get("documents", [])
                 if docs:
                     return f"Analysis target: [[{target_file}]]\n\n" + "\n---\n".join(docs)
-            results = self.rag.collection.get()
+            results = self.rag.all_chunks()
             docs = results.get("documents", [])
             if not docs:
                 return "Empty KB."
