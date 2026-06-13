@@ -785,6 +785,47 @@ class LLMClient:
             logging.error(f"LLM Error in answer_query: {e}")
             return f"Error: {e}"
 
+    def _complete_json(self, *, kind: str = "object", **complete_kwargs):
+        """Complete a JSON-output prompt with one reasoning-channel re-roll.
+
+        Transport-level retries already live in `_complete_text`. This guards a
+        different, silent failure: reasoning models (gemma via Ollama) sometimes
+        emit the whole reply into the reasoning channel and leave the content
+        with no parseable JSON — no exception is raised. One re-roll usually
+        lands it. (Same failure that silently zeroed LingLens extraction; see
+        roadmap R4.)
+
+        `kind` is "array" or "object". Returns the parsed list/dict, or the
+        empty container after a second miss so callers keep their fail-open
+        paths. A genuinely empty answer — the model emitted a literal [] / {} —
+        is returned WITHOUT a re-roll, so a real zero is never mistaken for a
+        parse miss (mirrors the LingLens extraction rule). Per-attempt
+        exceptions are caught and re-rolled.
+
+        Callers must pass system_prompt/user_msg as keywords. Bespoke retry
+        logic with stricter accept conditions (e.g. `_assess_falsifiability_once`,
+        which re-rolls until the score itself parses) stays as-is.
+        """
+        parse = extract_json_array if kind == "array" else extract_json_object
+        empty = [] if kind == "array" else {}
+        empty_literal = "[]" if kind == "array" else "{}"
+        base_trace = dict(complete_kwargs.pop("trace_context", {}) or {})
+        base_meta = dict(base_trace.get("metadata") or {})
+        for attempt in range(2):
+            trace = {**base_trace, "metadata": {**base_meta, "json_attempt": attempt + 1}}
+            try:
+                raw = self._complete_text(trace_context=trace, **complete_kwargs)
+            except Exception as e:
+                logging.warning(f"_complete_json({kind}) call failed (attempt {attempt + 1}/2): {e}")
+                continue
+            parsed = parse(raw)
+            if parsed:
+                return parsed
+            if empty_literal in re.sub(r"\s+", "", raw or ""):
+                return empty  # genuine empty answer — not a parse miss, don't re-roll
+            logging.warning(f"_complete_json({kind}) parse miss (attempt {attempt + 1}/2)")
+        return empty
+
     def translate_tags(self, tags: list[str]) -> dict:
         system_prompt = "Return a JSON mapping of {original_tag: english_equivalent} for these tags."
         user_msg = f"Tags: {tags}"
@@ -939,9 +980,10 @@ class LLMClient:
         )
 
         try:
-            raw = self._complete_text(
-                system_prompt,
-                prompt,
+            parsed = self._complete_json(
+                kind="object",
+                system_prompt=system_prompt,
+                user_msg=prompt,
                 temperature=0.2,
                 max_tokens=1800,
                 trace_context={
@@ -958,7 +1000,6 @@ class LLMClient:
                     },
                 },
             )
-            parsed = extract_json_object(raw)
             if parsed:
                 return self._apply_part_digest_defaults(parsed, part_number)
         except Exception as e:
@@ -1213,29 +1254,38 @@ class LLMClient:
             }
 
         user_msg = f'Chunk:\n"""\n{text}\n"""'
-        try:
-            raw = self._complete_text(
-                system_prompt=system_prompt,
-                user_msg=user_msg,
-                temperature=0.0,
-                max_tokens=None,
-                trace_context={
-                    "stage": "score_text_quality",
-                    "metadata": {"prompt_version": prompt_version},
-                },
-            )
-        except Exception as e:
-            logging.warning(f"score_text_quality LLM call failed: {e}")
-            return {"score": 0, "reason": f"llm error: {e}", "prompt_version": prompt_version}
+        # Version-locked P0 scorer: prompt is frozen. Bespoke (not _complete_json)
+        # because the `reason` field must distinguish a transport failure from a
+        # parse miss — both test-pinned. One reasoning-channel re-roll on a parse
+        # miss before falling back to score 0.
+        parsed = {}
+        for attempt in range(2):
+            try:
+                raw = self._complete_text(
+                    system_prompt=system_prompt,
+                    user_msg=user_msg,
+                    temperature=0.0,
+                    max_tokens=None,
+                    trace_context={
+                        "stage": "score_text_quality",
+                        "metadata": {"prompt_version": prompt_version, "json_attempt": attempt + 1},
+                    },
+                )
+            except Exception as e:
+                logging.warning(f"score_text_quality LLM call failed: {e}")
+                return {"score": 0, "reason": f"llm error: {e}", "prompt_version": prompt_version}
+            parsed = extract_json_object(raw)
+            if parsed:
+                break
+            logging.warning(f"score_text_quality parse miss (attempt {attempt + 1}/2)")
 
-        parsed = extract_json_object(raw)
         score = parsed.get("score")
         reason = parsed.get("reason", "")
 
         if not isinstance(score, (int, float)):
             return {
                 "score": 0,
-                "reason": f"non-numeric score in response: {raw[:120]!r}",
+                "reason": "non-numeric score in response",
                 "prompt_version": prompt_version,
             }
         # Clamp to [1, 10] — some models drift below or above the scale.
@@ -1280,25 +1330,20 @@ class LLMClient:
             + "\n\n".join(user_msg_parts)
         )
 
-        try:
-            raw = self._complete_text(
-                system_prompt=system_prompt,
-                user_msg=user_msg,
-                temperature=0.0,
-                max_tokens=None,
-                trace_context={
-                    "stage": "find_topic_shifts",
-                    "metadata": {
-                        "prompt_version": prompt_version,
-                        "paragraph_count": len(paragraphs),
-                    },
+        parsed = self._complete_json(
+            kind="object",
+            system_prompt=system_prompt,
+            user_msg=user_msg,
+            temperature=0.0,
+            max_tokens=None,
+            trace_context={
+                "stage": "find_topic_shifts",
+                "metadata": {
+                    "prompt_version": prompt_version,
+                    "paragraph_count": len(paragraphs),
                 },
-            )
-        except Exception as e:
-            logging.warning(f"find_topic_shifts LLM call failed: {e}")
-            return {"split_after": [], "prompt_version": prompt_version}
-
-        parsed = extract_json_object(raw)
+            },
+        )
         raw_indices = parsed.get("split_after", [])
         validated = self._validate_topic_shifts(raw_indices, len(paragraphs))
         return {"split_after": validated, "prompt_version": prompt_version}
@@ -1328,22 +1373,17 @@ class LLMClient:
         if system_prompt is None:
             return {"summary": "", "prompt_version": prompt_version}
 
-        try:
-            raw = self._complete_text(
-                system_prompt=system_prompt,
-                user_msg=text,
-                temperature=0.0,
-                max_tokens=None,
-                trace_context={
-                    "stage": "summarize_for_context",
-                    "metadata": {"prompt_version": prompt_version, "max_chars": max_chars},
-                },
-            )
-        except Exception as e:
-            logging.warning(f"summarize_for_context LLM call failed: {e}")
-            return {"summary": "", "prompt_version": prompt_version}
-
-        parsed = extract_json_object(raw)
+        parsed = self._complete_json(
+            kind="object",
+            system_prompt=system_prompt,
+            user_msg=text,
+            temperature=0.0,
+            max_tokens=None,
+            trace_context={
+                "stage": "summarize_for_context",
+                "metadata": {"prompt_version": prompt_version, "max_chars": max_chars},
+            },
+        )
         summary = parsed.get("summary", "")
         if not isinstance(summary, str):
             return {"summary": "", "prompt_version": prompt_version}
@@ -1487,14 +1527,14 @@ class LLMClient:
             "No prose outside the JSON. Return [] if the report contains no real claim."
         )
         try:
-            raw = self._complete_text(
+            parsed = self._complete_json(
+                kind="array",
                 system_prompt=system_prompt,
                 user_msg=insight_text,
                 temperature=0.2,
                 max_tokens=1024,
                 trace_context={"stage": "extract_claims", "metadata": {}},
             )
-            parsed = extract_json_array(raw)
             out = []
             for item in parsed if isinstance(parsed, list) else []:
                 if not isinstance(item, dict):
@@ -1615,14 +1655,14 @@ class LLMClient:
         valid = {"equivalent", "entails", "entailed_by", "complementary", "contradicts", "unrelated"}
         fallback = {"verdict": "unrelated", "rationale": "adjudication failed; conservative default"}
         try:
-            raw = self._complete_text(
+            parsed = self._complete_json(
+                kind="object",
                 system_prompt=system_prompt,
                 user_msg=f"A: {claim_a}\n\nB: {claim_b}",
                 temperature=0.0,
                 max_tokens=None,  # reasoning models need thinking room
                 trace_context={"stage": "adjudicate_claims", "metadata": {}},
             )
-            parsed = extract_json_object(raw)
             verdict = parsed.get("verdict") if isinstance(parsed, dict) else None
             if isinstance(verdict, str) and verdict.strip().lower() in valid:
                 return {
@@ -1693,7 +1733,8 @@ class LLMClient:
 
         user_msg = f"Generate the persona and template for category: {category}"
         try:
-            raw = self._complete_text(
+            parsed = self._complete_json(
+                kind="object",
                 system_prompt=system_prompt,
                 user_msg=user_msg,
                 temperature=0.3,
@@ -1703,7 +1744,6 @@ class LLMClient:
                     "metadata": {"category": category},
                 },
             )
-            parsed = extract_json_object(raw)
             return parsed or {}
         except Exception as e:
             logging.warning(f"generate_persona_and_template LLM call failed: {e}")
