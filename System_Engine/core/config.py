@@ -126,8 +126,13 @@ CORTEX_REVIVAL_TARGET_HIGH      = float(os.getenv("CORTEX_REVIVAL_TARGET_HIGH", 
 CORTEX_LEDGER_ENABLED           = os.getenv("CORTEX_LEDGER_ENABLED", "true").lower() == "true"
 CORTEX_FALSIFY_PER_NIGHT        = int(os.getenv("CORTEX_FALSIFY_PER_NIGHT", "2"))
 CORTEX_FALSIFY_SAMPLES          = max(1, int(os.getenv("CORTEX_FALSIFY_SAMPLES", "3")))
-# Cortex Phase 5 (read side): how many claims @ling-recall surfaces per query.
+# Cortex Phase 5 (read side). @ling-recall feeds the LLM the whole Cortex when
+# it fits (<= LLM_MAX claims) — at this scale retrieval is the wrong tool, the
+# LLM handles typos/concepts/framing far better. Above LLM_MAX, hybrid recall
+# pre-filters to PREFILTER candidates first. TOP_K caps the rendered citations.
 CORTEX_RECALL_TOP_K             = max(1, int(os.getenv("CORTEX_RECALL_TOP_K", "8")))
+CORTEX_RECALL_LLM_MAX           = max(1, int(os.getenv("CORTEX_RECALL_LLM_MAX", "150")))
+CORTEX_RECALL_PREFILTER         = max(1, int(os.getenv("CORTEX_RECALL_PREFILTER", "40")))
 CORTEX_UNMERGE_STRICT_AT        = float(os.getenv("CORTEX_UNMERGE_STRICT_AT", "0.10"))
 CORTEX_UNMERGE_RELAX_AT         = float(os.getenv("CORTEX_UNMERGE_RELAX_AT", "0.05"))
 CORTEX_UNMERGE_MIN_SAMPLES      = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))

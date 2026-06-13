@@ -109,28 +109,77 @@ def test_embedding_failure_is_fail_open(tmp_path):
     assert recall_claims(Boom(), "claim", cortex_dir=tmp_path) == []
 
 
-# ── RecallAgent rendering ──────────────────────────────────────────────
+# ── RecallAgent: LLM-over-corpus flow + rendering ──────────────────────
 
-def test_agent_render_surfaces_epistemics(tmp_path):
+def _agent_page(tmp_path, claim, **kw):
+    return CortexPage(claim_id=make_claim_id(claim), path=tmp_path / "x.md", claim=claim, **kw)
+
+
+def test_claims_block_numbers_with_epistemics(tmp_path):
+    from agents.recall_agent import RecallAgent
+    numbered = [
+        (1, _agent_page(tmp_path, "X causes Y", confidence=0.7, falsifiability=0.8,
+                        falsifier="X without Y")),
+        (2, _agent_page(tmp_path, "A relates to B", confidence=0.5, falsifiability=0.5)),
+    ]
+    block = RecallAgent._claims_block(numbered)
+    assert "[#1] X causes Y" in block
+    assert "信心 0.70" in block and "可反駁性 0.80" in block
+    assert "反例：X without Y" in block
+    assert "[#2] A relates to B" in block
+
+
+def test_render_appends_only_cited_claims(tmp_path):
     from agents.recall_agent import RecallAgent
     agent = RecallAgent.__new__(RecallAgent)
-    page = CortexPage(
-        claim_id="cortex-aaa", path=tmp_path / "a.md", claim="X causes Y",
-        status="active", confidence=0.7, falsifiability=0.8,
-        falsifier="An experiment where X occurs but Y does not.",
-        contradictions=["cortex-bbb"],
-        evidence=[{"insight": "20260613-insight.md", "summary": "s"}],
-    )
-    body = agent._render("why X", [(0.91, page)], {"cortex-bbb": "Y happens without X"})
-    assert "X causes Y" in body
-    assert "0.91" in body                                  # relevance score
-    assert "反例" in body and "Y does not" in body          # falsifier surfaced
-    assert "⚔️" in body and "Y happens without X" in body   # contradiction resolved
-    assert "[[20260613-insight]]" in body                  # evidence wikilink
+    numbered = [
+        (1, _agent_page(tmp_path, "irrelevant claim")),
+        (2, _agent_page(tmp_path, "X causes Y", confidence=0.7, falsifiability=0.8,
+                        falsifier="X without Y",
+                        evidence=[{"insight": "20260613-insight.md"}])),
+    ]
+    answer = "系統相信 X 會導致 Y [#2]，但這是有條件的。"
+    body = agent._render("why X", answer, numbered)
+    assert answer.strip() in body                       # LLM answer is the body
+    assert "[#2]" in body and "X causes Y" in body       # cited claim in appendix
+    assert "反例：X without Y" in body                    # epistemics surfaced
+    assert "[[20260613-insight]]" in body                # evidence wikilink
+    assert "irrelevant claim" not in body                # uncited claim NOT appended
 
 
-def test_agent_render_empty_hits(tmp_path):
+def test_render_no_citations_no_appendix(tmp_path):
     from agents.recall_agent import RecallAgent
     agent = RecallAgent.__new__(RecallAgent)
-    body = agent._render("obscure topic", [], {})
-    assert "沒有與此主題相關的主張" in body
+    numbered = [(1, _agent_page(tmp_path, "some claim"))]
+    body = agent._render("obscure", "Cortex 中沒有與此主題相關的信念。", numbered)
+    assert "沒有與此主題相關" in body
+    assert "引用的主張" not in body                        # no appendix when nothing cited
+
+
+def test_execute_small_corpus_feeds_all_claims(tmp_path, monkeypatch):
+    """At small scale, the LLM sees every claim (no retrieval pre-filter) — so a
+    typo'd or paraphrased query still finds the right claim via the LLM."""
+    import agents.recall_agent as ra
+    pages = [_agent_page(tmp_path, f"claim number {i}") for i in range(5)]
+    monkeypatch.setattr(ra, "load_all_pages", lambda d: pages)
+
+    captured = {}
+
+    class FakeLLM:
+        def complete(self, system_prompt, user_msg, **kw):
+            captured["system_prompt"] = system_prompt
+            captured["user_msg"] = user_msg
+            return "synthesis [#1]"
+
+    agent = ra.RecallAgent.__new__(ra.RecallAgent)
+    agent.llm = FakeLLM()
+    agent.rag = None
+    agent._write_report = lambda title, body, rtype, meta=None: (None, body)
+
+    out = agent.execute({"user_directive": "@ling-recall claim number 3"})
+    # All 5 claims handed to the LLM (small corpus → no retrieval pre-filter).
+    for i in range(5):
+        assert f"claim number {i}" in captured["user_msg"]
+    # Uses the lean recall system prompt, not the Q&A document scaffolding.
+    assert "只輸出最終綜述" in captured["system_prompt"]
+    assert "synthesis" in out
