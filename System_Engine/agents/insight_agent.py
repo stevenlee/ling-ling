@@ -99,6 +99,31 @@ class InsightAgent(BaseAgent):
             target_titles=target_titles,
         )
 
+    def _signals_meta(self, content: str, target_titles) -> dict:
+        """Signals metadata block ({} when disabled). Shared by
+        generate_insight and generate_full_insight (audit R7-D — the two were
+        byte-for-byte duplicates)."""
+        from core.config import INSIGHT_SIGNALS_ENABLED
+        if not INSIGHT_SIGNALS_ENABLED:
+            return {}
+        from services.insight_signals import compute_signals
+        signals = compute_signals(content, target_titles, self.rag, self.llm)
+        return {
+            "signals": {
+                "groundedness": round(signals.groundedness, 4) if signals.groundedness is not None else None,
+                "novelty": round(signals.novelty, 4) if signals.novelty is not None else None,
+                "bridging": round(signals.bridging, 4) if signals.bridging is not None else None,
+                "refute_verdict": signals.refute_verdict,
+            },
+            "signals_version": 1,
+        }
+
+    @staticmethod
+    def _pair_key(a: dict, b: dict) -> tuple:
+        """Order-independent dedup key for a document pair (audit R7-D — this
+        idiom appeared verbatim at five sites)."""
+        return tuple(sorted([a["title"], b["title"]]))
+
     def generate_insight(
         self,
         strategy_id: str,
@@ -137,17 +162,7 @@ class InsightAgent(BaseAgent):
             "pipeline": pipeline,
         }
 
-        from core.config import INSIGHT_SIGNALS_ENABLED
-        if INSIGHT_SIGNALS_ENABLED:
-            from services.insight_signals import compute_signals
-            signals = compute_signals(report_content, target_titles, self.rag, self.llm)
-            meta["signals"] = {
-                "groundedness": round(signals.groundedness, 4) if signals.groundedness is not None else None,
-                "novelty": round(signals.novelty, 4) if signals.novelty is not None else None,
-                "bridging": round(signals.bridging, 4) if signals.bridging is not None else None,
-                "refute_verdict": signals.refute_verdict,
-            }
-            meta["signals_version"] = 1
+        meta.update(self._signals_meta(report_content, target_titles))
 
         _, full_markdown = self._write_report(
             f"洞察分析-{config['name']}", report_content, "report_insight", meta
@@ -225,20 +240,7 @@ class InsightAgent(BaseAgent):
             f"{sections_joined}"
         )
 
-        meta = {}
-        from core.config import INSIGHT_SIGNALS_ENABLED
-        if INSIGHT_SIGNALS_ENABLED:
-            from services.insight_signals import compute_signals
-            signals = compute_signals(final_markdown, target_titles, self.rag, self.llm)
-            meta = {
-                "signals": {
-                    "groundedness": round(signals.groundedness, 4) if signals.groundedness is not None else None,
-                    "novelty": round(signals.novelty, 4) if signals.novelty is not None else None,
-                    "bridging": round(signals.bridging, 4) if signals.bridging is not None else None,
-                    "refute_verdict": signals.refute_verdict,
-                },
-                "signals_version": 1
-            }
+        meta = self._signals_meta(final_markdown, target_titles)
 
         _, full_markdown = self._write_report("全方位洞察報告", final_markdown, "report_insight_full", meta)
         self._mirror_to_insights(
@@ -1045,7 +1047,7 @@ class InsightAgent(BaseAgent):
                 break
 
             for a, b in pairs:
-                tried_pairs.add(tuple(sorted([a["title"], b["title"]])))
+                tried_pairs.add(self._pair_key(a, b))
 
             seeds = self._spark_pairs(pairs, config, round_num, ui)
             if not seeds:
@@ -1227,7 +1229,7 @@ class InsightAgent(BaseAgent):
             if len(pairs) >= num_pairs:
                 break
             a, b = random.sample(docs, 2)
-            key = tuple(sorted([a["title"], b["title"]]))
+            key = self._pair_key(a, b)
             if key in exclude:
                 continue
 
@@ -1342,7 +1344,7 @@ class InsightAgent(BaseAgent):
             all_combos = list(combinations(target_docs, 2))
             random.shuffle(all_combos)
             for a, b in all_combos:
-                if tuple(sorted([a["title"], b["title"]])) in exclude:
+                if self._pair_key(a, b) in exclude:
                     continue
                 pairs.append((a, b))
                 if len(pairs) >= num_pairs:
@@ -1355,7 +1357,7 @@ class InsightAgent(BaseAgent):
                     if len(pairs) >= num_pairs:
                         break
                     neighbor = random.choice(other_docs)
-                    if tuple(sorted([target["title"], neighbor["title"]])) not in exclude:
+                    if self._pair_key(target, neighbor) not in exclude:
                         pairs.append((target, neighbor))
         else:
             target = target_docs[0]
@@ -1364,10 +1366,21 @@ class InsightAgent(BaseAgent):
                 for other in candidates:
                     if len(pairs) >= num_pairs:
                         break
-                    if tuple(sorted([target["title"], other["title"]])) not in exclude:
+                    if self._pair_key(target, other) not in exclude:
                         pairs.append((target, other))
             if not pairs:
-                pairs.append((target_docs[0], random.choice(all_docs)))
+                # Last-resort partner for the target. Respect the exclude set
+                # and avoid self-pairing (audit R7-D): a blind random.choice
+                # could re-emit an already-explored pair and break cross-round
+                # dedup. If nothing fresh exists, return empty — the caller
+                # treats that as a stop signal.
+                target = target_docs[0]
+                for other in random.sample(all_docs, len(all_docs)):
+                    if other["title"] == target["title"]:
+                        continue
+                    if self._pair_key(target, other) not in exclude:
+                        pairs.append((target, other))
+                        break
 
         return pairs[:num_pairs]
 

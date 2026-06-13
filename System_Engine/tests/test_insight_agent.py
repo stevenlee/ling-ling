@@ -603,3 +603,23 @@ def test_execute_report_includes_digest_source_appendix(stub_agent, tmp_path, mo
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ── R7-D: targeted-pair fallback must respect the exclude set ───────────
+
+def test_targeted_pairs_fallback_respects_exclude():
+    from agents.insight_agent import InsightAgent
+    agent = InsightAgent.__new__(InsightAgent)
+    T = {"title": "T"}
+    A = {"title": "A"}
+    # Isolate the pairing/fallback logic from target resolution.
+    agent._resolve_target_doc = lambda title, all_docs, title_meta=None: T if title == "T" else None
+
+    # The only possible partner pair (T, A) is excluded → fallback must NOT
+    # re-emit it; return empty (caller's stop signal).
+    out = agent._build_targeted_pairs([T, A], ["T"], num_pairs=1, exclude={InsightAgent._pair_key(T, A)})
+    assert out == []
+
+    # With nothing excluded, the fallback pairs the target with A.
+    out2 = agent._build_targeted_pairs([T, A], ["T"], num_pairs=1, exclude=set())
+    assert out2 == [(T, A)]
