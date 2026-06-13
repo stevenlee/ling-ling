@@ -2,6 +2,13 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-14 Cortex Phase 5 · F2：記憶的「讀」side（`@ling-recall`）
+
+- **關閉記憶迴路的第一步**：Cortex 長期記憶（Phase 1–4）一直只寫不讀——生長/衰減/falsify/驗證，但生成端從不主動讀。F2 加上讀側原語 `services/cortex_recall.py` 的 `recall_claims(rag, query, top_k)`：embed query + 每條 claim（走 RAG 既有 embedding cache，未變動的 claim 是 cache hit），cosine 排序，回傳結構化 CortexPage（連同 confidence/falsifiability/falsifier/contradictions/evidence，而非 RAG 文字 chunk）。
+- **`@ling-recall` 指令**（`agents/recall_agent.py`）：給主題，撈最相關的蒸餾主張並渲染**連同其知識論**——刻意把反例與矛盾一起攤開（反同溫層透明度），不是只給結論。與 `@ling` 問答區分：問答從原始筆記答，recall 從蒸餾信念答。
+- 這個 `recall_claims` 原語是 F1（Cortex-grounded insight）與 F3（張力摘要）共用的地基。F1 計劃見 [DesignDoc/CortexPhase5_F1_grounded_insight_plan.md](System_Engine/DesignDoc/CortexPhase5_F1_grounded_insight_plan.md)，其中把 provenance 防火牆與同溫層金絲雀列為硬條款。
+- Flag `CORTEX_RECALL_TOP_K`（預設 8）。Live：真實 vault 查「用什麼文獻當蒙特卡羅種子」→ 對應主張 0.865 排第一。+7 tests。
+
 ### 2026-06-13 全模組稽核與硬化（audit R7）
 
 對 System_Engine（~22k LOC）跑了一次多代理程式碼稽核（99 raw → 41 confirmed），逐項親手驗證後修正，不成立的記為「查證後不做」。完整脈絡見 [System_Engine/DesignDoc/SystemEngine_audit_20260613.md](System_Engine/DesignDoc/SystemEngine_audit_20260613.md) 與 [Roadmap R7 區](System_Engine/DesignDoc/Roadmap_Phase4.5_onwards.md)。

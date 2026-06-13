@@ -40,6 +40,7 @@ INTENT_ROUTES = [
     (["repair-db"],                          ["repair-db"],   "linter"),
     (["insight"],                            ["insight"],     "insight"),
     (["profiles", "profile"],                ["profiles", "profile"], "profiles"),
+    (["recall"],                             ["recall"],      "recall"),
     (["cortex"],                             ["cortex"],      "cortex"),
     (["plan"],                               ["plan"],        "plan"),
     (["do"],                                 ["do"],          "do"),

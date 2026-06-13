@@ -8,6 +8,7 @@ from agents.planner_agent import PlannerAgent
 from agents.executor_agent import ExecutorAgent
 from agents.profiles_agent import ProfilesAgent
 from agents.cortex_agent import CortexAgent
+from agents.recall_agent import RecallAgent
 
 class AgentRegistry:
     def __init__(self, llm, rag):
@@ -27,6 +28,7 @@ class AgentRegistry:
             "do": ExecutorAgent,
             "profiles": ProfilesAgent,
             "cortex": CortexAgent,
+            "recall": RecallAgent,
         }
 
     def get_agent(self, command_key: str):
