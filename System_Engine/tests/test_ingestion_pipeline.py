@@ -253,7 +253,7 @@ class _StubLLM:
         self.last_call = None
 
     @staticmethod
-    def _format_part_digest_for_prompt(digest):
+    def format_digest_for_prompt(digest):
         return f"DIGEST::{digest}"
 
     def critique_text(self, candidate, sources, focus=None):

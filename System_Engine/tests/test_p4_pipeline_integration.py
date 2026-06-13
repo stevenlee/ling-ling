@@ -203,7 +203,7 @@ class TestEndToEndIngestion:
         # Critique post-step needs both helpers; return empty critique so the
         # pipeline's skip-on-empty path keeps these tests focused on splitter/
         # synthesis wiring rather than the critique operation.
-        llm._format_part_digest_for_prompt = MagicMock(return_value="stub-digest")
+        llm.format_digest_for_prompt = MagicMock(return_value="stub-digest")
         llm.critique_text = MagicMock(return_value="")
 
         rag = MagicMock()

@@ -817,7 +817,7 @@ class IngestionPipeline:
             return "", None
 
         sources = "\n\n".join(
-            self.llm._format_part_digest_for_prompt(d) for d in part_digests
+            self.llm.format_digest_for_prompt(d) for d in part_digests
         )
         try:
             critique = self.llm.critique_text(

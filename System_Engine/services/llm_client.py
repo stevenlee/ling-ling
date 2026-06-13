@@ -1033,7 +1033,7 @@ class LLMClient:
         }
 
     @staticmethod
-    def _format_part_digest_for_prompt(digest) -> str:
+    def format_digest_for_prompt(digest) -> str:
         if isinstance(digest, str):
             return digest
         if not isinstance(digest, dict):
@@ -1085,7 +1085,7 @@ class LLMClient:
         no-retry path.
         """
         lang_hint = self._get_lang_hint()
-        digest_text = "\n\n".join(self._format_part_digest_for_prompt(d) for d in part_digests)
+        digest_text = "\n\n".join(self.format_digest_for_prompt(d) for d in part_digests)
         feedback_block = (
             f"Previous attempt was critiqued. Address these findings:\n{critique_feedback}\n\n"
             if critique_feedback
