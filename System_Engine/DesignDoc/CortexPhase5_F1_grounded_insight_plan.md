@@ -1,6 +1,19 @@
 # Cortex Phase 5 · F1 — Cortex-grounded Insight（實施計劃）
 
-> 狀態：**計劃**（待執行，預計由 Claude/Fable 5 實作）。F2（`@ling-recall` 讀側原語）已落地，F1 重用其 `recall_claims`。F3（張力摘要）在 F1 之後。
+> 狀態：**Stage 1（注入側）已實作 2026-06-14，flag 預設 OFF。Stage 2（firewall + canary）待做——flag 不准開啟直到 stage 2 落地。** F2（`@ling-recall`）與 F3（`@ling-tensions`）已上線。
+>
+> **Stage 1 已完成（commit 在 feat/cortex-phase5-f1-grounded）**：
+> - `insight_agent._should_ground(idea)`：flag + `CORTEX_GROUND_FRACTION` 決定哪些 seed 注入（hash-based 決定性，留 cold 控制組給 canary）。
+> - `_cortex_priors(idea)`：falsifiability 閘（防禦③，只取 `>= CORTEX_GROUND_MIN_FALSIFIABILITY` 的主張；小語料用全部、大語料 recall_claims 排序 top-K）。
+> - `_grounding_block(priors)`：辯證式 framing（防禦②，「請挑戰不要附和、最有價值是張力與反例」）。
+> - `_expand_seed`：注入 grounding block，回傳 dict 帶 `grounded_on=[claim_id...]`（provenance 標記）。flag off → byte-identical。
+> - flags：`CORTEX_GROUNDED_INSIGHT_ENABLED`(False)/`_MIN_FALSIFIABILITY`(0.5)/`_TOP_K`(3)/`_FRACTION`(0.7)。6 tests。
+>
+> **Stage 2 待做（精確 hook，讀碼後確認）**：
+> 1. **Plumb `grounded_on` → frontmatter**：`generate_insight`/`generate_full_insight` 開頭 `self._grounded_on_acc=set()`；`_expand_seed` 把 `grounded_on` update 進去；`generate_insight` 把 `sorted(self._grounded_on_acc)` 寫進 `meta["grounded_on"]`（→ 報告 frontmatter → Insights/ mirror）。
+> 2. **Provenance firewall（防禦①+④）於 `maintenance/cortex_consolidation.py`**：`run_consolidation` 讀 insight `meta.get("grounded_on")`；傳進 `process_claim` → `_merge_into(page, claim, evidence, grounded_on)`：**若 `page.claim_id in grounded_on` → append evidence 但跳過 S+1/confidence 上調**（grounded 洞察附和自己的先驗不算 reinforcement）。把 `grounded_on` 也存進 evidence dict，供 `cortex_ledger` 的「≥2 獨立來源」falsified 計數排除非獨立者。
+> 3. **Canary（防禦⑤）**：insight 依 `meta` 有無 `grounded_on` 分 grounded/cold 兩組，比較 `groundedness/novelty/falsifiability` 分佈；grounded 組同時更低 novelty+falsifiability → 告警。複用 memoir 報告基建（`maintenance/echo_canary.py`）。
+> 4. 全部就緒 + canary 驗證無同溫層特徵後，才可 `CORTEX_GROUNDED_INSIGHT_ENABLED=true`。
 > 主題：**關閉記憶迴路**——讓累積的 Cortex 長期記憶**主動參與**洞察生成，但**不製造同溫層**。
 
 ## 0. 一句話

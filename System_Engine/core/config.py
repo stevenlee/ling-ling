@@ -139,6 +139,15 @@ CORTEX_RECALL_PREFILTER         = max(1, int(os.getenv("CORTEX_RECALL_PREFILTER"
 CORTEX_TENSION_DOGMATIC_FALS    = float(os.getenv("CORTEX_TENSION_DOGMATIC_FALS", "0.25"))
 CORTEX_TENSION_DOGMATIC_CONF    = float(os.getenv("CORTEX_TENSION_DOGMATIC_CONF", "0.5"))
 CORTEX_TENSION_THIN_EVIDENCE_MAX = max(0, int(os.getenv("CORTEX_TENSION_THIN_EVIDENCE_MAX", "1")))
+# Cortex Phase 5 F1 (grounded insight). DEFAULT OFF — must stay off until ALL
+# anti-echo-chamber defenses land (injection+gate+framing, provenance firewall
+# in consolidation, canary). Inject up to GROUND_TOP_K relevant claims with
+# falsifiability >= GROUND_MIN_FALSIFIABILITY as DIALECTICAL priors; ground only
+# GROUND_FRACTION of seeds, leaving the rest cold for the echo-chamber canary.
+CORTEX_GROUNDED_INSIGHT_ENABLED = os.getenv("CORTEX_GROUNDED_INSIGHT_ENABLED", "false").lower() == "true"
+CORTEX_GROUND_MIN_FALSIFIABILITY = float(os.getenv("CORTEX_GROUND_MIN_FALSIFIABILITY", "0.5"))
+CORTEX_GROUND_TOP_K             = max(1, int(os.getenv("CORTEX_GROUND_TOP_K", "3")))
+CORTEX_GROUND_FRACTION          = max(0.0, min(1.0, float(os.getenv("CORTEX_GROUND_FRACTION", "0.7"))))
 CORTEX_UNMERGE_STRICT_AT        = float(os.getenv("CORTEX_UNMERGE_STRICT_AT", "0.10"))
 CORTEX_UNMERGE_RELAX_AT         = float(os.getenv("CORTEX_UNMERGE_RELAX_AT", "0.05"))
 CORTEX_UNMERGE_MIN_SAMPLES      = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))
