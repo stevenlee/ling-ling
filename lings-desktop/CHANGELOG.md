@@ -2,6 +2,16 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-14 Metacognition 層 · M3 提案（自我改善,人工閘 + `@ling-improve`）
+
+整條弧線第一次「改自己」,但全程人在迴路、永不靜默套用。
+
+- **`services/improvement_store.py`**：修訂提案佇列(mirror Profiles `_pending`)。每份提案是一個 JSON(target_path、rationale、addressed_fixes、original_sha、original/revised content)。`approve` 三道守門:目標須在允許資產目錄內(`Templates/`、`Personas/`、`Guidelines/`,**不碰程式碼**;含 path-escape 防護)、目標檔自提案後**未被改動**才寫(不蓋使用者編輯)、原檔備份到 `_applied/`(一鍵回退)。
+- **`maintenance/self_improve.py`（M3）**：把診斷出的「報告品質」問題映射到產生它的 prompt 檔(`lens_report`→`agent_counter.md` 等),載入現行全文 → LLM 改寫 → 存提案。**結構守門**:改寫須是針對性最小編輯(size 0.5×–2.5×、原結構保留 ≥35%),否則丟棄。其餘軸誠實標「需人工」。
+- **`@ling-improve` 指令**(`agents/improve_agent.py`)：`generate`(跑 M1→M2→M3 產生提案)／`list`／`show <id>`(看 diff)／`approve <id>`／`reject <id>`。toranomaki 範例已附。
+- Flag `SELF_IMPROVE_ENABLED`(預設 **false**);週任務在 `SELF_DIAGNOSIS_ENABLED`+`SELF_IMPROVE_ENABLED` 皆開時,接在 M2 後自動產生提案(仍不自動套用)。
+- **Live 發現(重要)**：本機 gemma4:26b 在「整檔 prompt 改寫」這種巢狀提示上會**離題複述 meta 指令**(35 行→355 行)。安全設計如預期擋下——提案非自動套用,且結構守門把離題改寫**直接丟棄**(實測回報「暴增 >2.5×,跳過」),佇列不收垃圾。代價:此後端下 M3 常「不產生提案」而非產爛提案——**這是對的失敗方向**。瓶頸是本機模型對忠實全檔改寫的能力,非架構;未來改結構化/分段編輯或換更強改寫模型。+24 tests(1007 passed)。計劃見 [DesignDoc/SelfImprovement_metacognition_plan.md](System_Engine/DesignDoc/SelfImprovement_metacognition_plan.md)。
+
 ### 2026-06-14 Metacognition 層 · M2 診斷 + 趨勢分析
 
 M1 之上接出診斷層,並讓自評有歷史記憶。

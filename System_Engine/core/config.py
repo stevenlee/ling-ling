@@ -160,6 +160,11 @@ CORTEX_GROUND_FRACTION          = max(0.0, min(1.0, float(os.getenv("CORTEX_GROU
 # default OFF until validated. SELF_ASSESSMENT_HISTORY_MAX caps the trend log.
 SELF_DIAGNOSIS_ENABLED          = os.getenv("SELF_DIAGNOSIS_ENABLED", "false").lower() == "true"
 SELF_ASSESSMENT_HISTORY_MAX     = max(2, int(os.getenv("SELF_ASSESSMENT_HISTORY_MAX", "180")))
+# Metacognition M3 (self-improvement): when the weekly task should auto-GENERATE
+# revision proposals (queued, never applied) after diagnosis. The @ling-improve
+# command can generate/approve on-demand regardless. Default OFF — the system
+# should propose changes to itself only when asked, until validated.
+SELF_IMPROVE_ENABLED            = os.getenv("SELF_IMPROVE_ENABLED", "false").lower() == "true"
 CORTEX_UNMERGE_STRICT_AT        = float(os.getenv("CORTEX_UNMERGE_STRICT_AT", "0.10"))
 CORTEX_UNMERGE_RELAX_AT         = float(os.getenv("CORTEX_UNMERGE_RELAX_AT", "0.05"))
 CORTEX_UNMERGE_MIN_SAMPLES      = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))
@@ -189,6 +194,13 @@ PERSONAS_DIR = SCRIPTURE_DIR / "Personas"
 PROFILES_DIR = SCRIPTURE_DIR / "Profiles"
 PROFILES_PENDING_DIR = PROFILES_DIR / "_pending"
 GUIDELINES_DIR = SCRIPTURE_DIR / "Guidelines"
+# Metacognition M3: self-improvement proposal queue. Generated prompt/template
+# revisions land in _pending (NEVER auto-applied); approve moves the original
+# to _applied/ as a backup and writes the revision. Mirrors Profiles/_pending.
+IMPROVEMENTS_DIR = SCRIPTURE_DIR / "Improvements"
+IMPROVEMENTS_PENDING_DIR = IMPROVEMENTS_DIR / "_pending"
+IMPROVEMENTS_APPLIED_DIR = IMPROVEMENTS_DIR / "_applied"
+IMPROVEMENTS_REJECTED_DIR = IMPROVEMENTS_DIR / "_rejected"
 TEMPLATES_DIR = WIKI_VAULT_DIR / "Templates"
 PROMPTS_DIR = TEMPLATES_DIR / "Prompts"
 OPERATIONS_DIR = TEMPLATES_DIR / "Operations"
@@ -342,7 +354,7 @@ _MANAGED_DIRECTORIES = (
     RAW_ASSETS_DIR, RAW_MERGED_DIR, SCRIPTURE_DIR, PERSONAS_DIR, PROFILES_DIR,
     PROFILES_PENDING_DIR, GUIDELINES_DIR,
     SKILLS_DIR, BACKUPS_DIR, TEMPLATES_DIR, PROMPTS_DIR, OPERATIONS_DIR, SCRATCH_DIR,
-    CORTEX_DIR,
+    CORTEX_DIR, IMPROVEMENTS_PENDING_DIR,
 )
 
 
