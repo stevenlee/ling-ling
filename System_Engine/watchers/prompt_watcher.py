@@ -297,7 +297,11 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                             "target_titles": [t.split('|')[0].strip() for t in target_entities],
                             "user_directive": query_content,
                             "strategy_id": "recency",
-                            "is_full_report": "/full" in lower_query
+                            "is_full_report": "/full" in lower_query,
+                            # Discriminator for agents shared across intents — e.g.
+                            # LinterAgent serves both "patrol" (full garden report)
+                            # and "linter" (@ling-repair-db, focused DB repair).
+                            "intent_key": intent_key,
                         }
                         
                         template_match = re.search(r'/template[:\s]+([\w-]+)', lower_query)
@@ -308,7 +312,10 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                         if intent_key == "insight":
                             context.update(self._detect_planner_flags(lower_query))
                             for s_id in getattr(agent, 'strategies', {}).keys():
-                                if f"/{s_id}" in lower_query or (s_id == "tags" and "/tag" in lower_query):
+                                # `/tag` and `/tags` are documented shortcuts for the
+                                # tag-cluster strategy (its skill name is "tag-cluster",
+                                # not "tags" — that's its `method:` field).
+                                if f"/{s_id}" in lower_query or (s_id == "tag-cluster" and "/tag" in lower_query):
                                     context["strategy_id"] = s_id
                                     break
                         # Specialized context for LingLens/CounterAgent

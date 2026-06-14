@@ -115,9 +115,47 @@ class LinterAgent(BaseAgent):
 
         return "\n".join(actions) if actions else "🎉 資料庫狀態健康，目前無需維護。"
 
+    def _execute_db_repair(self) -> str:
+        """Focused vector-DB repair for @ling-repair-db (intent "linter").
+
+        Deletes stale index entries and re-indexes missing files via
+        ``perform_repair`` — the deterministic action the command's doc
+        promises — and reports a fresh post-repair health snapshot. Distinct
+        from the broad ``@ling-patrol`` report produced by ``execute``.
+        """
+        repair_summary = self.perform_repair()
+        health = self.scan_rag_health()
+        if "error" in health:
+            health_text = f"💦 {health['error']}"
+        else:
+            health_text = (
+                f"- **總索引 Chunk 數量**: {health['total_chunks']}\n"
+                f"- **待索引檔案**: {len(health['unindexed_files'])}\n"
+                f"- **過時殘留索引**: {len(health['stale_entries'])}"
+            )
+        report_body = f"""# 🌿 向量資料庫修復
+
+## 🧹 修復紀錄
+{repair_summary}
+
+---
+
+## 🫧 修復後健康快照
+{health_text}
+"""
+        self._write_report("資料庫修復", report_body, "report_repair_db")
+        return report_body
+
     def execute(self, task_context: dict) -> str:
+        # @ling-repair-db (intent "linter") is a focused vector-DB repair, NOT
+        # the broad @ling-patrol garden report. Both route to LinterAgent, so
+        # the intent_key is the discriminator. Without this branch the two
+        # commands were byte-for-byte identical.
+        if task_context.get("intent_key") == "linter":
+            return self._execute_db_repair()
+
         do_repair = task_context.get('repair', settings.SELF_HEALING)
-        
+
         # 1. Structural Scan
         graph_data = self.scan_graph()
         broken_text = "\n".join([f"- [[{b}]]" for b in graph_data['broken_links']]) if graph_data['broken_links'] else "- 🎉 沒有死連結！"

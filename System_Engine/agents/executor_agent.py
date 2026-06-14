@@ -102,6 +102,21 @@ class ExecutorAgent(BaseAgent):
                 "registries. Re-plan to refresh."
             )
 
+        # Readiness gate: structural validation above proves the plan parses
+        # and references only registered adapters/capabilities; readiness adds
+        # the "would it execute meaningfully?" checks (input wiring, digest
+        # rules). A `blocked` verdict means an error-severity finding — refuse
+        # rather than running a plan the planner already flagged as broken.
+        blocking = self._readiness_blockers(spec, plan_dict, task_context)
+        if blocking:
+            bullet = "\n".join(f"- **[{f['code']}]** {f['message']}" for f in blocking)
+            ui.error(f"⚙️ Executor 拒絕執行 blocked plan：{plan_id}")
+            return self._error_report(
+                f"ExecutorAgent: plan `{plan_id}` is **blocked** by readiness "
+                f"checks and was not executed.\n\n{bullet}\n\n"
+                "Re-run `@ling-plan` to produce a clean plan, or fix the issues above."
+            )
+
         ui.set_status(f"⚙️ Executor 執行 plan：{plan_id}（{len(spec.steps)} 個步驟）")
 
         # Initial context: pull simple values from task_context. The user
@@ -158,6 +173,40 @@ class ExecutorAgent(BaseAgent):
         if match:
             return match.group(1)
         return None
+
+    def _readiness_blockers(
+        self, spec: PipelineSpec, plan_dict: dict, task_context: dict
+    ) -> list[dict]:
+        """Return error-severity readiness findings, or [] (= allow execution).
+
+        Re-assesses readiness against the LIVE capability set so a plan that
+        became unexecutable since planning is caught. Best-effort: if the
+        capability manager is unavailable or the assessment raises, we allow
+        execution (structural validation already guarded the hard cases) — a
+        diagnostic bug must never wedge a legitimate run.
+        """
+        try:
+            from services.plan_readiness import assess_plan_readiness
+
+            cap_mgr = getattr(self.llm, "capability_manager", None)
+            if cap_mgr is None or not hasattr(cap_mgr, "all"):
+                return []
+            readiness = assess_plan_readiness(
+                spec=spec,
+                plan_dict=plan_dict,
+                capabilities=cap_mgr.all(),
+                target_titles=task_context.get("target_titles"),
+            )
+            if readiness.verdict != "blocked":
+                return []
+            return [
+                {"code": f.code, "message": f.message}
+                for f in readiness.findings
+                if f.severity == "error"
+            ]
+        except Exception as e:  # noqa: BLE001 — degrade to allow, never block on a bug
+            logging.warning(f"ExecutorAgent: readiness re-assessment skipped: {e}")
+            return []
 
     @staticmethod
     def _load_sidecar(plan_id: str) -> dict | None:

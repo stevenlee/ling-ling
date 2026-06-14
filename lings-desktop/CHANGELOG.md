@@ -2,6 +2,16 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-15 toranomaki 指令通盤檢討 + 修 3 個真功能 bug
+
+對 19 個 `@ling-*` 指令做了 firsthand 交叉稽核(toranomaki 文件 vs 實作)。路由全部有效,但揪出 3 個「指令達不到當初設計目的」的真 bug,本次修掉:
+
+- **`@ling-repair-db` 與 `@ling-patrol` 原本零差異**：兩者都路由到 `LinterAgent`,且 intent 從沒傳進 context,所以執行期完全相同——repair-db 只是再跑一次 patrol 週報,文件承諾的「修復向量資料庫索引」(清過時 + 補缺索引,實作在 `LinterAgent.perform_repair`)從沒被觸發。修法:`prompt_watcher` 把 `intent_key` 塞進 context;`LinterAgent.execute` 在 intent=="linter" 時走新的 `_execute_db_repair`(focused 修復 + 修復後健康快照,report_type `report_repair_db`),不再跑 LLM 語意巡邏。
+- **`@ling-do` 不檢查 readiness,blocked 計畫照跑**：executor 只做結構驗證(adapter/capability 註冊)就 `runner.run`,連 planner 標記 `blocked` 的計畫都會執行。新增 `_readiness_blockers`:run 前用**現役** capability 集重跑 `assess_plan_readiness`,verdict==`blocked`(有 error 級 finding)就拒絕執行並列出原因。best-effort——診斷自身出錯則降級放行,絕不因 bug 卡死正常執行。
+- **`@ling-insight /tag` `/tags` 靜默失效**：strategy 實名是 `tag-cluster`(`tags` 只是它的 `method:` 欄位),但路由特例寫死 `s_id == "tags"` 成為死碼,打 `/tag` 會無聲退回 `recency` 預設、產出看似正確實則錯的報告。改成 `s_id == "tag-cluster"`,讓 `/tag`/`/tags`/`/tag-cluster` 都正確命中。
+- 測試:+1(executor blocked-plan 拒絕);executor/planner/prompt_watcher/insight/base_agent 61 passed。修完後 repair-db 與 /tag 兩個文件描述**反而變回準確**。
+- **未動(文件偏差,待另一輪決定)**：RESET 實際多刪 `Clippings/`+`toLingLing/` 但文件沒寫;`@ling-patrol` 文件講的 `AUTO_REPAIR` 是死旗標(真閘是 `SELF_HEALING`,預設 True);`@ling-merge /template` 是 no-op;`@ling-repair-tags` 文件範例格式過期;recall/tensions/cortex 文件殘留舊 emoji 與不存在的 `fading` 狀態。
+
 ### 2026-06-15 風格統一：去刺眼/科技感符號，改鄰家女孩·日系女高中生調性
 
 Ling-Ling 是鄰家女孩、好學生、日系女高中生。原本散落的告警/武器/科技感 emoji（🔴🟡🟢⚪🚨⚠❌🚩😿⚔🛡🩺🕵🪦🤖🔥💥🧨🧠）與人設不符,全面柔化(保留 🎀🌸🎐✍️ 等已在用的可愛系,以及正向的 ✅)。

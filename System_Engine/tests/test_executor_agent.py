@@ -286,6 +286,32 @@ class TestExecutorExecute:
         # critique adapter was NOT invoked
         assert len(llm.critique_calls) == 0
 
+    def test_blocked_readiness_refuses_to_execute(self, tmp_path, monkeypatch):
+        # A plan that passes structural validation but is readiness-`blocked`
+        # must NOT run. Patch the readiness assessment to return a blocked
+        # verdict and assert the pipeline never executes.
+        agent, llm, _ = self._setup(tmp_path, monkeypatch)
+        _write_plan(tmp_path, "risky", _valid_plan("risky"))
+
+        import services.plan_readiness as pr
+
+        class _Finding:
+            severity, code, step_id = "error", "multi_source_no_digest", "synth"
+            message, suggestion = "Synthesis step lacks digest inputs.", ""
+
+        class _Report:
+            verdict = "blocked"
+            findings = (_Finding(),)
+
+        monkeypatch.setattr(pr, "assess_plan_readiness", lambda **kw: _Report())
+
+        body = agent.execute({"user_directive": "@ling-do risky"})
+        assert "blocked" in body.lower()
+        assert "multi_source_no_digest" in body
+        # The pipeline must not have run: no adapters exercised.
+        assert llm.synthesize_calls == []
+        assert llm.critique_calls == []
+
     def test_adapter_exception_aborts_pipeline(self, tmp_path, monkeypatch):
         agent, llm, _ = self._setup(tmp_path, monkeypatch)
         llm.synthesize_raises = RuntimeError("boom from synthesize")
