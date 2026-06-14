@@ -148,6 +148,11 @@ CORTEX_GROUNDED_INSIGHT_ENABLED = os.getenv("CORTEX_GROUNDED_INSIGHT_ENABLED", "
 CORTEX_GROUND_MIN_FALSIFIABILITY = float(os.getenv("CORTEX_GROUND_MIN_FALSIFIABILITY", "0.5"))
 CORTEX_GROUND_TOP_K             = max(1, int(os.getenv("CORTEX_GROUND_TOP_K", "3")))
 CORTEX_GROUND_FRACTION          = max(0.0, min(1.0, float(os.getenv("CORTEX_GROUND_FRACTION", "0.7"))))
+# Bounds for M4 auto-tuning of the grounding fraction. Never ground every seed
+# (the cold control group must survive for the canary) and never so few that
+# grounding is pointless.
+CORTEX_GROUND_MIN_FRACTION      = max(0.0, min(1.0, float(os.getenv("CORTEX_GROUND_MIN_FRACTION", "0.3"))))
+CORTEX_GROUND_MAX_FRACTION      = max(0.0, min(1.0, float(os.getenv("CORTEX_GROUND_MAX_FRACTION", "0.85"))))
 # Phase 6 (learning artifacts) — the on-demand @ling-visualize is always
 # available. The two user-facing OUTPUT PREFERENCES it grows (auto-attach to
 # synthesis/insight, extra Mermaid on argument maps) live in Scripture, NOT
@@ -165,6 +170,11 @@ SELF_ASSESSMENT_HISTORY_MAX     = max(2, int(os.getenv("SELF_ASSESSMENT_HISTORY_
 # command can generate/approve on-demand regardless. Default OFF — the system
 # should propose changes to itself only when asked, until validated.
 SELF_IMPROVE_ENABLED            = os.getenv("SELF_IMPROVE_ENABLED", "false").lower() == "true"
+# Metacognition M4 (numeric auto-tune): the only no-human-gate phase, so it is
+# deliberately confined to safe numeric knobs, each bound to an outcome metric,
+# adjusted with damping (±20%/step), a min-sample gate, and AUTO-ROLLBACK on
+# regression. Models the decay-calibration loop. Default OFF.
+AUTOTUNE_ENABLED                = os.getenv("AUTOTUNE_ENABLED", "false").lower() == "true"
 CORTEX_UNMERGE_STRICT_AT        = float(os.getenv("CORTEX_UNMERGE_STRICT_AT", "0.10"))
 CORTEX_UNMERGE_RELAX_AT         = float(os.getenv("CORTEX_UNMERGE_RELAX_AT", "0.05"))
 CORTEX_UNMERGE_MIN_SAMPLES      = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))
@@ -237,6 +247,10 @@ CORTEX_LEDGER_STATE_FILE = DATABASE_DIR / "cortex_ledger_state.json"
 # Metacognition: self-assessment scorecard history (one snapshot per run →
 # trend), capped append-only. M2 diagnosis reads it for chronic-vs-new.
 SELF_ASSESSMENT_HISTORY_FILE = DATABASE_DIR / "self_assessment_history.json"
+# Metacognition M4: live auto-tuned numeric knob overrides (seeded from config
+# defaults, adjusted by the autotuner, read by consumers). Mirrors how decay
+# keeps its live base_days in cortex_decay_state.json.
+AUTOTUNE_STATE_FILE = DATABASE_DIR / "autotune_state.json"
 BENCH_AUTO_MAX_CASES = int(os.getenv("BENCH_AUTO_MAX_CASES", "30"))
 BENCH_AUTO_PER_RUN = int(os.getenv("BENCH_AUTO_PER_RUN", "5"))
 RAW_DIR = WIKI_VAULT_DIR / "raw"

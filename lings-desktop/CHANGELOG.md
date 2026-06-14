@@ -2,6 +2,16 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-14 Metacognition 層 · M4 數值自調（閉合自動改善弧線,唯一無人工閘）
+
+整條「自動評估 → 自動改善」弧線閉合:M1 感覺 → M2 診斷 → M3 提案(人工閘)→ **M4 數值自調**。M4 是唯一不經人工閘的一相,所以護欄最厚。
+
+- **`maintenance/autotune.py` + `services/autotune_store.py`**：把 Cortex 衰減校準那條單一自調迴路,推廣成**有護欄的通用數值自調器**。`Tunable` registry,每旋鈕綁一個 outcome metric。護欄:min-sample gate(無資料不動)、interval gate(不過頻)、damped ±20% step、hard bounds、**auto-rollback**(上次「調升」後指標進危險區→回退凍結;比衰減校準多出來的安全機制)。
+- **不碰 config**：自調值寫進自有的 `autotune_state.json`;消費端走 `autotune_store.get_tuned(name, default)`,**只在 `AUTOTUNE_ENABLED` 開時**回覆寫值——關掉總開關即乾淨還原 config 預設,呼叫端零改動。
+- **v1 綁定**：`CORTEX_GROUND_FRACTION` ↔ echo canary 的 novelty gap(cold − grounded)。gap 高(同溫層風險)→調降;gap ≤0(grounded 反而更新穎)→調升,bounded `[0.3, 0.85]`(永遠留 cold 對照組)。**這把 F1 的 canary 從「只告警」升級成「會動手」**。消費端 `insight_agent._should_ground` 改讀 `get_tuned`。
+- 排程 `autotune_weekly`(dreaming window、idle)。Flag `AUTOTUNE_ENABLED`(預設 **false**)。
+- **Live**：canary 目前 insufficient(F1 剛開、grounded 樣本未滿 5)→ 自調器正確回報「樣本不足,不調整」、不寫檔;AUTOTUNE 關閉時洞察路徑用 config 預設、零影響。框架由單元測試證明(升/降/維持/邊界/冷卻/回退)。+10 tests(1017 passed)。計劃見 [DesignDoc/SelfImprovement_metacognition_plan.md](System_Engine/DesignDoc/SelfImprovement_metacognition_plan.md)。
+
 ### 2026-06-14 Metacognition 層 · M3 生成改用結構化 find/replace 編輯（解決全檔改寫離題）
 
 承上:M3 第一版「整檔改寫」在本機 gemma4:26b 會離題（複述 meta 指令、膨脹檔案,守門丟棄→產出率低）。**改為結構化分段編輯後解決**。

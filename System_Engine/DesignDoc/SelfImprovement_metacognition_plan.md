@@ -1,6 +1,7 @@
 # 自我評估 → 自我改善：Metacognition 層（實施計劃）
 
-> 狀態：**M1（自評器）+ 趨勢 + M2（診斷）+ M3（提案,人工閘）已實作（2026-06-14）。** M2/M3 預設關（`SELF_DIAGNOSIS_ENABLED`／`SELF_IMPROVE_ENABLED`，LLM-costed）;M3 可經 `@ling-improve` 隨時手動發動。M4 規劃中。
+> 狀態：**M1–M4 全部已實作（2026-06-14）。** M2/M3/M4 預設關（`SELF_DIAGNOSIS_ENABLED`／`SELF_IMPROVE_ENABLED`／`AUTOTUNE_ENABLED`）;M3 可經 `@ling-improve` 隨時手動發動。整條「自動評估 → 自動改善」弧線閉合:M1 感覺 → M2 診斷 → M3 提案（人工閘）→ M4 數值自調（無人工閘,但限數值 + 阻尼 + 對照 + 回退）。
+> **M4 live**：v1 綁定 `CORTEX_GROUND_FRACTION` ↔ echo canary novelty gap。canary 目前 insufficient（F1 剛開,grounded 樣本未滿 5）→ 自調器正確回報「樣本不足,不調整」、不寫檔;AUTOTUNE 關閉時消費端用 config 預設,洞察路徑零影響。框架由單元測試證明（升/降/維持/邊界/冷卻/回退）。
 > **M3 演進（已解決全檔改寫離題）**：第一版用「整檔改寫」,本機 gemma4:26b 會離題複述 meta 指令、把 35 行膨脹成 355 行（安全設計如預期擋下:提案非自動套用 + 結構守門丟棄,佇列不收垃圾,但產出率低）。**改為結構化 find/replace 分段編輯後解決**:模型只回要改的片段（每個 find 須逐字存在）,我們確定性套用到原檔→其餘逐字保留。實測 gemma4:26b 對 `agent_counter.md` 產出**兩個乾淨的針對性編輯**（加 Negative Constraints + Self-Correction、收緊 reasoning 須連結 quote）,正是 M2 診斷所要。對不上的 find 自動丟棄,巨量 replace 由 size 守門擋下。
 > Live 驗證：M2 對真實紅燈軸產出精準診斷——正確隔離 `lens_report`（vs synthesis 穩定）、獨立指出 embedder 語義天花板 + facet_lift=0、Cortex 缺證據多樣性/可證偽門檻。趨勢已持久化（`self_assessment_history.json`），慢性軸（連續 ≥3 次紅/黃）會被特別標出。
 >
@@ -88,9 +89,18 @@ M4  邊界內自動套用（flag）   只動安全數值旋鈕，阻尼+對照+�
 - **觸發**：`@ling-improve generate` 隨時手動跑 M1→M2→M3;或週任務在 `SELF_DIAGNOSIS_ENABLED`+`SELF_IMPROVE_ENABLED` 皆開時自動產生（仍不自動套用）。
 - toranomaki 範例:`@ling-improve.md`。
 
-## M4（規劃）
+## M4 — 數值自調（已實作,flag 預設關,唯一無人工閘）
 
-- **M4 數值自調（flag，預設關）**：只對安全旋鈕（如 `SEARCH_DEPTH`、`CORTEX_GROUND_FRACTION`、bench 取樣數）做 damped 自調，每個都要對照 + 回退 + canary。沿用衰減校準的精確模式。這是唯一「不經人工閘」的一相,因此限定數值、且每個旋鈕都要有對照組與自動回退。
+`maintenance/autotune.py` + `services/autotune_store.py`。把衰減校準那條單一迴路推廣成**有護欄的通用數值自調器**:`Tunable` registry,每個旋鈕綁一個 outcome metric。
+
+- **護欄**：min-sample gate（無資料不動）、interval gate（不過頻）、damped step（±20%）、hard bounds、**auto-rollback**（上次「調升」後指標進危險區 → 回退並凍結;這是比衰減校準多出來的安全機制）。
+- **不碰 config**：自調值寫進自有的 `autotune_state.json`;消費端走 `autotune_store.get_tuned(name, default)`,且**只在 `AUTOTUNE_ENABLED` 開啟時**回傳覆寫值——關掉總開關即乾淨還原為 config 預設。
+- **v1 綁定**：`CORTEX_GROUND_FRACTION` ↔ echo canary 的 novelty gap（cold − grounded）。gap 高（同溫層風險）→ 調降;gap ≤0（grounded 反而更新穎,很安全）→ 調升,bounded `[0.3, 0.85]`（永遠留 cold 對照組）。這把 F1 的 canary 從「只告警」升級成「會動手」,閉合 F1 迴路。消費端:`insight_agent._should_ground`。
+- 排程 `autotune_weekly`（dreaming window、idle）。
+
+## 未來旋鈕（待有 metric 與資料）
+
+- `SEARCH_DEPTH` ↔ 檢索/洞察品質;bench 取樣數 ↔ 回歸覆蓋。每個都要先有乾淨的 outcome metric 才納入 registry——無 metric 不自調是硬規則。
 
 ## 測試與驗證
 
