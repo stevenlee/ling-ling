@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
-from maintenance.retrieval_bench import run_retrieval_bench
+from maintenance.retrieval_bench import _matches_expected, run_retrieval_bench
 
 
 class FakeRAG:
@@ -72,6 +72,30 @@ def test_retrieval_bench_fails_below_threshold(tmp_path):
     assert out.status == "failed"
     assert out.pass_rate == 0.0
     assert "| FAIL | `alpha`" in log.read_text(encoding="utf-8")
+
+
+def test_matches_expected_is_document_level_not_chunk_level():
+    # Header promises no alert on "harmless Part/Synthesis swaps": retrieving
+    # a different chunk of the *right* document must count as a hit.
+    got_part1 = result("NIST.AI.600-1 (Part 1)")
+    expected = ["NIST.AI.600-1 (Part 15)", "NIST.AI.600-1 (Synthesis)"]
+    assert _matches_expected(got_part1, expected)
+
+    # Stitched/Synthesis swaps collapse to the same base too.
+    assert _matches_expected(result("NIST.AI.600-1 (Stitched)"), expected)
+
+
+def test_matches_expected_still_fails_on_different_document():
+    # Real drift — a different document — must still fail.
+    assert not _matches_expected(
+        result("G.H. Hardy A Course of Pure Mathematics (Part 3)"),
+        ["TRENCH_REAL_ANALYSIS (Part 105)", "TRENCH_REAL_ANALYSIS (Stitched)"],
+    )
+    # A trailing language tag is NOT a chunk suffix; editions stay distinct.
+    assert not _matches_expected(
+        result("Siddhartha(DE) (Part 5)"),
+        ["Siddhartha(EN) (Part 15)"],
+    )
 
 
 def test_retrieval_bench_skips_without_cases(tmp_path):

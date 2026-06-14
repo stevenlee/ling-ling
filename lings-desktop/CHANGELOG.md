@@ -2,6 +2,22 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-14 Bench 比對改為文件層級（修正與自身 docstring 的矛盾）
+
+修掉上一筆「待決策」項目。Bench 檔頭明寫「catch real drift **without alerting on harmless Part/Synthesis swaps**」,但 `_matches_expected` 卻拿含 `(Part N)` 尾綴的完整 title 做逐字交集——同一份文件的不同 chunk(harmless Part swap)會被判 FAIL,與檔頭意圖直接矛盾。實證:per-doc cap 修好後 `NIST.AI.600-1` 已在 top-5(rank 5),卻因落在 Part 1、而 `expected_top_k` 只列 Part 15/17/… 被誤判假陰性。
+
+- **`maintenance/retrieval_bench.py`**：新增 `_strip_chunk_suffix`,在 `_matches_expected` 比對前把 `(Part N)`/`(Synthesis)`/`(Stitched)` 尾綴從**候選與期望兩邊**剝除 → 文件層級比對,對齊 docstring 意圖。只剝列舉的尾綴:語言標籤 `Siddhartha(EN)`/`(DE)`(無空格)不受影響,版本仍視為不同文件。
+- **不會變鬆的證明**:真 drift 照樣 FAIL——Taylor 案找到的是 *另一本書* Hardy(base name 不同),弱解案找到的是 *Hamlet*(跨語言排序真的弱)。兩者修正後仍為 FAIL。
+- **Live bench**:0.80 → **0.867**(13/15)。+2 tests(文件層級命中 / 不同文件仍失敗)。剩 2 失敗皆為真實檢索弱點,非比對人為過嚴。
+
+### 2026-06-14 檢索品質：每文件上限(anti-flood),修正單一大文件洗版
+
+firsthand 調查 bench 73% 的真因(不靠 M2 的猜測):4 個失敗中,**正確文件其實都有被檢索到,只是被某個高 chunk 量的大文件洗出 top-5**。實測:查「NIST 生成式 AI 風險分類」,top-10 有 6 個 Space Exploration + 3 個 Space X Offering(其 Risk Factors 段被 BM25 命中),NIST.AI.600-1 被擠到第 11。
+
+- **`services/rag_manager.py`**：最終排序前加**每來源文件上限** `_cap_per_document`(同一 base-doc 最多保留 N 個 chunk,保序;base-doc = 去掉結尾 `(Part N)`/`(Synthesis)`/`(Stitched)`,故不同語言版如 `Siddhartha(EN)`/`(DE)` 仍視為不同文件)。在非-MMR 路徑套用(MMR 本身已是多樣化機制)。新增 `query_notes(max_per_doc=)` 參數 + config `RETRIEVAL_MAX_PER_DOC`(預設 2,0 關閉)。Any-match 安全:cap 只移除同文件較低排名的重複,把被埋的不同文件往上推,不會把已在 top-k 的正確結果擠掉。
+- **Live bench**：0.733 → **0.80**(過警戒線)。修好「求道者(中文)→ Siddhartha」案例;NIST.AI.600-1 也被推進 top-5(rank 5)。+4 tests(1021 passed)。
+- **附帶發現(待決策,未動)**：剩餘 3 個失敗有 2 個是 **bench 期望過嚴**——NIST 找到的是正確文件的 Part 1,但 `expected_top_k` 只列了 Part 15/17/…(不含 Part 1);bench header 明明寫「不該對 harmless Part/Synthesis swap 告警」,但 `_matches_expected` 卻做逐字 part 比對,與自身意圖矛盾。Taylor 案是真的找到另一本相關書(Hardy)。弱解(中文→英文)是真的跨語言排序弱。是否把 bench 比對改為**文件層級**(對齊其 docstring 意圖),待確認。
+
 ### 2026-06-14 Metacognition 層 · M4 數值自調（閉合自動改善弧線,唯一無人工閘）
 
 整條「自動評估 → 自動改善」弧線閉合:M1 感覺 → M2 診斷 → M3 提案(人工閘)→ **M4 數值自調**。M4 是唯一不經人工閘的一相,所以護欄最厚。

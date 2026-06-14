@@ -69,6 +69,14 @@ RERANKER_MULTIPLIER             = int(os.getenv("RERANKER_MULTIPLIER", "5"))
 HYBRID_RETRIEVAL_ENABLED        = os.getenv("HYBRID_RETRIEVAL_ENABLED", "false").lower() == "true"
 BM25_MULTIPLIER                 = int(os.getenv("BM25_MULTIPLIER", "3"))
 
+# ─── Per-document cap (anti-flood diversity) ──────────────────────────
+# A single high-volume document's many chunks can flood the top results and
+# bury the genuinely-relevant doc just below the cut (verified: a NIST query
+# returned 9/10 SpaceX chunks, NIST itself at rank 11). Cap how many chunks
+# from the SAME source document survive into the final top-k. 0 disables.
+# Applied on the non-MMR path (MMR is its own diversity mechanism).
+RETRIEVAL_MAX_PER_DOC           = int(os.getenv("RETRIEVAL_MAX_PER_DOC", "2"))
+
 # ─── Facet Index (summary-as-pointer retrieval) ───────────────────────
 # Part digests (thesis/key_points) are embedded as "facet" entries that
 # point back to their source page. A facet hit is dereferenced to the real
