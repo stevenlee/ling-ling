@@ -2,6 +2,13 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-14 Metacognition 層 · M3 生成改用結構化 find/replace 編輯（解決全檔改寫離題）
+
+承上:M3 第一版「整檔改寫」在本機 gemma4:26b 會離題（複述 meta 指令、膨脹檔案,守門丟棄→產出率低）。**改為結構化分段編輯後解決**。
+
+- **`maintenance/self_improve.py`**：改寫步驟改成要 LLM 回**一組 find/replace 編輯**（`_complete_json`,非整檔改寫）。每個 `find` 須在現行檔**逐字存在**才套用,對不上的自動丟棄（部分正確的回應仍取其可用編輯）;我們**確定性重建**修訂全文,其餘內容逐字保留。size 守門保留為 backstop(擋巨量 replace)。提案存下套用的編輯清單,`@ling-improve show` 會列出 find→replace + diff。
+- **Live（真實 gemma4:26b）**：對 `agent_counter.md` 產出**兩個乾淨的針對性編輯**——加入 Negative Constraints + Self-Correction 步驟、收緊 schema 的 reasoning 須連結 quote——正是 M2 診斷所要,diff 最小、其餘逐字保留。全檔改寫的離題問題消失。+13 tests(1007 passed)。
+
 ### 2026-06-14 Metacognition 層 · M3 提案（自我改善,人工閘 + `@ling-improve`）
 
 整條弧線第一次「改自己」,但全程人在迴路、永不靜默套用。

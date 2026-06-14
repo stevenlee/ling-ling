@@ -31,9 +31,11 @@ def _sha(text: str) -> str:
 
 def make_proposal(
     *, axis: str, target_path: str, rationale: str, addressed_fixes: list,
-    original_content: str, revised_content: str, stamp: str | None = None,
+    original_content: str, revised_content: str, edits: list | None = None,
+    stamp: str | None = None,
 ) -> dict:
     """Build a proposal dict. `target_path` is relative to the vault root.
+    `edits` is the list of applied find/replace edits (for review transparency).
     `stamp` lets callers inject a deterministic timestamp (tests)."""
     stamp = stamp or datetime.now().strftime("%Y%m%d%H%M%S")
     pid = f"{Path(target_path).stem}-{stamp}"
@@ -44,6 +46,7 @@ def make_proposal(
         "target_path": target_path,
         "rationale": rationale,
         "addressed_fixes": list(addressed_fixes or []),
+        "edits": list(edits or []),
         "original_sha": _sha(original_content),
         "original_content": original_content,
         "revised_content": revised_content,
