@@ -623,3 +623,38 @@ def test_targeted_pairs_fallback_respects_exclude():
     # With nothing excluded, the fallback pairs the target with A.
     out2 = agent._build_targeted_pairs([T, A], ["T"], num_pairs=1, exclude=set())
     assert out2 == [(T, A)]
+
+
+# ── Phase 6: insight learning-artifact auto-attach (flag-gated) ─────────
+
+def test_maybe_artifact_off_returns_empty(monkeypatch):
+    from agents.insight_agent import InsightAgent
+    monkeypatch.setattr("core.config.VISUAL_ROUTER_ENABLED", False)
+    agent = InsightAgent.__new__(InsightAgent)
+    agent.llm = object()
+    assert agent._maybe_artifact("some insight body") == ""
+
+
+def test_maybe_artifact_on_wraps_section(monkeypatch):
+    from agents.insight_agent import InsightAgent
+    import agents.insight_agent as ia
+    agent = InsightAgent.__new__(InsightAgent)
+    agent.llm = object()
+    monkeypatch.setattr(
+        "services.learning_artifacts.maybe_artifact_section",
+        lambda llm, content: "## 🖼️ 學習輔助（flowchart）\n\nX\n\n",
+    )
+    out = agent._maybe_artifact("body")
+    assert out.startswith("\n\n---\n\n") and "學習輔助" in out
+
+
+def test_maybe_artifact_failopen(monkeypatch):
+    from agents.insight_agent import InsightAgent
+    agent = InsightAgent.__new__(InsightAgent)
+    agent.llm = object()
+
+    def boom(llm, content):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr("services.learning_artifacts.maybe_artifact_section", boom)
+    assert agent._maybe_artifact("body") == ""

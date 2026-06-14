@@ -118,6 +118,18 @@ class InsightAgent(BaseAgent):
             "signals_version": 1,
         }
 
+    def _maybe_artifact(self, content: str) -> str:
+        """Phase 6 auto-attach: a learning-aid section for the insight body, or
+        "" when VISUAL_ROUTER_ENABLED is off (zero LLM calls). Fail-open —
+        a visual is a bonus, never block the insight report on it."""
+        try:
+            from services.learning_artifacts import maybe_artifact_section
+            section = maybe_artifact_section(self.llm, content)
+            return f"\n\n---\n\n{section}" if section else ""
+        except Exception as e:
+            logging.warning(f"insight artifact auto-attach failed: {e}")
+            return ""
+
     @staticmethod
     def _pair_key(a: dict, b: dict) -> tuple:
         """Order-independent dedup key for a document pair (audit R7-D — this
@@ -166,6 +178,8 @@ class InsightAgent(BaseAgent):
         meta.update(self._signals_meta(report_content, target_titles))
         if self._grounded_on_acc:
             meta["grounded_on"] = sorted(self._grounded_on_acc)
+
+        report_content += self._maybe_artifact(report_content)
 
         _, full_markdown = self._write_report(
             f"洞察分析-{config['name']}", report_content, "report_insight", meta
@@ -247,6 +261,8 @@ class InsightAgent(BaseAgent):
         meta = self._signals_meta(final_markdown, target_titles)
         if self._grounded_on_acc:
             meta["grounded_on"] = sorted(self._grounded_on_acc)
+
+        final_markdown += self._maybe_artifact(cross_synthesis)
 
         _, full_markdown = self._write_report("全方位洞察報告", final_markdown, "report_insight_full", meta)
         self._mirror_to_insights(
