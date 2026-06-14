@@ -10,6 +10,7 @@ from agents.profiles_agent import ProfilesAgent
 from agents.cortex_agent import CortexAgent
 from agents.recall_agent import RecallAgent
 from agents.tension_agent import TensionAgent
+from agents.visualize_agent import VisualizeAgent
 
 class AgentRegistry:
     def __init__(self, llm, rag):
@@ -31,6 +32,7 @@ class AgentRegistry:
             "cortex": CortexAgent,
             "recall": RecallAgent,
             "tensions": TensionAgent,
+            "visualize": VisualizeAgent,
         }
 
     def get_agent(self, command_key: str):

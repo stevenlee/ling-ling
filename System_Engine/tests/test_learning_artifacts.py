@@ -1,0 +1,106 @@
+"""Phase 6: learning-artifact router + @ling-visualize agent."""
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+os.environ.setdefault("LLM_PROVIDER", "vllm")
+
+from services.learning_artifacts import build_artifact, classify_structure
+
+
+class FakeLLM:
+    def __init__(self, classify=None, completion=""):
+        self._classify = classify if classify is not None else {}
+        self._completion = completion
+
+    def _complete_json(self, *, kind, system_prompt, user_msg, **kw):
+        return self._classify
+
+    def complete(self, system_prompt, user_msg, **kw):
+        return self._completion
+
+
+# ── classify ───────────────────────────────────────────────────────────
+
+def test_classify_valid_type():
+    llm = FakeLLM(classify={"type": "timeline", "confidence": 0.9, "reason": "歷史演進"})
+    out = classify_structure(llm, "1990... 2000... 2010...")
+    assert out["type"] == "timeline" and out["confidence"] == 0.9
+
+
+def test_classify_invalid_type_falls_to_none():
+    llm = FakeLLM(classify={"type": "banana", "confidence": 0.9})
+    assert classify_structure(llm, "x")["type"] == "none"
+
+
+# ── build_artifact ───────────────────────────────────────────────────────
+
+def test_forced_table_renders_table():
+    llm = FakeLLM(completion="| A | B |\n|---|---|\n| 1 | 2 |")
+    out = build_artifact(llm, "compare A and B", forced_type="comparison_table")
+    assert out["type"] == "comparison_table"
+    assert "| A | B |" in out["artifact"]
+
+
+def test_none_yields_no_artifact():
+    llm = FakeLLM(classify={"type": "none", "confidence": 0.0, "reason": "散文"})
+    out = build_artifact(llm, "some rambling prose with no structure")
+    assert out["type"] == "none" and out["artifact"] == ""
+
+
+def test_mermaid_block_extracted_and_kept():
+    llm = FakeLLM(
+        classify={"type": "flowchart", "confidence": 0.8},
+        completion="這是說明\n```mermaid\nflowchart TD\n  A[\"start\"] --> B[\"end\"]\n```\n後記",
+    )
+    out = build_artifact(llm, "first do A then B")
+    assert out["type"] == "flowchart"
+    assert out["artifact"].startswith("```mermaid") and "flowchart TD" in out["artifact"]
+
+
+def test_mermaid_failure_returns_empty_artifact():
+    # No mermaid block in the reply → validation drops it (no broken diagram).
+    llm = FakeLLM(classify={"type": "mindmap", "confidence": 0.8}, completion="sorry no diagram")
+    out = build_artifact(llm, "decompose this topic")
+    assert out["type"] == "mindmap" and out["artifact"] == ""
+
+
+def test_empty_content_is_none():
+    out = build_artifact(FakeLLM(), "   ")
+    assert out["type"] == "none"
+
+
+# ── VisualizeAgent ───────────────────────────────────────────────────────
+
+def test_load_note_resolution(tmp_path, monkeypatch):
+    import agents.visualize_agent as va
+    pages = tmp_path / "pages"; (pages / "MyDoc").mkdir(parents=True)
+    (pages / "MyDoc" / "MyDoc (Synthesis).md").write_text("synthesis body", encoding="utf-8")
+    monkeypatch.setattr(va, "PAGES_DIR", pages)
+    monkeypatch.setattr(va, "WIKI_VAULT_DIR", tmp_path)
+    agent = va.VisualizeAgent.__new__(va.VisualizeAgent)
+    text, src = agent._load_note("MyDoc")
+    assert text == "synthesis body" and "Synthesis" in src
+
+
+def test_execute_parses_wikilink_and_forced_type(tmp_path, monkeypatch):
+    import agents.visualize_agent as va
+    agent = va.VisualizeAgent.__new__(va.VisualizeAgent)
+    agent.llm = object()
+    agent._load_note = lambda title: ("doc text", "src")
+    agent._write_report = lambda t, body, rtype, meta=None: (None, body)
+    captured = {}
+    monkeypatch.setattr(va, "build_artifact",
+                        lambda llm, text, forced_type=None: captured.update(forced=forced_type)
+                        or {"type": forced_type or "none", "reason": "r", "artifact": "ART"})
+    out = agent.execute({"user_directive": "@ling-visualize [[Some Doc]] as timeline"})
+    assert captured["forced"] == "timeline"
+    assert "ART" in out
+
+
+def test_render_none_explains(tmp_path):
+    from agents.visualize_agent import VisualizeAgent
+    agent = VisualizeAgent.__new__(VisualizeAgent)
+    body = agent._render("X", "src", {"type": "none", "reason": "散文", "artifact": ""})
+    assert "沒有明顯的視覺結構" in body
