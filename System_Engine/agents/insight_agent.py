@@ -149,6 +149,7 @@ class InsightAgent(BaseAgent):
 
         pipeline = config.get("pipeline", "single")
         resolved_template = forced_template or config.get("template")
+        self._grounded_on_acc = set()   # F1: claims this run grounded on (for frontmatter)
 
         if pipeline == "montecarlo":
             report_content = self._run_montecarlo(config, user_directive, resolved_template)
@@ -163,6 +164,8 @@ class InsightAgent(BaseAgent):
         }
 
         meta.update(self._signals_meta(report_content, target_titles))
+        if self._grounded_on_acc:
+            meta["grounded_on"] = sorted(self._grounded_on_acc)
 
         _, full_markdown = self._write_report(
             f"洞察分析-{config['name']}", report_content, "report_insight", meta
@@ -218,6 +221,7 @@ class InsightAgent(BaseAgent):
         """Run all strategies, then perform a cross-strategy synthesis."""
         section_results = []
         insight_seeds = []
+        self._grounded_on_acc = set()   # F1: accumulates across all strategies' seeds
 
         for strategy_id, config in self.strategies.items():
             pipeline = config.get("pipeline", "single")
@@ -241,6 +245,8 @@ class InsightAgent(BaseAgent):
         )
 
         meta = self._signals_meta(final_markdown, target_titles)
+        if self._grounded_on_acc:
+            meta["grounded_on"] = sorted(self._grounded_on_acc)
 
         _, full_markdown = self._write_report("全方位洞察報告", final_markdown, "report_insight_full", meta)
         self._mirror_to_insights(
@@ -1514,6 +1520,11 @@ class InsightAgent(BaseAgent):
             if priors:
                 grounded_on = [p.claim_id for p in priors]
                 grounding_section = self._grounding_block(priors)
+                # Accumulate for the report frontmatter so consolidation's
+                # firewall knows which claims this insight was grounded on.
+                if not hasattr(self, "_grounded_on_acc"):
+                    self._grounded_on_acc = set()
+                self._grounded_on_acc.update(grounded_on)
 
         expand_prompt = (
             f"{system_base}\n\n{agent_instruction}\n\n"

@@ -207,3 +207,19 @@ class TestStrictModeInConsolidation:
         pages = load_all_pages(env["cortex_dir"])
         assert len(pages) == 2
         assert any(p.related for p in pages)
+
+
+def test_independent_insights_excludes_grounded_self_dissent():
+    """F1 defense 1 (falsification side): an insight grounded ON the claim being
+    judged is prompted dissent, not independent evidence — excluded from the count."""
+    from maintenance.cortex_ledger import _independent_insights
+    target = "cortex-P"
+    c1 = CortexPage(claim_id="c1", path=Path("c1.md"), claim="not P",
+                    evidence=[{"insight": "g1.md", "grounded_on": [target]}])
+    c2 = CortexPage(claim_id="c2", path=Path("c2.md"), claim="also not P",
+                    evidence=[{"insight": "g2.md", "grounded_on": [target]}])
+    # Both contradictors come from insights grounded ON P → not independent of P.
+    assert _independent_insights([c1, c2], exclude_grounded_on=target) == set()
+    # External evidence (or judging a different claim) → both count.
+    assert len(_independent_insights([c1, c2])) == 2
+    assert len(_independent_insights([c1, c2], exclude_grounded_on="cortex-OTHER")) == 2

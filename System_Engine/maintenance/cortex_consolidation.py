@@ -144,6 +144,7 @@ class _Consolidator:
         self.adjudications_used = 0
         self.created = 0
         self.merged = 0
+        self.firewalled = 0   # F1: reinforcements skipped as grounded self-agreement
         self.contradiction_links = 0
         self._refresh_page_embeddings()
 
@@ -216,17 +217,33 @@ class _Consolidator:
         except Exception as e:
             logging.warning(f"Cortex: indexing failed for {page.claim_id}: {e}")
 
-    def _merge_into(self, page: CortexPage, claim: str, evidence: dict) -> None:
+    def _merge_into(self, page: CortexPage, claim: str, evidence: dict,
+                    grounded_on: list[str] | None = None) -> None:
         """Reconsolidation: section-level mutations only, zero LLM calls.
 
         S grows by the spacing rule (cortex_decay.reinforce): a same-night
         duplicate barely moves it; a rediscovery after near-forgetting
         consolidates deeply. Phase 2's flat S+=1 is superseded.
+
+        PROVENANCE FIREWALL (F1 defenses 1+4): if this claim came from a
+        Cortex-grounded insight that was generated WITH this very page in its
+        context (page.claim_id in grounded_on), the agreement is circular — the
+        insight echoed a belief that was fed to it. Record the evidence link but
+        DO NOT reinforce (no S/confidence boost). Only external evidence raises
+        confidence; self-agreement cannot.
         """
         from services.cortex_decay import GAIN_REDISCOVERY, reinforce
         page.evidence.append(evidence)
-        reinforce(page, GAIN_REDISCOVERY)
-        page.confidence = round(min(_CONFIDENCE_CAP, page.confidence + _CONFIDENCE_STEP), 4)
+        if grounded_on and page.claim_id in grounded_on:
+            self.firewalled += 1
+            logging.info(
+                "Cortex firewall: %s reinforced by a grounded insight that cited it "
+                "— recording link, skipping reinforcement (no echo chamber).",
+                page.claim_id[:12],
+            )
+        else:
+            reinforce(page, GAIN_REDISCOVERY)
+            page.confidence = round(min(_CONFIDENCE_CAP, page.confidence + _CONFIDENCE_STEP), 4)
         if claim != page.claim and claim not in page.variants:
             page.variants.append(claim)
             if len(page.variants) > self.max_variants:
@@ -263,19 +280,25 @@ class _Consolidator:
         page.confidence = round(max(_CONFIDENCE_FLOOR, page.confidence - _CONTRADICTION_DENT), 4)
         page.updated = _now()
 
-    def process_claim(self, claim: str, summary: str, insight_name: str, sources: list[str], applies_when: str = "") -> None:
+    def process_claim(self, claim: str, summary: str, insight_name: str, sources: list[str],
+                      applies_when: str = "", grounded_on: list[str] | None = None) -> None:
+        grounded_on = list(grounded_on or [])
         evidence = {
             "insight": insight_name,
             "sources": sources,
             "date": datetime.now().strftime("%Y-%m-%d"),
             "summary": summary,
+            # Provenance: the Cortex claims this insight was generated WITH.
+            # Lets the firewall (here) and the ledger's independence count
+            # exclude self-agreement (F1 defense 1).
+            "grounded_on": grounded_on,
         }
 
         # Exact-duplicate fast path: identical claim text needs no adjudication.
         claim_id = make_claim_id(claim)
         existing = self.by_claim_id.get(claim_id)
         if existing is not None:
-            self._merge_into(existing, claim, evidence)
+            self._merge_into(existing, claim, evidence, grounded_on)
             return
 
         related: list[str] = []
@@ -301,7 +324,7 @@ class _Consolidator:
                     break  # quota exhausted — remaining relations wait for tomorrow
                 if verdict == "equivalent":
                     if not self.strict:
-                        self._merge_into(neighbor, claim, evidence)
+                        self._merge_into(neighbor, claim, evidence, grounded_on)
                         return
                     verdict = "complementary"  # strict: link, don't merge
                 if verdict in ("entails", "entailed_by", "complementary"):
@@ -495,12 +518,17 @@ def run_consolidation(
             body, _ = strip_body_frontmatter(path.read_text(encoding="utf-8"))
             claims = llm.extract_claims(body[:_INSIGHT_TEXT_CAP])
             sources = _insight_sources(meta, body, PAGES_DIR, NOTES_DIR)
+            # Provenance for the firewall: which Cortex claims this insight was
+            # generated WITH (F1). Empty for non-grounded insights.
+            grounded_on = meta.get("grounded_on") or []
+            if not isinstance(grounded_on, list):
+                grounded_on = []
             for item in claims if isinstance(claims, list) else []:
                 if not isinstance(item, dict) or not isinstance(item.get("claim"), str):
                     continue
                 worker.process_claim(
                     item["claim"], str(item.get("summary") or ""), path.name, sources,
-                    str(item.get("applies_when") or "")
+                    str(item.get("applies_when") or ""), grounded_on=grounded_on,
                 )
                 claim_count += 1
         except Exception:

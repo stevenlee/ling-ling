@@ -11,6 +11,15 @@ Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [READM
 - **改用 LLM-over-full-Cortex（第二輪 live 回饋後的架構修正）**：連 hybrid 都救不了「關於 Hibert 的所有記憶」——一字 typo（Hibert vs Hilbert）打爆 exact-token BM25，embedder 又弱到接不起，字面命中主張排最後。**根本問題是工具選錯**：語料只有 9 條，這種規模不該用「檢索」——直接把整個 Cortex 塞進 LLM context，讓它讀完選 + 綜述，typo／概念匹配／框架詞全部自然處理。recall 現在預設 LLM-over-corpus（`CORTEX_RECALL_LLM_MAX=150` 內全塞；超過才用 hybrid `recall_claims` 預篩 `CORTEX_RECALL_PREFILTER`）。Live（typo query）：正確對應 Hilbert、只引用相關的 [#4]、附自我批判（信心 0.50 + 反例）。**同時修一個 bug**：原用 `answer_query` 會經 `_build_system_prompt` 注入 Visualization/template 樣板，害模型狂追一個沒人要的 Mermaid 圖並吐出整段 chain-of-thought（16682 字）；改用新的精簡 `LLMClient.complete(system_prompt, user_msg)`（不帶 persona/template/viz 機制）+ 「只輸出最終綜述」指令後，輸出降為 836 字、乾淨。
 - **Hybrid 融合（第一輪 live 回饋後，保留為大語料預篩）**：純向量在真實對話式查詢上回傳平帶 grab-bag——embedder（nomic-embed-text）對同語言文字的 cosine 擠在 0.53–0.69，連把 on-topic 主張排到 off-topic 之前都做不到（這是 R6 的同一個 embedder 天花板，memory loop 繼承了它）。recall 改為 **magnitude-aware hybrid**（cosine + BM25 字元級 CJK token，BM25 以自身 max 正規化後加權融合）。**刻意不用 RAG 層的 RRF**：RRF 是 rank-based、丟棄 BM25 的量級，且其 k=60 阻尼在 Cortex 這種小語料（~數十條）會把「字面命中得分 4× 次名」的尖峰訊號壓成「rank1 僅微幅勝 rank2」，被 embedder 平帶蓋過。實測：「構建知識圖譜的過程」查詢，字面命中主張從純向量的 **rank 9 → hybrid rank 1**。注意：BM25 在極小語料（≤2–3 頁）IDF 退化為 0；hybrid 的效益隨 Cortex 長大才完整。純概念、無詞彙重疊的查詢仍受 embedder 天花板限制（R6）。+1 test。
 
+### 2026-06-14 Cortex Phase 5 · F1：Cortex-grounded insight（五防禦俱全，flag OFF）
+
+關閉記憶迴路的核心：讓累積的 Cortex 信念**參與**洞察生成,但**不製造自我印證/同溫層**。`CORTEX_GROUNDED_INSIGHT_ENABLED` 預設 **OFF**;五條反同溫層防禦全部落地後才安全開啟。
+
+- **注入側**：`_expand_seed` 注入相關的 Cortex 主張當**辯證式**先驗（「請挑戰、找張力與反例,不要附和」,防禦②）,且只取 `falsifiability >= CORTEX_GROUND_MIN_FALSIFIABILITY` 的主張當錨（不可反駁的＝同溫層燃料,排除,防禦③）。只 ground `CORTEX_GROUND_FRACTION` 比例的 seed,其餘保持 cold 當 canary 控制組。洞察 frontmatter 記 `grounded_on=[claim_id...]` provenance。
+- **Provenance 防火牆（防禦①,堵兩條循環）**：強化路徑——`cortex_consolidation._merge_into` 若 grounded 洞察附和自己的先驗,記 evidence 但**跳過 S/confidence 強化**（只有外部證據能升信心,防禦④）;falsification 路徑——`cortex_ledger` 的「≥2 獨立來源」計數**排除被 prompt 來挑戰該主張的洞察**,避免辯證 framing 製造反例殺自己的先驗。
+- **同溫層金絲雀（防禦⑤）**：`maintenance/echo_canary.py` 比較 grounded vs cold 洞察的 novelty/groundedness,grounded novelty 系統性偏低 → alarm + 建議關閉。
+- flags：`CORTEX_GROUNDED_INSIGHT_ENABLED`(False)/`_MIN_FALSIFIABILITY`(0.5)/`_TOP_K`(3)/`_FRACTION`(0.7)。+13 tests（注入/閘/firewall 兩路/canary）。計劃與 enable protocol 見 [DesignDoc/CortexPhase5_F1_grounded_insight_plan.md](System_Engine/DesignDoc/CortexPhase5_F1_grounded_insight_plan.md)。
+
 ### 2026-06-14 Cortex Phase 5 · F3：知識張力掃描（`@ling-tensions`）
 
 - **記憶的反面**：recall 答「我相信什麼」，tensions 答「我的信念在哪裡有張力」——對抗自我印證的解藥（把異議攤開）。純掃描，無 LLM、無 embedding，所以不受檢索品質影響。四個 bucket：**矛盾對**（ledger 標記的衝突，A↔B 去重、id 解析成主張全文）、**教條**（高信心 ≥0.5 但低可反駁性 ≤0.25——「不可能錯」的主張只會自我強化，同溫層的結構性燃料）、**證據單薄**（≤1 來源）、**已被推翻**（status falsified，附死因 counterpoints，透明保留）。

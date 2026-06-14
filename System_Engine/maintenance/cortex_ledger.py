@@ -96,14 +96,24 @@ def _save_state(path: Path, state: dict) -> None:
         logging.warning(f"CortexLedger: state write failed: {e}")
 
 
-def _independent_insights(pages: list) -> set[str]:
-    """Distinct insight files backing a set of pages."""
+def _independent_insights(pages: list, exclude_grounded_on: str | None = None) -> set[str]:
+    """Distinct insight files backing a set of pages.
+
+    F1 defense 1 (falsification side): an insight that was Cortex-grounded ON
+    `exclude_grounded_on` was prompted to challenge that very claim — its
+    contradiction is dialectical, not INDEPENDENT external evidence, so it must
+    not count toward falsifying it. Otherwise the grounding prompt could
+    manufacture the dissent that kills its own prior.
+    """
     insights = set()
     for page in pages:
         for evidence in page.evidence:
             name = evidence.get("insight")
-            if name:
-                insights.add(str(name))
+            if not name:
+                continue
+            if exclude_grounded_on and exclude_grounded_on in (evidence.get("grounded_on") or []):
+                continue
+            insights.add(str(name))
     return insights
 
 
@@ -190,8 +200,8 @@ def run_ledger_pass(
         if (state["falsify_checked"].get(page.claim_id, "") or "0000")[:10] > cooldown_cut:
             continue
         contradictors = [by_id[c] for c in page.contradictions if c in by_id]
-        if len(_independent_insights(contradictors)) < 2:
-            continue  # single-source pile-on — not independent evidence
+        if len(_independent_insights(contradictors, exclude_grounded_on=page.claim_id)) < 2:
+            continue  # single-source pile-on / prompted self-dissent — not independent
         candidates.append((page, contradictors))
 
     for page, contradictors in candidates[:max(0, falsify_quota)]:
