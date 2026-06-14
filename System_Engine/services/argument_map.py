@@ -14,6 +14,7 @@ Structured-Markdown output (robust, readable). Extraction via `_complete_json`
 from __future__ import annotations
 
 import logging
+import re
 
 _SYSTEM = (
     "你是論證分析器,服務批判性思考。抽出內容的論證骨架（Toulmin 模型）。\n"
@@ -63,8 +64,30 @@ def build_argument_map(llm, content: str) -> dict:
     }
 
 
-def render_argument_map(data: dict) -> str:
-    """Structured-Markdown Toulmin layout. Returns "" if there's no claim."""
+def _mm(s: str, cap: int = 80) -> str:
+    """Sanitize a label for a Mermaid double-quoted node."""
+    return re.sub(r"\s+", " ", str(s)).strip().replace('"', "'")[:cap]
+
+
+def _argument_mermaid(data: dict) -> str:
+    """Deterministic Mermaid graph from the Toulmin fields — no LLM, so it can't
+    drift or hallucinate. Grounds → claim (solid); warrants/rebuttals → claim
+    (dashed, labelled). Optional companion to the Markdown layout."""
+    lines = ["```mermaid", "graph TD", f'  C["主張：{_mm(data["claim"])}"]']
+    for i, g in enumerate(data.get("grounds", [])):
+        lines.append(f'  G{i}["根據：{_mm(g)}"] --> C')
+    for i, w in enumerate(data.get("warrants", [])):
+        lines.append(f'  W{i}["隱含前提：{_mm(w)}"] -. 未明說 .-> C')
+    for i, r in enumerate(data.get("rebuttals", [])):
+        lines.append(f'  R{i}["反駁：{_mm(r)}"] -. 挑戰 .-> C')
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def render_argument_map(data: dict, with_mermaid: bool = False) -> str:
+    """Structured-Markdown Toulmin layout. Returns "" if there's no claim.
+    When `with_mermaid`, appends a deterministic Mermaid graph of the same
+    structure (gated by ARGUMENT_MAP_MERMAID at the call site)."""
     if not data or not data.get("claim"):
         return ""
     L = ["## 🧩 論證結構（Toulmin）", "", f"**主張**：{data['claim']}", ""]
@@ -84,4 +107,6 @@ def render_argument_map(data: dict) -> str:
         L.append("")
     if data.get("weakest_link"):
         L += [f"> ⚠️ **最弱的一環**：{data['weakest_link']}"]
+    if with_mermaid:
+        L += ["", _argument_mermaid(data)]
     return "\n".join(L).rstrip()

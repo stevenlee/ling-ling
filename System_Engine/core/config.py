@@ -151,6 +151,9 @@ CORTEX_GROUND_FRACTION          = max(0.0, min(1.0, float(os.getenv("CORTEX_GROU
 # Phase 6 (learning artifacts). On-demand @ling-visualize is always available;
 # this gates the LATER auto-attach of artifacts to synthesis/insight output.
 VISUAL_ROUTER_ENABLED           = os.getenv("VISUAL_ROUTER_ENABLED", "false").lower() == "true"
+# Append a deterministic Mermaid graph to argument maps (default off — the
+# structured-Markdown Toulmin block is the primary, most-robust output).
+ARGUMENT_MAP_MERMAID            = os.getenv("ARGUMENT_MAP_MERMAID", "false").lower() == "true"
 CORTEX_UNMERGE_STRICT_AT        = float(os.getenv("CORTEX_UNMERGE_STRICT_AT", "0.10"))
 CORTEX_UNMERGE_RELAX_AT         = float(os.getenv("CORTEX_UNMERGE_RELAX_AT", "0.05"))
 CORTEX_UNMERGE_MIN_SAMPLES      = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))

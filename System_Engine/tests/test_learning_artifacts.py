@@ -71,6 +71,31 @@ def test_empty_content_is_none():
     assert out["type"] == "none"
 
 
+def test_mermaid_kind_mismatch_rejected():
+    # Asked for a mindmap, model returned a flowchart → validation drops it
+    # rather than emitting a diagram of the wrong type.
+    llm = FakeLLM(
+        classify={"type": "mindmap", "confidence": 0.8},
+        completion="```mermaid\nflowchart TD\n  A --> B\n```",
+    )
+    out = build_artifact(llm, "decompose this topic")
+    assert out["type"] == "mindmap" and out["artifact"] == ""
+
+
+def test_mermaid_kind_match_accepted():
+    llm = FakeLLM(
+        classify={"type": "mindmap", "confidence": 0.8},
+        completion="```mermaid\nmindmap\n  root((\"主題\"))\n    分支A\n```",
+    )
+    out = build_artifact(llm, "decompose this topic")
+    assert out["artifact"].startswith("```mermaid") and "mindmap" in out["artifact"]
+
+
+def test_validate_mermaid_rejects_single_line():
+    from services.learning_artifacts import _validate_mermaid
+    assert _validate_mermaid("```mermaid\nflowchart TD\n```", "flowchart") is False
+
+
 # ── VisualizeAgent ───────────────────────────────────────────────────────
 
 def test_load_note_resolution(tmp_path, monkeypatch):

@@ -41,6 +41,17 @@ _MERMAID_RULES = (
     "subgraph 名稱也用雙引號；不要在 label 裡用未跳脫的特殊字元。只輸出一個 ```mermaid 區塊,不要任何說明文字。"
 )
 
+# Per-kind syntax guidance (the generic rules above aren't enough for mindmap).
+_MERMAID_HINTS = {
+    "mindmap": "mindmap 語法：第一行 `mindmap`,再用**縮排**表示階層,根節點寫 `root((\"主題\"))`,"
+               "子節點每行一個、用縮排表示層級（如 `    分支A`、`      子項`）。不要用 `-->` 箭頭。",
+    "timeline": "timeline 語法：第一行 `timeline`,接 `title 標題`,然後每段寫 `時期 : 事件 : 事件`。",
+    "quadrant": "quadrantChart 語法：第一行 `quadrantChart`,設 `x-axis`、`y-axis`、四個 `quadrant-1..4`,"
+                "再以 `\"點名\": [x, y]`（0~1）放點。",
+    "concept_map": "用 `graph LR`,節點間用帶標籤的邊表達關係,如 `A[\"概念\"] -->|\"關係\"| B[\"概念\"]`。",
+    "flowchart": "用 `flowchart TD`,箭頭 `-->` 表流程/因果,需要分組時用 `subgraph \"群組\" ... end`。",
+}
+
 _CLASSIFY_SYSTEM = (
     "你是學習產物分類器。讀使用者提供的內容,判斷它最適合哪一種學習輔助產物,幫助讀者更快理解或記住。\n"
     "選項（只能回其中一個 type）：\n"
@@ -79,13 +90,30 @@ def _render_table(llm, content: str) -> str:
 
 def _render_mermaid(llm, content: str, kind: str) -> str:
     header = _MERMAID_KIND.get(kind, "flowchart TD")
-    sys = (f"把內容畫成一個 Mermaid **{kind}**（以 `{header}` 開頭）。{_MERMAID_RULES}")
+    hint = _MERMAID_HINTS.get(kind, "")
+    sys = (f"把內容畫成一個 Mermaid **{kind}**（以 `{header}` 開頭）。{hint} {_MERMAID_RULES}")
     raw = llm.complete(sys, content[:6000], temperature=0.2, stage=f"artifact_{kind}")
-    # Repair common Mermaid issues (fences, label quotes, arrows) via the
-    # existing quality checker; reject if no usable block survives.
+    # Repair common issues (fences, label quotes, arrows) via the existing
+    # quality checker, then validate the diagram is actually the requested kind.
     cleaned, _ = run_markdown_quality_checks(raw or "")
     m = _MERMAID_BLOCK_RE.search(cleaned)
-    return m.group(0) if m else ""
+    if not m or not _validate_mermaid(m.group(0), kind):
+        return ""
+    return m.group(0)
+
+
+def _validate_mermaid(block: str, kind: str) -> bool:
+    """Per-kind sanity: the diagram declares the requested type and has content.
+    Catches 'asked for mindmap, got flowchart' and empty/garbage blocks. Not a
+    full Mermaid parser — header keyword + non-trivial body."""
+    inner = block.strip()
+    inner = inner[inner.find("\n") + 1:] if "\n" in inner else ""   # drop ```mermaid fence line
+    inner = inner.rsplit("```", 1)[0].strip()                       # drop closing fence
+    lines = [ln for ln in inner.splitlines() if ln.strip()]
+    if len(lines) < 2:                                              # header + ≥1 content line
+        return False
+    expected = _MERMAID_KIND[kind].split()[0].lower()              # flowchart/mindmap/timeline/quadrantchart/graph
+    return lines[0].strip().lower().startswith(expected)
 
 
 def build_artifact(llm, content: str, *, forced_type: str | None = None) -> dict:
@@ -111,8 +139,11 @@ def build_artifact(llm, content: str, *, forced_type: str | None = None) -> dict
         elif t in _MERMAID_KIND:
             artifact = _render_mermaid(llm, content, t)
         elif t == "argument_map":
+            from core.config import ARGUMENT_MAP_MERMAID
             from services.argument_map import build_argument_map, render_argument_map
-            artifact = render_argument_map(build_argument_map(llm, content))
+            artifact = render_argument_map(
+                build_argument_map(llm, content), with_mermaid=ARGUMENT_MAP_MERMAID
+            )
         # t == "none" → no artifact
     except Exception as e:
         logging.warning(f"learning_artifacts: render failed for {t}: {e}")

@@ -2,6 +2,15 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-14 Phase 6 學習輔助軸 · 收尾（auto-attach 全覆蓋 + per-type linter + 論證圖 Mermaid 選配）
+
+把 Phase 6 三條軸的後續一次補齊（皆 flag-gated,預設行為不變）：
+
+- **(A) Insight 自動附學習產物**：先前只有 synthesis 會 auto-attach,insight 報告沒有。`agents/insight_agent.py` 新增 `_maybe_artifact(content)`,在 `generate_insight`（單一/montecarlo）與 `generate_full_insight`（用跨維度綜合段）寫檔前附上「## 🖼️ 學習輔助」。共用 `maybe_artifact_section`，故 `VISUAL_ROUTER_ENABLED` OFF（預設）→ 零 LLM 呼叫、報告 byte-identical;fail-open（產圖失敗絕不擋洞察）。
+- **(B) Mermaid per-type linter 強化**：live 觀察到 mindmap 語法常被模型寫鬆。`_render_mermaid` 現在注入 `_MERMAID_HINTS`（mindmap 用縮排非箭頭、timeline/quadrant/concept_map/flowchart 各自的語法提示）,並新增 `_validate_mermaid(block, kind)`——檢查產出區塊首行確實宣告了**要求的圖種**（抓「要 mindmap 卻回 flowchart」）且有 ≥1 行內容,不符就降級為不輸出（不放壞/錯種的圖）。
+- **(C) 論證圖 Mermaid 選配版**：`render_argument_map(data, with_mermaid=False)` 可附一張**確定性**（非 LLM,不會漂移/幻覺）的 Toulmin graph——根據實線、隱含前提/反駁虛線並標籤,label 經 sanitize。Flag `ARGUMENT_MAP_MERMAID`（預設 OFF）;Markdown 仍是主輸出。
+- 新增 `@ling-visualize` 的 toranomaki 使用範例（先前唯一缺的）。+13 tests（974 passed, 1 skipped）。
+
 ### 2026-06-14 Cortex Phase 5 · F2：記憶的「讀」side（`@ling-recall`）
 
 - **關閉記憶迴路的第一步**：Cortex 長期記憶（Phase 1–4）一直只寫不讀——生長/衰減/falsify/驗證，但生成端從不主動讀。F2 加上讀側原語 `services/cortex_recall.py` 的 `recall_claims(rag, query, top_k)`：embed query + 每條 claim（走 RAG 既有 embedding cache，未變動的 claim 是 cache hit），cosine 排序，回傳結構化 CortexPage（連同 confidence/falsifiability/falsifier/contradictions/evidence，而非 RAG 文字 chunk）。
