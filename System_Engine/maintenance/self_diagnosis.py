@@ -31,7 +31,7 @@ from core.config import CORTEX_DIR, FROM_LLM_DIR, MAINTENANCE_LOG_FILE
 # Axes worth spending an LLM call on. "記憶衰減" is informational (self-tuning
 # already) and "LLM 健康" failures are usually infra, not a quality root cause
 # we can fix in prompts — but we still diagnose them if red.
-_GREEN = "🟢"
+_GREEN = "🌸"
 
 _SYSTEM = (
     "你是知識系統的診斷器,服務系統的自我改善。給你「一個健康指標軸」的數據與趨勢,"
@@ -150,7 +150,7 @@ def run_self_diagnosis(
     report_dir = report_dir or FROM_LLM_DIR
     log_path = log_path or MAINTENANCE_LOG_FILE
 
-    flagged = [a for a in assessment.axes if a.lamp not in (_GREEN, "⚪")]
+    flagged = [a for a in assessment.axes if a.lamp not in (_GREEN, "🌱")]
     if not flagged:
         return DiagnosisResult(status="skipped", message="所有軸健康,無需診斷。")
 

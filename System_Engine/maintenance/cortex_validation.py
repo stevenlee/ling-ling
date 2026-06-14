@@ -237,13 +237,13 @@ def _write_report(report_dir: Path, report: ValidationReport, pages) -> Path | N
         report_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         path = report_dir / f"[report] cortex validation {stamp}.md"
-        icon = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}[report.verdict]
+        icon = {"GREEN": "🌸", "YELLOW": "🌼", "RED": "🥀"}[report.verdict]
         lines = [f"# {icon} Cortex 驗證報告 — {report.verdict}", ""]
         if report.red_flags:
-            lines += ["## 🚨 紅線（停下修理）", ""]
+            lines += ["## 🔔 紅線（停下修理）", ""]
             lines += [f"- {f}" for f in report.red_flags] + [""]
         if report.yellow_flags:
-            lines += ["## ⚠️ 黃線（調參，不停跑）", ""]
+            lines += ["## 💦 黃線（調參，不停跑）", ""]
             lines += [f"- {f}" for f in report.yellow_flags] + [""]
         lines += ["## 📊 指標", ""]
         for key, value in report.stats.items():
@@ -261,13 +261,13 @@ def _write_report(report_dir: Path, report: ValidationReport, pages) -> Path | N
                 seen_pairs.add(pair)
                 other = by_id.get(other_id)
                 other_text = other.claim if other else f"（已刪除：{other_id}）"
-                contradiction_lines.append(f"- ⚔️ 「{page.claim}」 vs 「{other_text}」")
+                contradiction_lines.append(f"- 💬 「{page.claim}」 vs 「{other_text}」")
         if contradiction_lines:
-            lines += ["## ⚔️ 矛盾對（知識庫裡最珍貴的訊號）", ""]
+            lines += ["## 💬 矛盾對（知識庫裡最珍貴的訊號）", ""]
             lines += contradiction_lines + [""]
         falsified = [p for p in pages if p.status == "falsified"]
         if falsified:
-            lines += ["## 🪦 已 falsified（檔案保留，記錄曾相信過什麼）", ""]
+            lines += ["## 🍂 已 falsified（檔案保留，記錄曾相信過什麼）", ""]
             lines += [f"- {p.claim}" for p in falsified] + [""]
 
         lines += [

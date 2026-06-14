@@ -16,7 +16,7 @@ from maintenance.cortex_validation import run_validation
 class CortexAgent(BaseAgent):
     def execute(self, context: dict) -> str:
         report = run_validation(self.rag)
-        icon = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}.get(report.verdict, "")
+        icon = {"GREEN": "🌸", "YELLOW": "🌼", "RED": "🥀"}.get(report.verdict, "")
         flags = len(report.red_flags) + len(report.yellow_flags)
         report_name = report.report_path.name if report.report_path else "(報告寫入失敗)"
         message = f"{icon} Cortex 驗證：{report.verdict}（{flags} 個警示）→ {report_name}"

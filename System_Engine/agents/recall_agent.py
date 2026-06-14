@@ -27,7 +27,7 @@ from services.cortex_recall import recall_claims
 from services.cortex_store import load_all_pages
 
 _CMD_TOKEN_RE = re.compile(r'(?:@ling-recall|/recall)\b', re.IGNORECASE)
-_STATUS_BADGE = {"active": "🟢", "dormant": "💤", "falsified": "🪦"}
+_STATUS_BADGE = {"active": "🌸", "dormant": "💤", "falsified": "🍂"}
 _CITE_RE = re.compile(r'#(\d+)')
 
 _SYSTEM_PROMPT = (
@@ -49,14 +49,14 @@ class RecallAgent(BaseAgent):
         directive = context.get("user_directive", "") or ""
         query = _CMD_TOKEN_RE.sub("", directive).strip()
         if not query:
-            ui.error("🧠 @ling-recall：請在指令後寫下要回想的主題或問題")
+            ui.error("📓 @ling-recall：請在指令後寫下要回想的主題或問題")
             return self._write_report(
                 "Cortex Recall",
                 "（未提供查詢主題。範例：`@ling-recall 我對 AI agent 協作相信什麼？`）",
                 "cortex_recall",
             )[1]
 
-        ui.set_status(f"🧠 回想：{query[:40]}")
+        ui.set_status(f"📓 回想：{query[:40]}")
         pages = [
             p for p in load_all_pages(CORTEX_DIR)
             if p.claim.strip() and p.status in ("active", "dormant")
@@ -64,7 +64,7 @@ class RecallAgent(BaseAgent):
         if not pages:
             return self._write_report(
                 f"Cortex Recall: {query[:50]}",
-                f"# 🧠 Cortex 回想：{query}\n\nCortex 目前是空的，還沒累積任何主張。",
+                f"# 📓 Cortex 回想：{query}\n\nCortex 目前是空的，還沒累積任何主張。",
                 "cortex_recall", {"query": query, "claims_returned": 0},
             )[1]
 
@@ -91,7 +91,7 @@ class RecallAgent(BaseAgent):
             f"Cortex Recall: {query[:50]}", body, "cortex_recall",
             {"query": query, "candidates": len(candidates)},
         )
-        ui.success(f"🧠 回想完成：掃過 {len(candidates)} 條信念 → fromLingLing/")
+        ui.success(f"📓 回想完成：掃過 {len(candidates)} 條信念 → fromLingLing/")
         return full_markdown
 
     @staticmethod
@@ -110,7 +110,7 @@ class RecallAgent(BaseAgent):
 
     def _render(self, query: str, answer: str, numbered: list) -> str:
         lines = [
-            f"# 🧠 Cortex 回想：{query}",
+            f"# 📓 Cortex 回想：{query}",
             "",
             "> 這是 LLM 讀過系統**蒸餾信念**後的綜述（不是原始筆記檢索）。每個論點標 [#編號] 溯源。",
             "",

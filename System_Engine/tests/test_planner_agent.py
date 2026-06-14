@@ -263,7 +263,7 @@ class TestPlannerExecute:
     def test_empty_directive_errors_out(self):
         agent = _planner(_FakeLLM(self._make_caps()))
         body = agent.execute({"user_directive": "   "})
-        assert "❌" in body
+        assert "💧" in body
         assert "empty user directive" in body
         # _write_report still called (error report)
         assert len(agent._writes) == 1

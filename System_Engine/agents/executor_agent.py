@@ -197,7 +197,7 @@ class ExecutorAgent(BaseAgent):
         plan_id: str,
         initial_context: dict,
     ) -> str:
-        verdict_emoji = "✅" if result.status == "succeeded" else "❌"
+        verdict_emoji = "✅" if result.status == "succeeded" else "💧"
         lines: list[str] = [
             f"# {verdict_emoji} Execution: {spec.description or spec.id}",
             "",
@@ -210,7 +210,7 @@ class ExecutorAgent(BaseAgent):
 
         if result.error:
             lines.extend([
-                "## ⚠️ Execution Error",
+                "## 💦 Execution Error",
                 "",
                 f"```\n{result.error}\n```",
                 "",
@@ -237,7 +237,7 @@ class ExecutorAgent(BaseAgent):
             emoji = {
                 "succeeded": "✅",
                 "skipped": "⏭",
-                "failed": "❌",
+                "failed": "💧",
             }.get(step_result.status, "❔")
             lines.append(
                 f"### Step {idx}: `{step.id}` — {emoji} {step_result.status}"
@@ -286,7 +286,7 @@ class ExecutorAgent(BaseAgent):
     # ── Error path ─────────────────────────────────────────────────────
 
     def _error_report(self, message: str) -> str:
-        body = f"# ❌ Executor Error\n\n{message}\n"
+        body = f"# 💧 Executor Error\n\n{message}\n"
         self._write_report("Executor Error", body, "executor_run",
                             {"error": True})
         ui.error(f"⚙️ Executor failed: {message.splitlines()[0][:120]}")

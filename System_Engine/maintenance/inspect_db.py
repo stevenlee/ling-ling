@@ -38,12 +38,12 @@ def inspect_db():
                 print(f"  └─ Tags:  {metadata.get('tags', 'None')}")
                 print(f"  └─ Text:  {doc_preview}...")
         else:
-            print("\n⚠️ 資料庫目前是空的。請執行 init_rag.py 進行索引。")
+            print("\n💦 資料庫目前是空的。請執行 init_rag.py 進行索引。")
         
         print("\n" + "="*50)
 
     except Exception as e:
-        print(f"❌ 無法讀取資料庫: {e}")
+        print(f"💧 無法讀取資料庫: {e}")
 
 if __name__ == "__main__":
     inspect_db()

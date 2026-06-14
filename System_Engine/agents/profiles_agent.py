@@ -65,7 +65,7 @@ class ProfilesAgent(BaseAgent):
         else:
             errors = "\n".join(f"- {e}" for e in result["errors"])
             body = (
-                f"# ❌ Profile「{name}」生效失敗\n\n{errors}\n\n"
+                f"# 💧 Profile「{name}」生效失敗\n\n{errors}\n\n"
                 f"請檢查 `Scripture/Profiles/_pending/{name}/` 後重試。"
             )
             ui.error(f"Profile approve failed: {name}")

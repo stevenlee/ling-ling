@@ -411,7 +411,7 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             return
 
         safe_message = str(error).strip() or error.__class__.__name__
-        output_path = FROM_LLM_DIR / f"❌err-{request_id}.md"
+        output_path = FROM_LLM_DIR / f"💧err-{request_id}.md"
         body = f"""---
 title: "error: {request_id}"
 type: error

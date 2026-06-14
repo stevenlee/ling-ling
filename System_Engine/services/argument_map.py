@@ -106,7 +106,7 @@ def render_argument_map(data: dict, with_mermaid: bool = False) -> str:
         L += [f"- {r}" for r in data["rebuttals"]]
         L.append("")
     if data.get("weakest_link"):
-        L += [f"> ⚠️ **最弱的一環**：{data['weakest_link']}"]
+        L += [f"> 💦 **最弱的一環**：{data['weakest_link']}"]
     if with_mermaid:
         L += ["", _argument_mermaid(data)]
     return "\n".join(L).rstrip()

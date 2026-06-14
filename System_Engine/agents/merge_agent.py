@@ -21,7 +21,7 @@ class MergeAgent(BaseAgent):
         user_directive = task_context.get('user_directive', "")
         
         if len(target_titles) < 2:
-            return "❌ 合併失敗：至少需要 2 篇存在的筆記。"
+            return "💧 合併失敗：至少需要 2 篇存在的筆記。"
 
         # 1. Gather Content
         valid_files = []
@@ -37,7 +37,7 @@ class MergeAgent(BaseAgent):
                 missing.append(title)
                 
         if len(valid_files) < 2:
-            return f"❌ 合併失敗：實體找不到：{', '.join(missing)}"
+            return f"💧 合併失敗：實體找不到：{', '.join(missing)}"
 
         logging.info(f"Merging {len(valid_files)} documents...")
 
@@ -63,7 +63,7 @@ class MergeAgent(BaseAgent):
         result = self.llm.generate_entity_page(f"{combined_content}", "Merged_Note", index_content, context_hint=user_directive)
         
         if not result:
-            return "❌ 合併失敗：大語言模型未能生成有效的文章結構。"
+            return "💧 合併失敗：大語言模型未能生成有效的文章結構。"
 
         new_title = result.get('title', "Merged_" + target_titles[0]).strip().replace("/", "-").replace("\\", "-")
         tags = result.get('tags', [])

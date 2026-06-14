@@ -67,11 +67,11 @@ class KBManager:
         try:
             backup_path = self.zip_kb()
         except Exception as e:
-            return f"❌ Reset failed: Could not create safety backup. {e}"
+            return f"💧 Reset failed: Could not create safety backup. {e}"
 
         self._create_lock()
         try:
-            print("🧨 (1/3) Starting RESET operation...")
+            print("🧹 (1/3) Starting RESET operation...")
             # 2. Wipe core content folders and command intake
             content_dirs = ["pages", "Clippings", "Notes", "raw", "toLingLing"]
             for folder in content_dirs:
@@ -85,7 +85,7 @@ class KBManager:
                             shutil.rmtree(item)
             
             # 3. Wipe database and log
-            print("🔥 (3/3) Wiping RAG database and logs...")
+            print("🧹 (3/3) Wiping RAG database and logs...")
             self.rag.wipe_collection()
             if LOG_FILE.exists():
                 LOG_FILE.write_text(f"# Knowledge Base Reset Log\nReset performed on {datetime.now()}\nBackup: {backup_path.name}\n", encoding='utf-8')
@@ -101,7 +101,7 @@ class KBManager:
             # Pick the latest backup automatically
             zips = list(BACKUPS_DIR.glob("*.zip"))
             if not zips:
-                return "❌ Error: No backup files found in Backups/ directory."
+                return "💧 Error: No backup files found in Backups/ directory."
             # Sort by modification time (latest first)
             zips.sort(key=lambda x: x.stat().st_mtime, reverse=True)
             zip_path = zips[0]
@@ -119,7 +119,7 @@ class KBManager:
             zip_path = BACKUPS_DIR / clean_name
 
         if not zip_path.exists():
-            return f"❌ Error: Backup file {zip_filename} not found in Backups/ directory."
+            return f"💧 Error: Backup file {zip_filename} not found in Backups/ directory."
 
         self._create_lock()
         tmp_unzip = BACKUPS_DIR / "tmp_unzip"

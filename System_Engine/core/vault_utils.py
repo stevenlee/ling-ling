@@ -325,7 +325,7 @@ def update_wiki_index(filepath: Path = None, title: str = None, *, sync_reading_
         page_entities = _collect_section(PAGES_DIR)
         sections = {
             "Notes":    {"icon": "✍️", "files": _collect_section(NOTES_DIR)},
-            "Entities": {"icon": "🤖", "files": {folder: list(files) for folder, files in page_entities.items()}},
+            "Entities": {"icon": "🌷", "files": {folder: list(files) for folder, files in page_entities.items()}},
         }
 
         # Inject raw/consolidate markdown into Entities, grouped by stem.

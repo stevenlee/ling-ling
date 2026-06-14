@@ -145,7 +145,7 @@ class InsightAgent(BaseAgent):
     ) -> str:
         if strategy_id not in self.strategies:
             if not self.strategies:
-                return "❌ Error: No strategies found."
+                return "💧 Error: No strategies found."
             strategy_id = random.choice(list(self.strategies.keys()))
 
         config = self.strategies[strategy_id]

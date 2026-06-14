@@ -86,7 +86,7 @@ class LinterAgent(BaseAgent):
 
     def perform_repair(self) -> str:
         if not self.rag:
-            return "❌ 無法修復：RAGManager 未啟動。"
+            return "💧 無法修復：RAGManager 未啟動。"
 
         health = self.scan_rag_health()
         actions = []
@@ -111,7 +111,7 @@ class LinterAgent(BaseAgent):
                     self.rag.add_document(filepath, title, content, tags=tags)
                     actions.append(f"✅ 已補齊缺失索引: **{title}**")
                 except Exception as e:
-                    actions.append(f"❌ 索引失敗 {title}: {e}")
+                    actions.append(f"💧 索引失敗 {title}: {e}")
 
         return "\n".join(actions) if actions else "🎉 資料庫狀態健康，目前無需維護。"
 
@@ -143,7 +143,7 @@ class LinterAgent(BaseAgent):
         rag_health = self.scan_rag_health()
         rag_text = ""
         if "error" in rag_health:
-            rag_text = f"⚠️ {rag_health['error']}"
+            rag_text = f"💦 {rag_health['error']}"
         else:
             unindexed_text = "\n".join([f"- {f}.md" for f in rag_health['unindexed_files']]) if rag_health['unindexed_files'] else "- 🎉 所有檔案皆已索引"
             stale_text = "\n".join([f"- {s}" for s in rag_health['stale_entries']]) if rag_health['stale_entries'] else "- 🎉 沒有過時的殘留資料"

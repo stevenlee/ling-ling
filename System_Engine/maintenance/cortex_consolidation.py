@@ -580,7 +580,7 @@ def _write_report(report_dir: Path, result: ConsolidationResult) -> Path | None:
         stamp = datetime.now().strftime("%Y%m%d")
         path = report_dir / f"[report] cortex consolidation {stamp}.md"
         lines = [
-            "# 🧠 Cortex 鞏固報告",
+            "# 📓 Cortex 鞏固報告",
             "",
             f"- 處理 insights：**{result.insights_processed}**",
             f"- 新增主張頁：**{result.created}**",

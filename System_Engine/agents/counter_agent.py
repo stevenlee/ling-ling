@@ -160,9 +160,9 @@ class CounterAgent(BaseAgent):
 
                 ui.info(
                     f"   🏁 結果: [bold]{tally.get('total_count', 0)}[/bold] 個實例 "
-                    f"(🟢{tally.get('high_confidence_count', 0)} "
-                    f"🟡{tally.get('medium_confidence_count', 0)} "
-                    f"🔴{tally.get('low_confidence_count', 0)})"
+                    f"(🌸{tally.get('high_confidence_count', 0)} "
+                    f"🌼{tally.get('medium_confidence_count', 0)} "
+                    f"🥀{tally.get('low_confidence_count', 0)})"
                 )
         return results_matrix
 
@@ -184,7 +184,7 @@ class CounterAgent(BaseAgent):
                 chunk_low = sum(1 for x in instances if x.get("confidence") == "low")
                 ui.info(
                     f"      ✅ Chunk {i + 1}/{total_parts}: +{len(instances)} "
-                    f"(🟢{chunk_high} 🟡{chunk_med} 🔴{chunk_low}) | 累計: {len(all_instances)}"
+                    f"(🌸{chunk_high} 🌼{chunk_med} 🥀{chunk_low}) | 累計: {len(all_instances)}"
                 )
             else:
                 ui.info(f"      ⬜ Chunk {i + 1}/{total_parts}: 0 | 累計: {len(all_instances)}")
@@ -236,7 +236,7 @@ class CounterAgent(BaseAgent):
                 seen.add(title)
                 ui.info(f"   📄 已找到: [green]{title}[/green] ({len(text):,} chars)")
             else:
-                ui.info(f"   ⚠️  未找到: [dim]{title}[/dim]")
+                ui.info(f"   💦  未找到: [dim]{title}[/dim]")
 
         if not results and self.rag and user_directive:
             ui.info("   🔍 檔案系統未找到任何文章，嘗試 RAG 語意檢索...")
@@ -337,7 +337,7 @@ class CounterAgent(BaseAgent):
                     persona="none",
                 )
             except Exception as e:
-                ui.error(f"      ❌ Chunk {part} extraction 失敗: {e}")
+                ui.error(f"      💧 Chunk {part} extraction 失敗: {e}")
                 logging.error(f"LingLens extraction failed for chunk {part}: {e}")
                 return []
             instances = extract_json_array(raw)
@@ -638,12 +638,12 @@ class CounterAgent(BaseAgent):
         # to also run it here.
         return "\n".join(lines)
 
-    _CONF_EMOJI = {"high": "🟢", "medium": "🟡", "low": "🔴"}
+    _CONF_EMOJI = {"high": "🌸", "medium": "🌼", "low": "🥀"}
 
     def _matrix_row(self, inst, article_title, reference_title, resolved_path):
         iid = inst.get("id", "?")
         conf = inst.get("confidence", "medium")
-        emoji = self._CONF_EMOJI.get(conf, "⚪")
+        emoji = self._CONF_EMOJI.get(conf, "🌱")
         quote = self._table_cell(inst.get("quote", ""), 80)
         reasoning = self._table_cell(inst.get("reasoning", ""), 80)
         heading = self._instance_anchor(inst)
@@ -667,9 +667,9 @@ class CounterAgent(BaseAgent):
             f"> {reference_label}: [[{reference_title}]] | Total instances found: **{total}**", "",
             "## 📊 Summary", "",
             "| Confidence | Count |", "|------------|-------|",
-            f"| 🟢 High   | {high}     |",
-            f"| 🟡 Medium | {medium}     |",
-            f"| 🔴 Low    | {low}     |", "",
+            f"| 🌸 High   | {high}     |",
+            f"| 🌼 Medium | {medium}     |",
+            f"| 🥀 Low    | {low}     |", "",
         ]
         if methodology:
             lines.extend(["## 📝 Methodology", "", methodology, ""])
@@ -688,7 +688,7 @@ class CounterAgent(BaseAgent):
     def _format_instance(self, inst, reference_title, original_title, resolved_path):
         iid = inst.get("id", "?")
         conf = inst.get("confidence", "medium")
-        emoji = self._CONF_EMOJI.get(conf, "⚪")
+        emoji = self._CONF_EMOJI.get(conf, "🌱")
 
         lines = [
             f"### Instance {iid} ({emoji} {conf.capitalize()})",
@@ -718,7 +718,7 @@ class CounterAgent(BaseAgent):
         return lines
 
     def _error_report(self, message):
-        report = f"# ❌ LingLens Error\n\n{message}\n"
+        report = f"# 💧 LingLens Error\n\n{message}\n"
         self._write_report("LingLens Error", report, "lens_report")
         return report
 

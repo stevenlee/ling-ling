@@ -46,7 +46,7 @@ from core.parser import parse_markdown_metadata
 DEFAULT_WINDOW_DAYS = 7
 
 # Status lamp values, ordered worst→best for roll-up.
-RED, YELLOW, GREEN, UNKNOWN = "🔴", "🟡", "🟢", "⚪"
+RED, YELLOW, GREEN, UNKNOWN = "🥀", "🌼", "🌸", "🌱"
 _RANK = {RED: 0, YELLOW: 1, GREEN: 2, UNKNOWN: 3}
 
 # Thresholds (deterministic lamp rules).
@@ -114,7 +114,10 @@ def _persist_and_trend(history_file: Path, axes: list, overall: str, max_keep: i
     trend = {}
     for ax in axes:
         prev_lamp = (prev_axes.get(ax.name) or {}).get("lamp")
-        if prev_lamp is None or prev_lamp == UNKNOWN or ax.lamp == UNKNOWN:
+        # `prev_lamp not in _RANK` also covers legacy lamp glyphs persisted by
+        # older builds (the lamp palette changed) — treat them as no comparison
+        # rather than crashing on a stale history entry.
+        if prev_lamp not in _RANK or prev_lamp == UNKNOWN or ax.lamp == UNKNOWN:
             arrow = "•"
         elif _RANK[ax.lamp] > _RANK[prev_lamp]:
             arrow = "↑"
@@ -407,7 +410,7 @@ def _write_report(report_dir: Path, result: SelfAssessmentResult, window_days: i
         stamp = datetime.now().strftime("%Y%m%d")
         path = report_dir / f"[report] 系統自評 {stamp}.md"
         lines = [
-            f"# 🩺 系統自評（近 {window_days} 天）",
+            f"# 🌿 系統自評（近 {window_days} 天）",
             "",
             f"**總體：{result.overall}**",
             "",

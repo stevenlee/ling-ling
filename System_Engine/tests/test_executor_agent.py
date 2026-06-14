@@ -294,7 +294,7 @@ class TestExecutorExecute:
             "user_directive": "@ling-do boom",
             "execute_context": {"title": "X"},
         })
-        assert "❌" in body
+        assert "💧" in body
         write = agent._writes[0]
         assert write["metadata"]["execution_status"] == "failed"
         # critique should NOT run after synthesize fails

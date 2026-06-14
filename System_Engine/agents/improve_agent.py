@@ -108,7 +108,7 @@ class ImproveAgent(BaseAgent):
             applied_dir=IMPROVEMENTS_APPLIED_DIR, allowed_dirs=_ALLOWED,
         )
         (ui.success if res["ok"] else ui.error)(f"improve approve {pid}: {res['message']}")
-        head = "✅ 已套用" if res["ok"] else "❌ 未套用"
+        head = "✅ 已套用" if res["ok"] else "💧 未套用"
         extra = ("\n\n*原檔已備份到 `Scripture/Improvements/_applied/`,如需回退可從該處還原。*"
                  if res["ok"] else "")
         return f"# {head}：`{pid}`\n\n{res['message']}{extra}"
@@ -121,7 +121,7 @@ class ImproveAgent(BaseAgent):
     def _generate(self) -> str:
         trace_store = getattr(self.llm, "trace_store", None)
         if trace_store is None:
-            return "# ⚠️ 無法產生\n\nLLM client 沒有 trace_store,無法自評。"
+            return "# 💦 無法產生\n\nLLM client 沒有 trace_store,無法自評。"
         from maintenance.self_assessment import run_self_assessment
         from maintenance.self_diagnosis import run_self_diagnosis
         from maintenance.self_improve import run_self_improve

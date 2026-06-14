@@ -209,7 +209,7 @@ class PlannerAgent(BaseAgent):
             rationale = (step_raw.get("rationale") or "").strip()
             lines.append(f"### Step {idx}: `{step.id}`")
             lines.append(f"- **Capability**: `{step.capability}`"
-                         + (" ⚠️ NOT in registry" if step.capability not in cap_names else ""))
+                         + (" 💦 NOT in registry" if step.capability not in cap_names else ""))
             lines.append(f"- **Adapter**: `{step.adapter}`")
             if step.when:
                 lines.append(f"- **When**: `{step.when}`")
@@ -223,7 +223,7 @@ class PlannerAgent(BaseAgent):
             lines.append("")
 
         if unknown_caps:
-            lines.append("## ⚠️ Plan References Unregistered Capabilities")
+            lines.append("## 💦 Plan References Unregistered Capabilities")
             lines.append("")
             lines.append(
                 "The planner produced steps that reference capabilities not in "
@@ -282,7 +282,7 @@ class PlannerAgent(BaseAgent):
     # ── Error path ─────────────────────────────────────────────────────
 
     def _error_report(self, message: str) -> str:
-        body = f"# ❌ Planner Error\n\n{message}\n"
+        body = f"# 💧 Planner Error\n\n{message}\n"
         self._write_report("Planner Error", body, "planner_plan",
                             {"error": True})
         ui.error(f"🎐 Planner 失敗：{message[:120]}")

@@ -152,10 +152,10 @@ def _write_full_report(
             "",
             f"- 路由決策總數：**{result.total}**",
             f"- Fallback 率（落到 default/settings）：**{result.fallback_rate:.0%}**"
-            + (" ⚠️ 超過警戒線" if result.total and result.fallback_rate >= alert_rate else ""),
+            + (" 💦 超過警戒線" if result.total and result.fallback_rate >= alert_rate else ""),
         ]
         if selector_errors:
-            lines.append(f"- select_profile 失敗次數：**{selector_errors}** ⚠️")
+            lines.append(f"- select_profile 失敗次數：**{selector_errors}** 💦")
         lines += ["", "## 各層分佈", ""]
         for layer, count in sorted(result.layer_counts.items(), key=lambda x: -x[1]):
             lines.append(f"- `{layer}`: {count}")

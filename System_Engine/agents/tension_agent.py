@@ -13,12 +13,12 @@ from core.config import CORTEX_DIR
 from core.ui import ui
 from services.cortex_tensions import scan_tensions
 
-_STATUS_BADGE = {"active": "🟢", "dormant": "💤", "falsified": "🪦"}
+_STATUS_BADGE = {"active": "🌸", "dormant": "💤", "falsified": "🍂"}
 
 
 class TensionAgent(BaseAgent):
     def execute(self, context: dict) -> str:
-        ui.set_status("⚔️ 掃描知識張力…")
+        ui.set_status("💬 掃描知識張力…")
         report = scan_tensions(CORTEX_DIR)
         body = self._render(report)
         counts = {
@@ -31,12 +31,12 @@ class TensionAgent(BaseAgent):
             "Cortex Tensions", body, "cortex_tensions", counts
         )
         flagged = sum(counts.values())
-        ui.success(f"⚔️ 張力掃描完成：{flagged} 處（{report.total_pages} 頁）→ fromLingLing/")
+        ui.success(f"💬 張力掃描完成：{flagged} 處（{report.total_pages} 頁）→ fromLingLing/")
         return full_markdown
 
     def _render(self, r) -> str:
         L = [
-            "# ⚔️ Cortex 知識張力",
+            "# 💬 Cortex 知識張力",
             "",
             "> 這不是「我相信什麼」，而是「我的知識在哪裡有張力」——矛盾、不可反駁、"
             "證據單薄、已被推翻。把異議攤開，是對抗自我印證的解藥。",
@@ -52,7 +52,7 @@ class TensionAgent(BaseAgent):
             return p.claim.strip().replace("\n", " ")
 
         if r.contradictions:
-            L += ["## ⚔️ 矛盾對（活的異議）", ""]
+            L += ["## 💬 矛盾對（活的異議）", ""]
             for p, others in r.contradictions:
                 L.append(f"- {_STATUS_BADGE.get(p.status,'')} **{claim_line(p)}**")
                 for o in others:
@@ -76,7 +76,7 @@ class TensionAgent(BaseAgent):
             L.append("")
 
         if r.falsified:
-            L += ["## 🪦 已被推翻（透明保留）", ""]
+            L += ["## 🍂 已被推翻（透明保留）", ""]
             for p in r.falsified:
                 line = f"- ~~{claim_line(p)}~~"
                 if p.counterpoints:

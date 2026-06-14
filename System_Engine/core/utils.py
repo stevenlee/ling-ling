@@ -48,18 +48,18 @@ def acquire_pid_lock(pid_file: Path):
             old_pid = int(content)
             os.kill(old_pid, 0)
         except (ValueError, ProcessLookupError, PermissionError, OSError):
-            logging.warning("⚠️ 發現過時的 PID 檔案（程序已不存在）。正在重新建立...")
+            logging.warning("💦 發現過時的 PID 檔案（程序已不存在）。正在重新建立...")
             pid_file.unlink(missing_ok=True)
         else:
             logging.error(
-                f"❌ 偵測到重複啟動：系統已在運行中 (PID: {old_pid})。請先關閉舊程序: kill {old_pid}。"
+                f"💧 偵測到重複啟動：系統已在運行中 (PID: {old_pid})。請先關閉舊程序: kill {old_pid}。"
             )
             sys.exit(1)
 
     try:
         pid_file.write_text(str(os.getpid()), encoding="utf-8")
     except Exception as e:
-        logging.error(f"❌ 無法建立 PID 檔案: {e}")
+        logging.error(f"💧 無法建立 PID 檔案: {e}")
         sys.exit(1)
 
     logging.info(f"🔒 One Ling Ling at a time! (๑˃̵ᴗ˂̵)و (PID: {os.getpid()})")

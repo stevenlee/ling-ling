@@ -20,7 +20,7 @@ def init_rag_from_scratch(wipe: bool = False):
     manager = RAGManager(skip_config_check=True)
     
     if wipe:
-        logging.info("💥 Wiping existing ChromaDB collection...")
+        logging.info("🧹 Wiping existing ChromaDB collection...")
         manager.wipe_collection()
     else:
         # If not wiping, run the mismatch guard validation check
@@ -65,7 +65,7 @@ def init_rag_from_scratch(wipe: bool = False):
             failed_count += 1
             
     if failed_count > 0:
-        logging.error(f"💥 RAG initialization complete with {failed_count} indexing failures!")
+        logging.error(f"🧹 RAG initialization complete with {failed_count} indexing failures!")
         sys.exit(1)
     else:
         logging.info(f"✨ RAG initialization complete! Total documents in DB: {manager.collection.count()}")

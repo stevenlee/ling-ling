@@ -258,7 +258,7 @@ def _write_regression_alert(
         path = report_dir / f"[alert] retrieval regression {stamp}.md"
         failed_rows = [row for row in result.rows if not row["passed"]]
         lines = [
-            "# 🚨 檢索品質退步告警",
+            "# 🔔 檢索品質退步告警",
             "",
             f"- 本次：**{result.passed}/{result.total}**（{result.pass_rate:.0%}）",
             f"- 上次：{previous.get('passed')}/{previous.get('total')}"
@@ -267,7 +267,7 @@ def _write_regression_alert(
         if result.facet_lift is not None:
             lines.append(
                 f"- Facet lift：{result.facet_lift:+d}"
-                + ("" if result.facet_lift >= 0 else " ⚠️ facet 是負貢獻，考慮 `FACET_INDEX_ENABLED=false`")
+                + ("" if result.facet_lift >= 0 else " 💦 facet 是負貢獻，考慮 `FACET_INDEX_ENABLED=false`")
             )
         lines += ["", "## 失敗的查詢", ""]
         for row in failed_rows[:20]:

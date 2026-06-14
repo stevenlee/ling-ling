@@ -11,7 +11,7 @@ try:
     from core.config import PROJECT_ROOT
     from core.version import BUILD_DATE
 except ImportError:
-    print("❌ Error: Could not import core configuration. Run this script from the project root.")
+    print("💧 Error: Could not import core configuration. Run this script from the project root.")
     sys.exit(1)
 
 class CodeAuditor:
@@ -68,7 +68,7 @@ class CodeAuditor:
                     self.audit_data[str(rel_path)]["classes"].append(node.name)
 
         except Exception as e:
-            print(f"⚠️ Error auditing {filepath}: {e}")
+            print(f"💦 Error auditing {filepath}: {e}")
 
     def generate_console_report(self):
         """Print a summary to the console."""
@@ -81,7 +81,7 @@ class CodeAuditor:
         print("-" * 50)
         
         if self.missing_docstrings:
-            print("\n⚠️  FUNCTIONS MISSING DOCSTRINGS:")
+            print("\n💦  FUNCTIONS MISSING DOCSTRINGS:")
             for item in self.missing_docstrings[:20]:  # Limit to top 20
                 print(f"  - {item}")
             if len(self.missing_docstrings) > 20:
@@ -132,7 +132,7 @@ def main():
         from services.llm_client import LLMClient
         
         llm = LLMClient()
-        print(f"🤖 LLM Client Initialized ({llm.provider}). Sending prompt...")
+        print(f"🎀 LLM Client Initialized ({llm.provider}). Sending prompt...")
         prompt = auditor.get_summary_prompt()
         release_note = llm.answer_query(prompt, wiki_context="")
         
@@ -145,13 +145,13 @@ def main():
         
         print(f"✅ Release Note generated at: {output_path}")
     except ImportError as e:
-        print(f"\n❌ Dependency Error: {e}")
+        print(f"\n💧 Dependency Error: {e}")
         print("\n💡 Fix: It looks like some dependencies are missing in your current Python environment.")
         print(f"Please run the script using your virtual environment:\n")
         print(f"   {PROJECT_ROOT}/venv/bin/python {__file__}")
         print("\nAlternatively, activate your venv first: source venv/bin/activate")
     except Exception as e:
-        print(f"❌ Failed to generate Release Note: {e}")
+        print(f"💧 Failed to generate Release Note: {e}")
 
 if __name__ == "__main__":
     main()

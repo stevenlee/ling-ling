@@ -12,9 +12,9 @@ from rich.text import Text
 console = Console()
 
 IDLE_EMOJI = "🍵"
-BUSY_EMOJI = "🔥"
+BUSY_EMOJI = "🍵"
 SUCCESS_EMOJI = "(ﾉ>ω<)ﾉ 🎻"
-ERROR_EMOJI = "😿"
+ERROR_EMOJI = "💧"
 MAINTENANCE_EMOJI = "🧹"
 SYNC_EMOJI = "🔄"
 

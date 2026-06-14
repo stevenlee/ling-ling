@@ -16,10 +16,10 @@ def check_structure():
         if (PROMPTS_DIR / p).exists():
             print(f"✅ Prompt template found: {p}")
         else:
-            print(f"❌ Prompt template MISSING: {p}")
+            print(f"💧 Prompt template MISSING: {p}")
 
 def check_agents():
-    print("\n🕵️  Auditing Agent Refactor...")
+    print("\n🔍  Auditing Agent Refactor...")
     errors = 0
     
     from services.llm_client import LLMClient
@@ -46,18 +46,18 @@ def check_agents():
             if 'llm' in params or 'rag_manager' in params:
                 print(f"✅ {name}: Initialization signature looks correct.")
             else:
-                print(f"❌ {name}: Unexpected __init__ signature: {params}")
+                print(f"💧 {name}: Unexpected __init__ signature: {params}")
                 errors += 1
                 
             # Check for execute method
             if hasattr(agent_class, 'execute'):
                 print(f"✅ {name}: execute() method found.")
             else:
-                print(f"❌ {name}: execute() method MISSING!")
+                print(f"💧 {name}: execute() method MISSING!")
                 errors += 1
                 
         except Exception as e:
-            print(f"❌ {name}: Failed to import/init: {e}")
+            print(f"💧 {name}: Failed to import/init: {e}")
             errors += 1
 
     return errors
@@ -72,15 +72,15 @@ def check_parser():
             print("✅ Parser: clean_llm_response works correctly.")
             return 0
         else:
-            print(f"❌ Parser: clean_llm_response failed. Got: {repr(cleaned)}")
+            print(f"💧 Parser: clean_llm_response failed. Got: {repr(cleaned)}")
             return 1
     except Exception as e:
-        print(f"❌ Parser: Test failed: {e}")
+        print(f"💧 Parser: Test failed: {e}")
         return 1
 
 def main():
     print("="*50)
-    print("🛡️  LING-LING SYSTEM HEALTH CHECK (Refactored)")
+    print("🌿  LING-LING SYSTEM HEALTH CHECK (Refactored)")
     print("="*50)
     
     errors = 0
@@ -92,7 +92,7 @@ def main():
     if errors == 0:
         print("🎉 [PASSED] System is healthy and following the new Agent pattern!")
     else:
-        print(f"🚩 [FAILED] Found {errors} issues. Please fix them.")
+        print(f"💧 [FAILED] Found {errors} issues. Please fix them.")
     print("="*50)
     
     sys.exit(errors)

@@ -88,7 +88,7 @@ def run_echo_canary(
         if drop >= _NOVELTY_DROP_ALARM:
             result = CanaryResult(
                 status="alarm", grounded_n=g_n, cold_n=c_n, stats=stats,
-                message=(f"⚠️ 同溫層特徵：grounded 洞察的 novelty 比 cold 低 {drop:.2f}"
+                message=(f"💦 同溫層特徵：grounded 洞察的 novelty 比 cold 低 {drop:.2f}"
                          f"（{stats['grounded_novelty']:.2f} vs {stats['cold_novelty']:.2f}）。"
                          f"考慮關閉 CORTEX_GROUNDED_INSIGHT_ENABLED 或降低 grounding fraction。"),
             )

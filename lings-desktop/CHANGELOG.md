@@ -2,6 +2,16 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-15 風格統一：去刺眼/科技感符號，改鄰家女孩·日系女高中生調性
+
+Ling-Ling 是鄰家女孩、好學生、日系女高中生。原本散落的告警/武器/科技感 emoji（🔴🟡🟢⚪🚨⚠❌🚩😿⚔🛡🩺🕵🪦🤖🔥💥🧨🧠）與人設不符,全面柔化(保留 🎀🌸🎐✍️ 等已在用的可愛系,以及正向的 ✅)。
+
+- **健康分級(花草系)**：`self_assessment` 的 `RED/YELLOW/GREEN/UNKNOWN` 由 🔴🟡🟢⚪ → **🥀🌼🌸🌱**(凋萎/含苞/盛開/新芽),語意「差/警/好/未知」不變。
+- **柔化對照**：🚨→🔔(提醒鈴)、⚠→💦(動漫式緊張)、❌🚩😿→💧(小淚滴)、⚔→💬(對話)、🛡🩺→🌿(有活力)、🕵→🔍、🪦→🍂(凋落)、🔥(忙碌)→🍵 / 🔥💥🧨(清庫)→🧹、🤖→🎀(玲玲本人)或 🌷(Entities)、🧠→📓(筆記本＝記憶)。共 31 個 `.py` + 2 個 persona/prompt 檔。
+- **語意修復(非裝飾)**：lamp 調色盤一換,既有持久化的 `self_assessment` 歷史檔仍存著舊符號;trend 比對 `_RANK[prev_lamp]` 會 KeyError。改為 `prev_lamp not in _RANK` 視為「無比較」,對 legacy lamp 容錯——**下次真實 maintenance 才不會炸**。
+- **刻意保留**：`Templates/Prompts/mermaid_rules.md` 的 ❌/✅ 是給模型讀的「錯/對範例」功能標記、非使用者可見的人設輸出,改 💧 反而降低清晰度,故不動。
+- 測試:受影響套件全綠(self_assessment/cortex_validation/planner/executor/counter/recall/tensions/insight/vault_utils… 約 200+ passed);`test_planner_agent`/`test_executor_agent` 的 `❌` 斷言隨之改為 `💧`。
+
 ### 2026-06-15 版號 → engine build date（拔掉不 bump 的 semver）
 
 `VERSION = "0.3.0"` 是手動維護的 semver,但實際上沒人 bump——上次改是 2026-05-25,之後 ~30 個 commit(M1–M4、retrieval 修復…)全掛在 0.3.0 下,等於每份報告的 `version:` 都在說謊。改用**自動、永不過期**的 engine build date(running code 的 git commit 日期)。
