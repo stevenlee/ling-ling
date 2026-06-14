@@ -17,13 +17,13 @@ from watchers.prompt_watcher import PromptWatcher
 from watchers.vault_watcher import VaultWatcher
 from watchers.maintenance_scheduler import MaintenanceScheduler
 
-from core.version import VERSION
+from core.version import BUILD_DATE
 from core.ui import ui, setup_rich_logging
 
 def main():
     # 0. Setup Pretty UI
     setup_rich_logging()
-    ui.start(VERSION)
+    ui.start(BUILD_DATE)
 
     # 1. Acquire PID Lock
     acquire_pid_lock(PID_FILE)

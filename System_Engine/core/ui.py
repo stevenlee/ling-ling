@@ -44,8 +44,8 @@ class LingLingUI:
             return grid
         return Text(f"{IDLE_EMOJI} {self._status_text}", style="bold green")
 
-    def start(self, version):
-        self.banner(version)
+    def start(self, build_date):
+        self.banner(build_date)
         self._live = Live(
             self._get_status_renderable(),
             console=console,
@@ -54,9 +54,9 @@ class LingLingUI:
         )
         self._live.start()
 
-    def banner(self, version):
+    def banner(self, build_date):
         banner_text = Text()
-        banner_text.append(f"\n🌸 Ling-Ling Mentor System v{version} 🌸\n", style="bold magenta")
+        banner_text.append(f"\n🌸 Ling-Ling Mentor System (build {build_date}) 🌸\n", style="bold magenta")
         banner_text.append("玲玲小老師上線囉！(๑˃̵ᴗ˂̵)و\n", style="italic cyan")
         console.print(Panel(banner_text, border_style="bright_magenta"))
 

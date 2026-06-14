@@ -316,6 +316,63 @@ class TestQuotedNodeIdRepair:
         assert '  NodeA["Input"] --> NodeB["Output"]' in result
 
 
+# ── Quoted Connection-Endpoint Labels ──────────────────────────────
+
+class TestQuotedEndpointLabels:
+    """`"label with spaces" --> "other"` is invalid mermaid — promote each
+    quoted endpoint that can't be a bare id to `id["label"]`. Single-token
+    endpoints stay on the strip path (Hybrid policy)."""
+
+    def _q(self, body):
+        from core.parser import repair_mermaid_quoted_endpoint_labels
+        return repair_mermaid_quoted_endpoint_labels(f"```mermaid\n{body}\n```")
+
+    def test_brackets_multiword_endpoints(self):
+        result, fixes = self._q('graph TD\n    "Plan work" --> "Ship it"')
+        assert 'Planwork["Plan work"] --> Shipit["Ship it"]' in result
+        assert any(f["type"] == "bracketed_mermaid_quoted_endpoint" for f in fixes)
+
+    def test_brackets_cjk_with_space(self):
+        result, _ = self._q('graph TD\n    "步驟 一" --> "步驟 二"')
+        assert '步驟一["步驟 一"] --> 步驟二["步驟 二"]' in result
+
+    def test_single_token_left_for_strip_pass(self):
+        # Hybrid: a legal bare id is NOT bracketed here (the strip pass unquotes it).
+        result, fixes = self._q('graph TD\n    "A1" --> "B1"')
+        assert '"A1" --> "B1"' in result
+        assert fixes == []
+
+    def test_repeated_label_shares_one_id(self):
+        result, _ = self._q('graph TD\n    "Plan work" --> "Ship it"\n    "Ship it" --> "Done now"')
+        assert result.count('Shipit["Ship it"]') == 2
+
+    def test_mixed_quoted_and_bare_endpoint(self):
+        result, _ = self._q('graph TD\n    "Plan work" --> B2')
+        assert 'Planwork["Plan work"] --> B2' in result
+
+    def test_edge_label_preserved(self):
+        # The `-- "edge" -->` edge label must survive; only the endpoint converts.
+        result, _ = self._q('graph TD\n    A -- "edge" --> "Ship it"')
+        assert 'A -- "edge" --> Shipit["Ship it"]' in result
+
+    def test_plain_edge_label_untouched(self):
+        result, fixes = self._q('graph TD\n    A -- "edge" --> B')
+        assert 'A -- "edge" --> B' in result
+        assert fixes == []
+
+    def test_synthesized_id_avoids_author_id_collision(self):
+        result, _ = self._q('graph TD\n    Planwork --> X\n    "Plan work" --> Y')
+        assert 'Planwork_1["Plan work"] --> Y' in result
+
+    def test_idempotent(self):
+        body = 'graph TD\n    "Plan work" --> "Ship it"'
+        once, _ = self._q(body)
+        from core.parser import repair_mermaid_quoted_endpoint_labels
+        twice, fixes = repair_mermaid_quoted_endpoint_labels(once)
+        assert once == twice
+        assert fixes == []
+
+
 # ── Double Quote Bracket Repair ────────────────────────────────────
 
 class TestDoubleQuoteRepair:

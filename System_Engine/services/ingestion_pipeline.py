@@ -647,7 +647,7 @@ class IngestionPipeline:
         part_state: dict,
         doc_config: dict | None = None,
     ) -> Path:
-        from core.version import VERSION
+        from core.version import BUILD_DATE
 
         syn_persona = (doc_config or {}).get("synthesis_persona", "none")
         syn_template = (doc_config or {}).get("synthesis_template") or settings.USE_TEMPLATE or "wiki-note"
@@ -697,7 +697,7 @@ class IngestionPipeline:
             "title": f"{base_title} (Synthesis)",
             "tags": (master_tags or []) + ["synthesis", "completed"],
             "status": "#PerfectPitch",
-            "version": VERSION,
+            "engine_build": BUILD_DATE,
             "date_completed": datetime.now().strftime("%Y-%m-%d"),
             "model": self.llm.model,
             "input_chars": len(content),
@@ -988,13 +988,13 @@ class IngestionPipeline:
         if not sections:
             return None
 
-        from core.version import VERSION
+        from core.version import BUILD_DATE
         metadata = {
             "title": f"{base_title} (Stitched)",
             "type": "stitched_article",
             "tags": sorted(set((tags or []) + ["stitched", "longform"])),
             "status": "#FaithfulStitch",
-            "version": VERSION,
+            "engine_build": BUILD_DATE,
             "date_completed": datetime.now().strftime("%Y-%m-%d"),
             "model": self.llm.model,
             "input_chars": input_chars,

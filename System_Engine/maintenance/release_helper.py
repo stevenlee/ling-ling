@@ -9,7 +9,7 @@ sys.path.append(str(Path(__file__).parent.parent.absolute()))
 
 try:
     from core.config import PROJECT_ROOT
-    from core.version import VERSION
+    from core.version import BUILD_DATE
 except ImportError:
     print("❌ Error: Could not import core configuration. Run this script from the project root.")
     sys.exit(1)
@@ -73,7 +73,7 @@ class CodeAuditor:
     def generate_console_report(self):
         """Print a summary to the console."""
         print("\n" + "="*50)
-        print(f"🔍 LING-LING CODE AUDIT REPORT (v{VERSION})")
+        print(f"🔍 LING-LING CODE AUDIT REPORT (build {BUILD_DATE})")
         print("="*50)
         print(f"📁 Files Audited:    {self.files_audited}")
         print(f"functions Found:     {self.functions_found}")
@@ -101,13 +101,13 @@ class CodeAuditor:
                 if data["functions"]:
                     summary += f"  Functions: {', '.join([f['name'] for f in data['functions']])}\n"
         
-        prompt = f"""You are a professional software architect. Based on the following codebase analysis, write a high-level **Release Note** for the project "Ling-Ling" version {VERSION}.
+        prompt = f"""You are a professional software architect. Based on the following codebase analysis, write a high-level **Release Note** for the project "Ling-Ling" (build {BUILD_DATE}).
 
 **Codebase Context:**
 {summary}
 
 **Instructions:**
-1. Include the version number "v{VERSION}" prominently in the title or header.
+1. Include the build date "{BUILD_DATE}" prominently in the title or header.
 2. Write a compelling project description (what is Ling-Ling?).
 3. Highlight the key capabilities based on the module names (e.g., agents, watchers, core services).
 4. List "What's New" or "Features" in a clean Markdown format.
@@ -136,8 +136,8 @@ def main():
         prompt = auditor.get_summary_prompt()
         release_note = llm.answer_query(prompt, wiki_context="")
         
-        # Prepend the version number to ensure it's at the very beginning
-        final_content = f"# Release Notes - v{VERSION}\n\n{release_note}"
+        # Prepend the build date to ensure it's at the very beginning
+        final_content = f"# Release Notes - build {BUILD_DATE}\n\n{release_note}"
         
         output_path = PROJECT_ROOT / "RELEASE_NOTE.md"
         with open(output_path, "w", encoding="utf-8") as f:

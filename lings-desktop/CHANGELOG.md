@@ -2,6 +2,22 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-15 版號 → engine build date（拔掉不 bump 的 semver）
+
+`VERSION = "0.3.0"` 是手動維護的 semver,但實際上沒人 bump——上次改是 2026-05-25,之後 ~30 個 commit(M1–M4、retrieval 修復…)全掛在 0.3.0 下,等於每份報告的 `version:` 都在說謊。改用**自動、永不過期**的 engine build date(running code 的 git commit 日期)。
+
+- **`core/version.py`**：`VERSION` → `BUILD_DATE`。import 時跑一次 `git log -1 --format=%cd --date=short`(timeout 2s、module 快取故每進程最多一次);git 不在時(打包、shallow copy)**fallback 到本檔 mtime**,絕不崩。
+- **消費端全部改用 `BUILD_DATE`**：Dashboard 標題 `(v0.3.0)` → `# 🎀 Knowledge Dashboard` + `*📅 Last updated: <date>*`;CLI banner `v0.3.0` → `(build <date>)`;report frontmatter `version:` → **`engine_build:`**(`base_agent` 與 `ingestion_pipeline` 的 Synthesis/Stitched 頁);`release_helper` 的 audit/release note 改用 build date。
+- 為何 `engine_build` 而非直接拔掉:這個日期自動維護,反而變成我們原本想要、卻因「沒人 bump semver」而放棄的**真 provenance**——一眼看出某報告是哪個引擎 build 產出的,零成本。
+- 測試:`test_insight_agent` 的 frontmatter 斷言 `version:` → `engine_build:`。insight/ingestion/base_agent/learning 70 passed。
+
+### 2026-06-14 Mermaid 修復：帶空白的引號連線端點 → `id["label"]`
+
+**Review 既有 mermaid 格式修復管線時發現的真實 gap。** `repair_mermaid_label_quotes` 對連線端點引號的處理只認單 token(`[\w\-一-鿿]+`,不含空白):`"A1" --> "B1"` 會被剝成 `A1 --> B1`(可渲染),但 `"Plan work" --> "Ship it"` 這種**多字/帶空白的引號端點完全不匹配,原樣留下 → 壞圖流到輸出**。這是使用者觀察到的 `"Awords" --> "Bwords"` 的真因。
+
+- **`core/parser.py`**：新增 pass `repair_mermaid_quoted_endpoint_labels`(排在 `repair_mermaid_label_quotes` 前)。**Hybrid 策略**:端點是合法 ID(無空白)→ 維持剝引號(渲染等價、保留裸 ID 跨行引用穩定、現有測試全綠);端點含空白/標點 → 升級為 `合成ID["標籤"]`。合成 ID 是標籤的 slug,**相同標籤去重成同一節點**(`"Mid"-->"End"` 與 `"Start"-->"Mid"` 共用 Mid),並與 fence 內既有節點 ID 預掃避碰撞(`Planwork` 已存在 → 用 `Planwork_1`)。邊標籤 `A -- "edge" --> B` 不受影響(錨定端點需緊鄰行首/尾的箭頭);idempotent(改成 `id["label"]` 後兩個錨點都不再匹配)。
+- **測試**：+9(多字 / CJK 帶空白 / 單 token 留給 strip / 重複標籤去重 / 混合裸+引號 / 邊標籤保留 / 碰撞避免 / idempotent)。parser+mermaid 全套 192 passed。
+
 ### 2026-06-14 Bench 比對改為文件層級（修正與自身 docstring 的矛盾）
 
 修掉上一筆「待決策」項目。Bench 檔頭明寫「catch real drift **without alerting on harmless Part/Synthesis swaps**」,但 `_matches_expected` 卻拿含 `(Part N)` 尾綴的完整 title 做逐字交集——同一份文件的不同 chunk(harmless Part swap)會被判 FAIL,與檔頭意圖直接矛盾。實證:per-doc cap 修好後 `NIST.AI.600-1` 已在 top-5(rank 5),卻因落在 Part 1、而 `expected_top_k` 只列 Part 15/17/… 被誤判假陰性。

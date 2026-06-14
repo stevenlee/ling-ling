@@ -341,9 +341,10 @@ def update_wiki_index(filepath: Path = None, title: str = None, *, sync_reading_
             _sync_reading_index(entity_titles)
         reading_index, _, _ = _load_reading_index()
 
-        from core.version import VERSION
+        from core.version import BUILD_DATE
         lines = [
-            f"# 🎀 Knowledge Dashboard (v{VERSION})",
+            "# 🎀 Knowledge Dashboard",
+            f"*📅 Last updated: {BUILD_DATE}*",
             "---",
             "",
             "- ✍️ [[ReadingIndex]]",

@@ -305,7 +305,7 @@ class TestMirrorMetadata:
 
         mirror = next(insights_dir.iterdir()).read_text(encoding="utf-8")
         assert mirror.startswith("---\n"), "mirror should have YAML frontmatter"
-        for field in ("title:", "type: report_insight", "version:", "date_created:",
+        for field in ("title:", "type: report_insight", "engine_build:", "date_created:",
                       "input_chars:", "output_chars:", "exercise_strategy: recency"):
             assert field in mirror, f"mirror missing {field!r}"
 
@@ -333,7 +333,7 @@ class TestMirrorMetadata:
         assert mirror.startswith("---\n"), "full-insight mirror lost its frontmatter"
         assert "type: report_insight_full" in mirror
         assert "title:" in mirror
-        assert "version:" in mirror
+        assert "engine_build:" in mirror
 
     def test_mirror_filename_uses_datetime_related_doc_and_command(self, stub_agent):
         agent, _, insights_dir = stub_agent

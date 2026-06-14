@@ -174,7 +174,7 @@ class BaseAgent:
 
         Callers that ignored the return value previously still work.
         """
-        from core.version import VERSION
+        from core.version import BUILD_DATE
 
         body = self._self_correct(body)
 
@@ -203,7 +203,7 @@ class BaseAgent:
         metadata.update({
             "title": title,
             "type": report_type,
-            "version": VERSION,
+            "engine_build": BUILD_DATE,
             "date_created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "input_chars": self.stats["input_chars"],
             "output_chars": len(body),

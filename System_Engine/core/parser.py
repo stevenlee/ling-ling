@@ -7,6 +7,7 @@ The public surface (callers across agents/, services/, watchers/, maintenance/):
     clean_llm_response(text)                -> str
     run_markdown_quality_checks(text, ...)  -> (str, list[dict])
     repair_mermaid_fences(text)             -> (str, list[dict])
+    repair_mermaid_quoted_endpoint_labels(text) -> (str, list[dict])
     repair_mermaid_label_quotes(text)       -> (str, list[dict])
     repair_mermaid_latex_labels(text)       -> (str, list[dict])
     repair_latex_carriage_returns(text)     -> (str, list[dict])
@@ -162,6 +163,25 @@ _MERMAID_CONN_START_QUOTED_ID_RE = re.compile(
 _MERMAID_CONN_END_QUOTED_ID_RE = re.compile(
     r'(' + _MERMAID_CONN_ARROW_PAT + r')\s*\"([\w\-一-鿿]+)\"(\s*(?:%%.*)?)$'
 )
+# Same two anchors, but the quoted endpoint may hold ANY text (spaces,
+# punctuation) — i.e. a label that cannot be a bare node id. ``[^"\n]`` keeps
+# each match to a single endpoint and never spans the arrow to the other side.
+_MERMAID_CONN_START_QUOTED_LABEL_RE = re.compile(
+    r'^(\s*)\"([^"\n]+)\"\s*(' + _MERMAID_CONN_ARROW_PAT + r')'
+)
+_MERMAID_CONN_END_QUOTED_LABEL_RE = re.compile(
+    r'(' + _MERMAID_CONN_ARROW_PAT + r')\s*\"([^"\n]+)\"(\s*(?:%%.*)?)$'
+)
+# A quoted endpoint whose text is a legal bare id (no spaces/punctuation) is
+# left to the strip pass — `"A1" --> "B1"` → `A1 --> B1`, which renders
+# identically and keeps the id stable for bare-id cross-references elsewhere.
+_MERMAID_BARE_ID_RE = re.compile(r'^[\w\-一-鿿]+$')
+# Pre-scan: collect ids already used in a fence so a synthesized id can't
+# collide with an author's node. Leading id, or id immediately before a shape.
+_MERMAID_EXISTING_ID_RE = re.compile(
+    r'(?:^\s*|' + _MERMAID_CONN_ARROW_PAT + r'\s*)([\w\-一-鿿]+)(?=\s|[\[\(\{>]|$)'
+)
+_MERMAID_ID_SLUG_RE = re.compile(r'[^\w一-鿿]')
 
 LATEX_CR_COMMAND_RE = re.compile(r'\r(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b')
 
@@ -617,6 +637,104 @@ def repair_mermaid_double_quotes(text: str) -> tuple[str, list[dict]]:
             out.append(new_line)
         else:
             out.append(line)
+
+    return "\n".join(out), fixes
+
+
+def _synthesize_node_id(label: str, label_to_id: dict[str, str], used_ids: set[str]) -> str:
+    """Map a connection-label to a stable, unique node id within one fence.
+
+    Same label → same id (so ``"Mid" --> "End"`` and ``"Start" --> "Mid"``
+    share one node). The id is a slug of the label so it reads sensibly and
+    naturally dedups; on a slug collision with a *different* label or an
+    author's existing id, a counter suffix is appended.
+    """
+    if label in label_to_id:
+        return label_to_id[label]
+    slug = _MERMAID_ID_SLUG_RE.sub("", label)[:24] or "node"
+    candidate = slug
+    i = 1
+    while candidate in used_ids:
+        candidate = f"{slug}_{i}"
+        i += 1
+    used_ids.add(candidate)
+    label_to_id[label] = candidate
+    return candidate
+
+
+def repair_mermaid_quoted_endpoint_labels(text: str) -> tuple[str, list[dict]]:
+    r"""Bracket bare quoted connection endpoints that carry a *label*.
+
+    An endpoint like ``"Plan work" --> "Ship it"`` is invalid mermaid: a
+    quoted string with spaces/punctuation cannot stand in for a node. The
+    LLM means it as display text, so we promote it to ``id["Plan work"]``
+    with a synthesized, deduped id. Single-token endpoints (``"A1"``) are a
+    legal bare id and are left for ``repair_mermaid_label_quotes`` to merely
+    unquote — that keeps the id stable for any bare-id cross-references.
+
+    Edge labels (``A -- "edge" --> B``) are untouched: the anchors require
+    the quoted text to be adjacent to the arrow at the line's start/end.
+    Idempotent — once rewritten to ``id["label"]`` neither anchor matches.
+    """
+    if not text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+    label_to_id: dict[str, str] = {}
+    used_ids: set[str] = set()
+
+    def rewrite(line: str, idx: int) -> str:
+        def repl_start(m: re.Match) -> str:
+            label = m.group(2)
+            if _MERMAID_BARE_ID_RE.match(label):
+                return m.group(0)
+            nid = _synthesize_node_id(label, label_to_id, used_ids)
+            return f'{m.group(1)}{nid}["{label}"] {m.group(3)}'
+
+        def repl_end(m: re.Match) -> str:
+            label = m.group(2)
+            if _MERMAID_BARE_ID_RE.match(label):
+                return m.group(0)
+            nid = _synthesize_node_id(label, label_to_id, used_ids)
+            return f'{m.group(1)} {nid}["{label}"]{m.group(3)}'
+
+        new = _MERMAID_CONN_START_QUOTED_LABEL_RE.sub(repl_start, line)
+        new = _MERMAID_CONN_END_QUOTED_LABEL_RE.sub(repl_end, new)
+        if new != line:
+            fixes.append(_make_fix(
+                "bracketed_mermaid_quoted_endpoint",
+                line=idx + 1,
+                before=line,
+                after=new,
+            ))
+        return new
+
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+            label_to_id = {}
+            # Seed used_ids with every id already present in this fence so a
+            # synthesized id never collides with an author's node.
+            used_ids = set()
+            for look in lines[idx + 1:]:
+                if look.strip() == "```":
+                    break
+                used_ids.update(_MERMAID_EXISTING_ID_RE.findall(_strip_mermaid_comment(look)))
+            out.append(line)
+        elif in_mermaid and stripped == "```":
+            in_mermaid = False
+            out.append(line)
+        elif in_mermaid:
+            out.append(rewrite(line, idx))
+        else:
+            out.append(line)
+        idx += 1
 
     return "\n".join(out), fixes
 
@@ -1128,6 +1246,7 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
         repair_mermaid_subgraph_keyword,
         repair_mermaid_quoted_node_ids,
         repair_mermaid_double_quotes,
+        repair_mermaid_quoted_endpoint_labels,
         repair_mermaid_label_quotes,
         repair_mermaid_latex_labels,
         repair_markdown_tables,
