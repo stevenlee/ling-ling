@@ -133,6 +133,12 @@ CORTEX_FALSIFY_SAMPLES          = max(1, int(os.getenv("CORTEX_FALSIFY_SAMPLES",
 CORTEX_RECALL_TOP_K             = max(1, int(os.getenv("CORTEX_RECALL_TOP_K", "8")))
 CORTEX_RECALL_LLM_MAX           = max(1, int(os.getenv("CORTEX_RECALL_LLM_MAX", "150")))
 CORTEX_RECALL_PREFILTER         = max(1, int(os.getenv("CORTEX_RECALL_PREFILTER", "40")))
+# Cortex Phase 5 F3 (tension digest): a claim is "dogmatic" (echo-chamber fuel)
+# when its falsifiability is <= DOGMATIC_FALS yet confidence >= DOGMATIC_CONF;
+# "thin evidence" when it has <= THIN_EVIDENCE_MAX sources.
+CORTEX_TENSION_DOGMATIC_FALS    = float(os.getenv("CORTEX_TENSION_DOGMATIC_FALS", "0.25"))
+CORTEX_TENSION_DOGMATIC_CONF    = float(os.getenv("CORTEX_TENSION_DOGMATIC_CONF", "0.5"))
+CORTEX_TENSION_THIN_EVIDENCE_MAX = max(0, int(os.getenv("CORTEX_TENSION_THIN_EVIDENCE_MAX", "1")))
 CORTEX_UNMERGE_STRICT_AT        = float(os.getenv("CORTEX_UNMERGE_STRICT_AT", "0.10"))
 CORTEX_UNMERGE_RELAX_AT         = float(os.getenv("CORTEX_UNMERGE_RELAX_AT", "0.05"))
 CORTEX_UNMERGE_MIN_SAMPLES      = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))
