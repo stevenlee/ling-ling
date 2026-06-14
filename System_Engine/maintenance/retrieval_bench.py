@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -69,11 +70,29 @@ def _candidate_identifiers(item: dict) -> set[str]:
     return {str(v) for v in values if v not in (None, "")}
 
 
+# A chunk title carries a trailing (Part N)/(Synthesis)/(Stitched) marker;
+# the same document is sharded across many such chunks. The bench header
+# promises NOT to alert on "harmless Part/Synthesis swaps" — i.e. retrieving
+# a *different chunk of the right document* must still count as a hit. So we
+# match at the document level by stripping this marker from both sides before
+# intersecting. Real drift (a *different document*) still fails: its base name
+# differs. Only the enumerated harmless suffixes are stripped — an unrelated
+# trailing parenthetical (e.g. a language tag ``Siddhartha(EN)``) is left
+# intact, so distinct editions stay distinct.
+_CHUNK_SUFFIX_RE = re.compile(r"\s*\((?:Part\s+\d+|Synthesis|Stitched)\)\s*$", re.IGNORECASE)
+
+
+def _strip_chunk_suffix(value: str) -> str:
+    return _CHUNK_SUFFIX_RE.sub("", value).strip()
+
+
 def _matches_expected(item: dict, expected: Any) -> bool:
-    expected_values = {str(v) for v in _as_list(expected) if v not in (None, "")}
+    expected_values = {
+        _strip_chunk_suffix(str(v)) for v in _as_list(expected) if v not in (None, "")
+    }
     if not expected_values:
         return False
-    identifiers = _candidate_identifiers(item)
+    identifiers = {_strip_chunk_suffix(v) for v in _candidate_identifiers(item)}
     return bool(identifiers & expected_values)
 
 

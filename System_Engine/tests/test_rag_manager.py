@@ -506,3 +506,42 @@ class TestPublicChunkAccessors:
         assert rag.collection.calls[0] == {"where": {"title": "Doc A"}, "include": ["metadatas", "documents"], "limit": None}
         assert rag.collection.calls[1]["where"] == {"title": "Doc B"}
         assert rag.collection.calls[1]["limit"] == 5
+
+
+class TestPerDocumentCap:
+    """RETRIEVAL_MAX_PER_DOC anti-flood cap (verified fix for the SpaceX-flood
+    that buried NIST.AI.600-1 below the top-k)."""
+
+    @staticmethod
+    def _c(title, cid):
+        return {"id": cid, "metadata": {"title": title, "source": f"{title}.md"}}
+
+    def test_doc_key_strips_part_and_synthesis_suffix(self):
+        k = RAGManager._doc_key
+        assert k(self._c("NIST.AI.600-1 (Part 1)", "a")) == "NIST.AI.600-1"
+        assert k(self._c("NIST.AI.600-1 (Synthesis)", "b")) == "NIST.AI.600-1"
+        # distinct language editions stay distinct
+        assert k(self._c("Siddhartha(EN) (Part 15)", "c")) == "Siddhartha(EN)"
+        assert k(self._c("Siddhartha(DE) (Part 10)", "d")) == "Siddhartha(DE)"
+        # mid-name parens preserved, only trailing stripped
+        assert k(self._c("Hegel Volume 1 (of 3) (Part 97)", "e")) == "Hegel Volume 1 (of 3)"
+
+    def test_cap_keeps_first_n_per_doc_in_order(self):
+        cands = [
+            self._c("SpaceX (Part 1)", "1"), self._c("SpaceX (Synthesis)", "2"),
+            self._c("SpaceX (Part 9)", "3"),   # 3rd SpaceX → dropped at cap=2
+            self._c("NIST.AI.600-1 (Part 1)", "4"),
+        ]
+        out = RAGManager._cap_per_document(cands, cap=2)
+        ids = [c["id"] for c in out]
+        assert ids == ["1", "2", "4"]          # SpaceX#3 removed, NIST surfaces
+
+    def test_cap_one_maximally_diversifies(self):
+        cands = [self._c("A (Part 1)", "1"), self._c("A (Part 2)", "2"),
+                 self._c("B (Part 1)", "3")]
+        assert [c["id"] for c in RAGManager._cap_per_document(cands, cap=1)] == ["1", "3"]
+
+    def test_cap_preserves_legit_multi_part_within_limit(self):
+        # a genuinely single-doc query keeps its top chunks up to the cap
+        cands = [self._c("PDE (Part 51)", "1"), self._c("PDE (Part 61)", "2")]
+        assert len(RAGManager._cap_per_document(cands, cap=2)) == 2

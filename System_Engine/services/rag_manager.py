@@ -17,6 +17,7 @@ from core.config import (
     RERANKER_MULTIPLIER,
     HYBRID_RETRIEVAL_ENABLED,
     BM25_MULTIPLIER,
+    RETRIEVAL_MAX_PER_DOC,
     WIKI_VAULT_DIR,
     USE_THOUGHTFUL_SPLITTER
 )
@@ -573,18 +574,24 @@ class RAGManager:
         rerank: bool | None = None,
         hybrid: bool | None = None,
         use_facets: bool | None = None,
+        max_per_doc: int | None = None,
     ) -> list[dict]:
         """Query RAG returning structured dict lists.
 
         Pipeline composes (in order): vector retrieve → (optional BM25
         supplement + RRF) → (optional cross-encoder rerank) → (optional
-        MMR diversification). Each stage is independently togglable; the
-        ``None`` defaults respect the corresponding ``*_ENABLED`` env.
+        MMR diversification) → (per-document cap). Each stage is
+        independently togglable; the ``None`` defaults respect the
+        corresponding ``*_ENABLED`` env.
 
         - ``diversity`` (0.0–1.0): MMR weight. 0 = relevance-only.
         - ``rerank``: cross-encoder re-scoring. Best precision win.
         - ``hybrid``: BM25 + vector fused via RRF. Catches proper nouns
           and code identifiers that pure vector misses.
+        - ``max_per_doc``: keep at most N chunks from the same source
+          document in the final top-k (anti-flood). ``None`` → config
+          ``RETRIEVAL_MAX_PER_DOC``; 0 disables. Skipped when MMR runs
+          (MMR is already a diversity mechanism).
         """
         try:
             use_rerank = rerank if rerank is not None else RERANKER_ENABLED
@@ -772,6 +779,14 @@ class RAGManager:
                         candidates, top_k, lambda_param, query_emb=query_emb,
                     )
 
+            # Per-document cap (anti-flood): on the non-MMR path, stop a single
+            # high-volume document from occupying most of the top-k and burying
+            # the relevant doc just below the cut. MMR already diversifies, so
+            # skip it there to avoid double-shrinking.
+            cap = RETRIEVAL_MAX_PER_DOC if max_per_doc is None else max_per_doc
+            if (not mmr_ran) and cap and cap > 0 and candidates:
+                candidates = self._cap_per_document(candidates, cap)
+
             final_returned = candidates[:top_k]
             if mmr_ran:
                 for c in final_returned:
@@ -850,6 +865,43 @@ class RAGManager:
                 logging.debug(f"Failed to record failed retrieval event: {trace_error}")
             return []
 
+
+    @staticmethod
+    def _doc_key(candidate: dict) -> str:
+        """Base-document identity for a chunk, for the per-document cap.
+
+        Derived from the title with any trailing ``(Part N)``/``(Synthesis)``/
+        ``(Stitched)`` parenthetical stripped — so all chunks of one document
+        share a key while genuinely distinct documents (incl. different
+        language editions like ``Siddhartha(EN)`` vs ``Siddhartha(DE)``) stay
+        separate. Falls back to source, then chunk id.
+        """
+        meta = candidate.get("metadata") or {}
+        title = meta.get("title")
+        if title:
+            base = str(title).rsplit(" (", 1)[0] if str(title).endswith(")") else str(title)
+            if base.strip():
+                return base.strip()
+        return str(meta.get("source") or candidate.get("id") or id(candidate))
+
+    @classmethod
+    def _cap_per_document(cls, candidates: list[dict], cap: int) -> list[dict]:
+        """Keep at most ``cap`` chunks per base-document, preserving order.
+
+        Order-preserving and any-match-safe: a document's first ``cap`` (best-
+        ranked) chunks are kept, later ones dropped, letting lower-ranked
+        distinct documents move up. Never reorders within the kept set.
+        """
+        seen: dict[str, int] = {}
+        out: list[dict] = []
+        for c in candidates:
+            k = cls._doc_key(c)
+            n = seen.get(k, 0)
+            if n >= cap:
+                continue
+            seen[k] = n + 1
+            out.append(c)
+        return out
 
     @staticmethod
     def _mmr_select(
