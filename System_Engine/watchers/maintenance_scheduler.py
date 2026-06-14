@@ -192,6 +192,18 @@ class MaintenanceScheduler(threading.Thread):
             result = run_echo_canary()
             return MaintenanceResult("succeeded", f"[{result.status}] {result.message}")
 
+        def self_assessment() -> MaintenanceResult:
+            # Metacognition M1: aggregate every quality signal (report verdicts,
+            # LLM health, bench, Cortex tensions, decay, insight signals) into one
+            # health scorecard. Read-only, zero LLM. Sensing layer of the
+            # self-improvement arc — reports, never acts.
+            trace_store = getattr(self.llm, "trace_store", None)
+            if trace_store is None:
+                return MaintenanceResult("skipped", "No trace store associated with LLM client.")
+            from maintenance.self_assessment import run_self_assessment
+            result = run_self_assessment(trace_store)
+            return MaintenanceResult(result.status, result.message)
+
         return [
             MaintenanceTask(
                 name="insight_daily",
@@ -307,6 +319,14 @@ class MaintenanceScheduler(threading.Thread):
                 idle_required=True,
                 intent="maintenance.echo_canary",
                 agent="EchoCanary",
+            ),
+            MaintenanceTask(
+                name="self_assessment_weekly",
+                action=self_assessment,
+                interval_seconds=7 * 86400,
+                idle_required=True,
+                intent="maintenance.self_assessment",
+                agent="SelfAssessment",
             ),
         ]
 

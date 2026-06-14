@@ -450,6 +450,60 @@ class TraceStore:
 
 
 
+    def query_all_artifacts(self, since_days: int = 7) -> list[dict]:
+        """All artifacts in the window regardless of type, metadata parsed.
+
+        Powers the self-assessment meta-report, which aggregates quality
+        verdicts across every report type at once (rather than enumerating
+        a fragile list of artifact_type strings). Returns newest first.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM artifacts WHERE ts >= ? ORDER BY ts DESC",
+                (self._since_cutoff(since_days),),
+            ).fetchall()
+        out = []
+        for row in rows:
+            record = dict(row)
+            try:
+                record["metadata"] = json.loads(record.get("metadata_json") or "{}")
+            except Exception:
+                record["metadata"] = {}
+            out.append(record)
+        return out
+
+    def llm_call_health(self, since_days: int = 7) -> dict:
+        """Aggregate LLM-call health over the window, grouped by stage.
+
+        Returns {total, failed, error_rate, total_tokens, by_stage:
+        {stage: {total, failed, tokens}}}. SQL-side aggregation — cheap even
+        when the call log is large. For the self-assessment meta-report.
+        """
+        out = {"total": 0, "failed": 0, "error_rate": 0.0, "total_tokens": 0, "by_stage": {}}
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT stage,
+                           COUNT(*) AS n,
+                           SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                           COALESCE(SUM(total_tokens), 0) AS tokens
+                    FROM llm_calls WHERE ts >= ? GROUP BY stage
+                    """,
+                    (self._since_cutoff(since_days),),
+                ).fetchall()
+            for row in rows:
+                stage = row["stage"] or "unknown"
+                n, failed, tokens = int(row["n"]), int(row["failed"] or 0), int(row["tokens"] or 0)
+                out["by_stage"][stage] = {"total": n, "failed": failed, "tokens": tokens}
+                out["total"] += n
+                out["failed"] += failed
+                out["total_tokens"] += tokens
+            out["error_rate"] = out["failed"] / out["total"] if out["total"] else 0.0
+        except Exception as e:
+            logging.debug(f"llm_call_health failed: {e}")
+        return out
+
     def recently_retrieved_titles(self, since_days: int = 30) -> set[str]:
         """Titles that appeared in retrieval results within the window.
 

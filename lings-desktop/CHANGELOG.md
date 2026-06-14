@@ -2,6 +2,16 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-14 Metacognition 層 · M1：統一自評器（自動評估 → 自動改善的感覺層）
+
+往「系統能自動評估、自動改善」方向開工。盤點發現系統其實已有 6 條窄自調迴路（衰減校準、帳本嚴格度、bench 自長/回歸告警、同溫層金絲雀、證偽），但**訊號散落六個子系統、沒有統一視圖**,且**沒有任何迴路會根據累積 verdict 改善生成品質（prompt/template）**。遵循專案 Nervous-System-First 原則——自動「評估」是感覺層,必須先於自動「改善」（行動層）——先做評估器。
+
+- **`maintenance/self_assessment.py`**：`run_self_assessment(trace_store, ...)`,**純讀、零 LLM**,把六軸訊號聚合成一份健康計分卡 + deterministic 觀察條目。六軸:報告品質（verdict 分佈）、LLM 健康（錯誤率/token）、檢索（bench pass_rate 趨勢）、Cortex 信念（tensions：矛盾/教條/薄證據/證偽）、記憶衰減（校準狀態）、洞察品質（novelty/groundedness/refute 存活、grounded vs cold）。每軸一個狀態燈（🔴🟡🟢⚪）由閾值規則決定;**逐軸 fail-open**（單一來源壞掉只降該軸為 unknown,不拖垮整份）。安靜週保持安靜:只有出現紅/黃燈或觀察條目才寫完整報告到 `fromLingLing/`,一行摘要恆進 `maintenance.log.md`。仿既有 `routing_report` 形狀。
+- **唯讀聚合 helper**（`services/trace_store.py`）：新增 `query_all_artifacts(since_days)`（跨所有 type,免列舉脆弱字串）與 `llm_call_health(since_days)`（SQL GROUP BY 算各 stage 錯誤率/token）。皆新增,未動既有方法。
+- 排程 `self_assessment_weekly`（週、idle、dreaming window;受 `MAINTENANCE_SCHEDULER_ENABLED` 總開關管,唯讀報告無需個別 flag）。
+- **Live（真實 DB+Cortex+Insights）**：計分卡如實反映現況——檢索 🔴（pass_rate 73% < 80% 警戒線）、Cortex 🔴（2 條教條 + 12 條薄證據）、LLM 🟢（903 次呼叫 1% 失敗）、洞察 🟢（13 篇全 cold,呼應 F1 剛開尚無 grounded）。觀察條目即 M2 診斷的種子。+11 tests（986 passed）。
+- **反漂移硬條款**（寫進計劃）：評估與改善分離;改是提案非靜默套用（M3 走 `_pending` 人工閘）;數值自調須阻尼+對照+回退（M4,沿用衰減校準模式）;不可用單一指標自我獎勵（多訊號交叉,防 Goodhart）。相位 M1→M4 與完整設計見 [DesignDoc/SelfImprovement_metacognition_plan.md](System_Engine/DesignDoc/SelfImprovement_metacognition_plan.md)。
+
 ### 2026-06-14 Cortex Phase 5 · F1 開啟協定啟動（grounded insight flag ON，進入觀察期）
 
 五道防禦齊備後,依計劃啟動開啟協定:`CORTEX_GROUNDED_INSIGHT_ENABLED=true`(寫在 `.env`——這是**安全閘**,不是口味,屬部署期決定且需重啟生效,與 Phase 6 口味開關歸在 Scripture 不同)。本次只翻 flag + live 驗證,未改程式邏輯。
