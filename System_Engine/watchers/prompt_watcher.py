@@ -32,6 +32,7 @@ LOCK_FILE = PROJECT_ROOT / ".kb_lock"
 # ones (e.g. "patrol") to prevent false matches.
 # Each entry: (filename_triggers, slash_triggers, intent_key)
 INTENT_ROUTES = [
+    (["visualize"],                          ["visualize"],   "visualize"),
     (["merge"],                              ["merge"],       "merge"),
     (["lens", "count"],                      ["lens", "count"], "lens"),
     (["patrol-tags"],                        ["patrol-tags"], "patrol_tags"),
