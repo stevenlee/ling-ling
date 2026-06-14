@@ -18,6 +18,8 @@ from core.config import (
     HYBRID_RETRIEVAL_ENABLED,
     BM25_MULTIPLIER,
     RETRIEVAL_MAX_PER_DOC,
+    CROSS_LINGUAL_ENABLED,
+    CROSS_LINGUAL_TARGET_LANGS,
     WIKI_VAULT_DIR,
     USE_THOUGHTFUL_SPLITTER
 )
@@ -121,7 +123,12 @@ class RAGManager:
         # Initialize trace store
         from services.trace_store import TraceStore
         self.trace_store = TraceStore()
-        
+
+        # Optional cross-lingual query translator, injected post-construction
+        # (RAGManager stays LLM-free): a callable (text, langs) -> {lang: str},
+        # e.g. LLMClient.translate_query. Wired in main.py / the bench harness.
+        self.translator = None
+
         # Initialize embedding function based on configuration
         if EMBEDDING_PROVIDER == "gemini":
             if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
@@ -575,6 +582,8 @@ class RAGManager:
         hybrid: bool | None = None,
         use_facets: bool | None = None,
         max_per_doc: int | None = None,
+        cross_lingual: bool | None = None,
+        extra_queries: list[str] | None = None,
     ) -> list[dict]:
         """Query RAG returning structured dict lists.
 
@@ -592,6 +601,14 @@ class RAGManager:
           document in the final top-k (anti-flood). ``None`` → config
           ``RETRIEVAL_MAX_PER_DOC``; 0 disables. Skipped when MMR runs
           (MMR is already a diversity mechanism).
+        - ``cross_lingual``: translate the query into the other corpus
+          languages and fold each variant's candidates into the pool (RRF
+          fused, reranked against the ORIGINAL query) — so a zh query can
+          surface en/de docs. ``None`` → config ``CROSS_LINGUAL_ENABLED``;
+          needs ``self.translator`` set. Widens recall, doesn't touch the index.
+        - ``extra_queries``: explicit extra query strings to fuse in (same
+          mechanism as cross-lingual, but caller-supplied — bypasses the
+          translator; used by tests/bench). Takes precedence over translation.
         """
         try:
             use_rerank = rerank if rerank is not None else RERANKER_ENABLED
@@ -601,6 +618,21 @@ class RAGManager:
             use_hybrid = hybrid if hybrid is not None else HYBRID_RETRIEVAL_ENABLED
 
             where = self._build_where_clause(tags=tags, section_path=section_path)
+
+            # Cross-lingual: resolve extra query variants to widen the candidate
+            # net. Explicit extra_queries win; otherwise translate when enabled
+            # and a translator is wired. Fail-open — never blocks mono-lingual.
+            if extra_queries:
+                variants = [q for q in extra_queries if q and q.strip()]
+            else:
+                use_xl = CROSS_LINGUAL_ENABLED if cross_lingual is None else cross_lingual
+                if use_xl and self.translator is not None:
+                    from services.cross_lingual import expand_queries
+                    variants = expand_queries(
+                        query_text, self.translator, CROSS_LINGUAL_TARGET_LANGS
+                    )
+                else:
+                    variants = []
 
             pool_factor = max(
                 RERANKER_MULTIPLIER if use_rerank else 1,
@@ -656,6 +688,50 @@ class RAGManager:
                     "mmr_selected": False,
                     "passed_layers": ["vector"]
                 }
+
+            # Cross-lingual / extra-query candidate gathering: run vector
+            # retrieval for each variant and fold NEW candidates into the pool.
+            # Each variant's ranked id list feeds RRF below; the original query
+            # still drives reranking, so precision stays anchored to user intent.
+            extra_vec_id_lists: list[list[str]] = []
+            for variant in variants:
+                try:
+                    v_res = self.collection.query(
+                        query_texts=[variant], n_results=n_pool, where=where, include=include,
+                    )
+                except Exception as e:
+                    logging.debug(f"Cross-lingual variant query failed ({variant!r}): {e}")
+                    continue
+                v_ids = v_res.get('ids', [[]])[0]
+                v_docs = v_res.get('documents', [[]])[0]
+                v_metas = v_res.get('metadatas', [[]])[0]
+                v_dists = v_res.get('distances', [[]])[0]
+                v_embs = v_res.get('embeddings', [[]])[0] if need_embeddings else []
+                extra_vec_id_lists.append(v_ids)
+                for i, cid in enumerate(v_ids):
+                    if cid not in by_id:
+                        c = {
+                            "text": v_docs[i] if i < len(v_docs) else "",
+                            "metadata": v_metas[i] if i < len(v_metas) else {},
+                            "distance": v_dists[i] if i < len(v_dists) else 0.0,
+                            "id": cid,
+                        }
+                        if need_embeddings and i < len(v_embs):
+                            c["embedding"] = v_embs[i]
+                        by_id[cid] = c
+                        candidate_info[cid] = {
+                            "vector_distance": v_dists[i] if i < len(v_dists) else 0.0,
+                            "vector_rank": None,
+                            "bm25_score": None,
+                            "bm25_rank": None,
+                            "rrf_score": None,
+                            "rerank_score": None,
+                            "rerank_rank": None,
+                            "mmr_selected": False,
+                            "passed_layers": ["vector_xlingual"],
+                        }
+                    elif "vector_xlingual" not in candidate_info[cid]["passed_layers"]:
+                        candidate_info[cid]["passed_layers"].append("vector_xlingual")
 
             bm25_ids: list[str] = []
             rrf_scores: dict[str, float] = {}
@@ -716,7 +792,14 @@ class RAGManager:
                         candidate_info[cid]["bm25_rank"] = i + 1
                         candidate_info[cid]["passed_layers"].append("bm25")
 
-                rrf_scores = rrf_merge([vec_ids, bm25_ids])
+            # Fusion: RRF over the primary vector ranking + every cross-lingual
+            # variant ranking + (when hybrid) the BM25 ranking. Runs whenever
+            # there is more than one ranking to fuse (hybrid and/or variants).
+            if use_hybrid or extra_vec_id_lists:
+                rankings = [vec_ids, *extra_vec_id_lists]
+                if use_hybrid:
+                    rankings.append(bm25_ids)
+                rrf_scores = rrf_merge(rankings)
                 for cid, rrf_s in rrf_scores.items():
                     if cid in candidate_info:
                         candidate_info[cid]["rrf_score"] = rrf_s

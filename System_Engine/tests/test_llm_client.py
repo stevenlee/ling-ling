@@ -437,6 +437,48 @@ class TestTranslateTags:
         assert c.translate_tags(["x"]) == {}
 
 
+class TestTranslateQuery:
+    """translate_query widens the cross-lingual retrieval net; it routes through
+    _complete_json (retry + trace) and caches per (text, langs)."""
+
+    def _client(self, monkeypatch, responses):
+        client = LLMClient.__new__(LLMClient)
+        seq = list(responses)
+        calls = {"n": 0}
+
+        def fake(*a, **k):
+            calls["n"] += 1
+            item = seq.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        monkeypatch.setattr(client, "_complete_text", fake)
+        client._call_count = calls
+        return client
+
+    def test_returns_requested_langs_only(self, monkeypatch):
+        c = self._client(monkeypatch, ['{"en": "weak solution existence", "fr": "junk"}'])
+        out = c.translate_query("弱解存在性", ["en"])
+        assert out == {"en": "weak solution existence"}
+
+    def test_drops_empty_values(self, monkeypatch):
+        c = self._client(monkeypatch, ['{"en": "  ", "zh": "弱解"}'])
+        assert c.translate_query("x", ["en", "zh"]) == {"zh": "弱解"}
+
+    def test_caches_repeat_calls(self, monkeypatch):
+        c = self._client(monkeypatch, ['{"en": "cached"}'])
+        first = c.translate_query("查詢", ["en"])
+        second = c.translate_query("查詢", ["en"])
+        assert first == second == {"en": "cached"}
+        assert c._call_count["n"] == 1  # second served from cache, no LLM call
+
+    def test_empty_inputs_short_circuit(self, monkeypatch):
+        c = self._client(monkeypatch, [])
+        assert c.translate_query("", ["en"]) == {}
+        assert c.translate_query("x", []) == {}
+
+
 class TestExtractClaimsAppliesWhen:
     def _client(self, monkeypatch, response):
         client = LLMClient.__new__(LLMClient)

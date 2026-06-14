@@ -853,6 +853,50 @@ class LLMClient:
             logging.warning(f"_complete_json({kind}) parse miss (attempt {attempt + 1}/2)")
         return empty
 
+    _LANG_NAMES = {
+        "en": "English", "zh": "Traditional Chinese", "de": "German",
+        "ja": "Japanese", "fr": "French", "es": "Spanish",
+    }
+
+    def translate_query(self, text: str, target_langs: list[str]) -> dict:
+        """Translate a search query into each target language, as
+        ``{lang_code: translation}`` — used to widen the cross-lingual
+        retrieval candidate net (see services/cross_lingual.py).
+
+        Routes through `_complete_json` (transport retry + centralized trace),
+        and caches per (text, langs) so repeated queries cost nothing. Returns
+        only the langs the model actually produced; {} on miss (fail-open).
+        """
+        if not text or not text.strip() or not target_langs:
+            return {}
+        cache = self.__dict__.setdefault("_translate_query_cache", {})
+        key = (text.strip(), tuple(target_langs))
+        if key in cache:
+            return cache[key]
+        named = ", ".join(f"{c} ({self._LANG_NAMES.get(c, c)})" for c in target_langs)
+        system_prompt = (
+            "You translate SEARCH QUERIES for cross-lingual document retrieval. "
+            "Preserve technical terms, proper nouns and named entities; keep it "
+            "concise and faithful to search intent (do not answer the query). "
+            f"Return ONLY a JSON object mapping each language code to its "
+            f"translation. Target languages: {named}."
+        )
+        result = self._complete_json(
+            kind="object",
+            system_prompt=system_prompt,
+            user_msg=f"Query: {text}",
+            temperature=0.1,
+            trace_context={"stage": "translate_query", "metadata": {"target_langs": list(target_langs)}},
+        )
+        # Keep only requested codes with non-empty string values.
+        cleaned = {
+            c: result[c].strip()
+            for c in target_langs
+            if isinstance(result.get(c), str) and result[c].strip()
+        }
+        cache[key] = cleaned
+        return cleaned
+
     def translate_tags(self, tags: list[str]) -> dict:
         """Map each tag to its English equivalent, as a JSON object.
 

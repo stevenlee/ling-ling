@@ -110,6 +110,7 @@ def _evaluate_case(rag, case: dict, default_top_k: int, use_facets: bool | None 
         diversity=float(case.get("diversity") or 0.0),
         rerank=case.get("rerank"),
         hybrid=case.get("hybrid"),
+        cross_lingual=case.get("cross_lingual"),
         **kwargs,
     )
 

@@ -2,6 +2,18 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-15 跨語言檢索（query 翻譯 → 候選擴展，opt-in）
+
+旗艦 feature A。語料是 zh/en/de 混合,但 vector+BM25 候選生成基本單語:中文查詢很少把相關英文 chunk 帶進候選池,所以(本就多語的)reranker 根本沒機會排到它。修法:把查詢翻譯成語料的其他語言,各變體都檢索一輪,所有排序用 RRF 融合,再用**原始查詢**重排——加寬召回、不動索引、可關。
+
+- **`services/cross_lingual.py`**（新）：`detect_lang`（CJK 比例,zh/en）+ `expand_queries`（注入 translator,fail-open,去重、跳過同語言）。LLM-free,易測。
+- **`services/llm_client.py`**：新增 `translate_query`,走 `_complete_json`(繼承 retry+trace)、per-query 快取。
+- **`services/rag_manager.py`**：`query_notes` 新增 `cross_lingual` / `extra_queries` 參數;多查詢候選收集 + RRF 融合擴展到「主向量 + 各變體向量 +（hybrid 時）BM25」;reranker 仍用原查詢。`RAGManager` 保持 LLM-free,translator 由 `main.py` 注入。
+- config `CROSS_LINGUAL_ENABLED`(預設 false)、`CROSS_LINGUAL_TARGET_LANGS`(預設 en,zh)。bench `_evaluate_case` 支援 per-case `cross_lingual`,兩個既有 zh→en 案標記之。
+- **測試**：+18（detect_lang/expand_queries 12、translate_query 4、query_notes 融合機制 2）。touched 套件 110 passed,無回歸。
+
+- **誠實的 live 結果——本機無法驗證 lift,且查出更深的瓶頸**：dev box 上 A/B（translator 關/開）**皆 13/16,零 lift**。firsthand 追因發現兩件事：(1) **reranker 在 dev box 沒裝**（`sentence-transformers` 缺）——而 reranker 正是本設計「精排」的另一半;(2) 更關鍵:**本機的 local MiniLM(onnx) embedding 連單語技術檢索都壞**——實測「How is the existence of weak solutions proven?」這種完美英文 query,PDE 書根本不在 top-10(回傳西遊記、NIST)。翻譯本身很好(「弱解的存在性…」→ 完美英文),也確實把 PDE 書從「不在池中」拉進候選池(rank 9),但本機沒有能用的精排層把它浮到 top-5。**結論:feature 正確、零風險、prod（強 embedding+reranker）才驗得出效益;且診斷指出 embedding 模型可能才是更深的槓桿,值得列為下一個調查。**
+
 ### 2026-06-15 audit 剩餘 correctness 收尾：translate_tags 走回統一路徑
 
 接 2026-06-13 全模組稽核。複查後三項中優先 correctness 中兩項已先前修掉（counter_agent 的空陣列誤判已改用 `is_empty_json_literal` 精確比對【B1】、RAG fallback 已改用 `query_notes` dict API 取原文+metadata 標題【B2】），剩 `translate_tags` 本次收尾。

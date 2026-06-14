@@ -34,6 +34,9 @@ def main():
     ensure_wiki_indexes()
     llm_client = LLMClient()
     rag_manager = RAGManager()
+    # Wire the cross-lingual query translator (RAGManager stays LLM-free; it
+    # only holds the injected callable). No-op unless CROSS_LINGUAL_ENABLED.
+    rag_manager.translator = llm_client.translate_query
 
     # 2.1. Apply any pending DB migrations before watchers start writing.
     # Failures are logged but non-fatal (the migration stays pending and

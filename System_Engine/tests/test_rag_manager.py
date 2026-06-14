@@ -421,6 +421,73 @@ class TestRAGExplainMode:
         import shutil
         shutil.rmtree(db_path, ignore_errors=True)
 
+    def test_extra_queries_trigger_rrf_fusion_and_tag_candidates(self, tmpdir):
+        """extra_queries (the cross-lingual mechanism) must fold the variant's
+        candidates into the pool and run RRF fusion — even with hybrid off.
+        Asserted via the mechanism, not embedding-model ranking quirks: with
+        no extra_queries and hybrid off, no fusion runs (rrf_score is None);
+        with extra_queries, fusion runs (rrf_score populated) and a candidate
+        reached via the variant is tagged 'vector_xlingual'."""
+        db_path = Path(tmpdir) / "test_xlingual_db"
+        with patch("services.rag_manager.EMBEDDING_PROVIDER", "local"), \
+             patch("services.rag_manager.EMBEDDING_MODEL", None), \
+             patch("services.rag_manager.EMBEDDING_CACHE_ENABLED", False), \
+             patch("services.rag_manager.HYBRID_RETRIEVAL_ENABLED", False):
+            manager = RAGManager(db_path=str(db_path))
+            manager.collection.add(
+                ids=["a", "b"],
+                documents=[
+                    "The cat sat on the warm mat in the sunny kitchen.",
+                    "Quantum chromodynamics describes the strong force between quarks.",
+                ],
+                metadatas=[{"title": "cat_doc", "doc_id": "A"}, {"title": "physics_doc", "doc_id": "B"}],
+            )
+
+            # Baseline: no fusion (hybrid off, no variants) → rrf_score stays None.
+            plain = manager.query_notes("kitchen cat mat", top_k=2)
+            assert all(r["retrieval_breakdown"]["rrf_score"] is None for r in plain)
+
+            # With an explicit variant matching the physics doc, fusion runs.
+            fused = manager.query_notes(
+                "kitchen cat mat", top_k=2,
+                extra_queries=["quantum chromodynamics quarks strong force"],
+            )
+            by_id = {r["id"]: r for r in fused}
+            assert "b" in by_id, "variant-reached doc should be in the fused pool"
+            assert by_id["b"]["retrieval_breakdown"]["rrf_score"] is not None
+            assert "vector_xlingual" in by_id["b"]["retrieval_breakdown"]["passed_layers"]
+
+        import shutil
+        shutil.rmtree(db_path, ignore_errors=True)
+
+    def test_cross_lingual_uses_injected_translator(self, tmpdir):
+        """cross_lingual=True with a wired translator expands the query; the
+        translated variant's candidate enters the pool."""
+        db_path = Path(tmpdir) / "test_xlingual_translator_db"
+        with patch("services.rag_manager.EMBEDDING_PROVIDER", "local"), \
+             patch("services.rag_manager.EMBEDDING_MODEL", None), \
+             patch("services.rag_manager.EMBEDDING_CACHE_ENABLED", False), \
+             patch("services.rag_manager.HYBRID_RETRIEVAL_ENABLED", False), \
+             patch("services.rag_manager.CROSS_LINGUAL_TARGET_LANGS", ["en", "zh"]):
+            manager = RAGManager(db_path=str(db_path))
+            manager.collection.add(
+                ids=["a", "b"],
+                documents=[
+                    "The cat sat on the warm mat in the sunny kitchen.",
+                    "Quantum chromodynamics describes the strong force between quarks.",
+                ],
+                metadatas=[{"title": "cat_doc", "doc_id": "A"}, {"title": "physics_doc", "doc_id": "B"}],
+            )
+            # zh query → translator returns an English variant that matches doc B.
+            manager.translator = lambda text, langs: {"en": "quantum chromodynamics quarks strong force"}
+            fused = manager.query_notes("貓咪 廚房", top_k=2, cross_lingual=True)
+            by_id = {r["id"]: r for r in fused}
+            assert "b" in by_id
+            assert "vector_xlingual" in by_id["b"]["retrieval_breakdown"]["passed_layers"]
+
+        import shutil
+        shutil.rmtree(db_path, ignore_errors=True)
+
     def test_base_agent_builds_rag_explain_appendix(self, tmpdir):
         from agents.base_agent import BaseAgent
         from services.trace_store import TraceStore

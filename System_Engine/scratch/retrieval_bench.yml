@@ -140,6 +140,7 @@ queries:
     top_k: 5
     hybrid: true
 
+  # ── 跨語言查詢（zh 問 → en 文件；驗證 cross-lingual 候選擴展）──
   - query: "弱解的存在性是怎麼證明的"
     expected_top_k:
       - "Partial Differential Equations with Numerical Methods (Synthesis)"
@@ -149,6 +150,7 @@ queries:
       - "Partial Differential Equations with Numerical Methods (Part 61)"
     top_k: 5
     hybrid: true
+    cross_lingual: true
 
   - query: "求道者放棄苦行之後經歷了什麼轉變"
     expected_top_k:
@@ -158,3 +160,4 @@ queries:
       - "Siddhartha(EN) (Part 17)"
     top_k: 5
     hybrid: true
+    cross_lingual: true
