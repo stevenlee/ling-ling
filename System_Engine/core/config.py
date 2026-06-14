@@ -12,7 +12,6 @@ load_dotenv()
 # ─── Static config ────────────────────────────────────────────────────
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "vllm").lower()
-AUTO_REPAIR = os.getenv("AUTO_REPAIR", "False").lower() == "true"
 COMMAND_PREFIX = "@ling-"
 
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "5000"))
