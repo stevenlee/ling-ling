@@ -1437,6 +1437,61 @@ class InsightAgent(BaseAgent):
         )
         return seed
 
+    def _should_ground(self, idea: str) -> bool:
+        """Deterministically pick GROUND_FRACTION of seeds to ground — the rest
+        stay cold so the echo-chamber canary has a control group. Hash-based, so
+        it's reproducible and testable (not random)."""
+        from core.config import CORTEX_GROUNDED_INSIGHT_ENABLED, CORTEX_GROUND_FRACTION
+        if not CORTEX_GROUNDED_INSIGHT_ENABLED:
+            return False
+        import hashlib
+        bucket = int(hashlib.sha256(idea.encode("utf-8")).hexdigest(), 16) % 100
+        return bucket < int(round(CORTEX_GROUND_FRACTION * 100))
+
+    def _cortex_priors(self, idea: str) -> list:
+        """Relevant Cortex claims to use as DIALECTICAL priors. Falsifiability-
+        gated (defense 3): unfalsifiable beliefs can't be wrong, so they only
+        self-reinforce — never let them anchor generation. Returns CortexPages."""
+        from core.config import (
+            CORTEX_DIR, CORTEX_GROUND_MIN_FALSIFIABILITY, CORTEX_GROUND_TOP_K,
+        )
+        from services.cortex_store import load_all_pages
+        falsifiable = [
+            p for p in load_all_pages(CORTEX_DIR)
+            if p.claim.strip() and p.status in ("active", "dormant")
+            and p.falsifiability is not None
+            and p.falsifiability >= CORTEX_GROUND_MIN_FALSIFIABILITY
+        ]
+        if len(falsifiable) <= CORTEX_GROUND_TOP_K:
+            return falsifiable
+        # Rank by relevance only when there are more than we'll use.
+        from services.cortex_recall import recall_claims
+        ranked = recall_claims(self.rag, idea, cortex_dir=CORTEX_DIR,
+                               top_k=CORTEX_GROUND_TOP_K, min_score=0.0)
+        ids = {p.claim_id for _, p in ranked}
+        ranked_pages = [p for _, p in ranked]
+        # Fall back to the unranked falsifiable set if recall returned nothing.
+        return ranked_pages or falsifiable[:CORTEX_GROUND_TOP_K]
+
+    def _grounding_block(self, priors: list) -> str:
+        lines = [
+            "## 你對相關主題已有的信念（請挑戰，不要附和）",
+            "",
+        ]
+        for p in priors:
+            fz = "—" if p.falsifiability is None else f"{p.falsifiability:.2f}"
+            line = f"- {p.claim.strip()}（可反駁性 {fz}"
+            if p.falsifier:
+                line += f"；反例：{p.falsifier}"
+            lines.append(line + "）")
+        lines += [
+            "",
+            "這份新分析在哪裡【推翻 / 修正 / 延伸】上述既有信念？最有價值的輸出是**張力與反例**，"
+            "不是複述。若新材料只是附和既有信念，明說「無新增」而不要硬湊。",
+            "",
+        ]
+        return "\n".join(lines)
+
     def _expand_seed(self, seed: dict, config: dict) -> dict:
         idea = seed.get("idea", "")
         try:
@@ -1449,8 +1504,20 @@ class InsightAgent(BaseAgent):
         system_base = self._load_prompt("system_base.md")
         agent_instruction = self._load_prompt("agent_insight.md")
 
+        # Cortex-grounded insight (Phase 5 F1, flag-gated, default OFF). Inject
+        # relevant falsifiable claims as DIALECTICAL priors — to challenge, not
+        # confirm. grounded_on records provenance for the consolidation firewall.
+        grounded_on: list[str] = []
+        grounding_section = ""
+        if self._should_ground(idea):
+            priors = self._cortex_priors(idea)
+            if priors:
+                grounded_on = [p.claim_id for p in priors]
+                grounding_section = self._grounding_block(priors)
+
         expand_prompt = (
             f"{system_base}\n\n{agent_instruction}\n\n"
+            f"{grounding_section}"
             f"## 任務\n"
             f"You are developing a winning insight seed into a full analysis.\n\n"
             f"## Seed Insight\n"
@@ -1479,6 +1546,7 @@ class InsightAgent(BaseAgent):
             **seed,
             "expanded": expansion_text,
             "evidence_sources": [doc.split("\n")[0] for doc in evidence_docs[:3]] if evidence_docs else [],
+            "grounded_on": grounded_on,
         }
 
     # ── Multi-round synthesis ────────────────────────────────────────
