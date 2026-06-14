@@ -11,6 +11,14 @@ Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [READM
 - **改用 LLM-over-full-Cortex（第二輪 live 回饋後的架構修正）**：連 hybrid 都救不了「關於 Hibert 的所有記憶」——一字 typo（Hibert vs Hilbert）打爆 exact-token BM25，embedder 又弱到接不起，字面命中主張排最後。**根本問題是工具選錯**：語料只有 9 條，這種規模不該用「檢索」——直接把整個 Cortex 塞進 LLM context，讓它讀完選 + 綜述，typo／概念匹配／框架詞全部自然處理。recall 現在預設 LLM-over-corpus（`CORTEX_RECALL_LLM_MAX=150` 內全塞；超過才用 hybrid `recall_claims` 預篩 `CORTEX_RECALL_PREFILTER`）。Live（typo query）：正確對應 Hilbert、只引用相關的 [#4]、附自我批判（信心 0.50 + 反例）。**同時修一個 bug**：原用 `answer_query` 會經 `_build_system_prompt` 注入 Visualization/template 樣板，害模型狂追一個沒人要的 Mermaid 圖並吐出整段 chain-of-thought（16682 字）；改用新的精簡 `LLMClient.complete(system_prompt, user_msg)`（不帶 persona/template/viz 機制）+ 「只輸出最終綜述」指令後，輸出降為 836 字、乾淨。
 - **Hybrid 融合（第一輪 live 回饋後，保留為大語料預篩）**：純向量在真實對話式查詢上回傳平帶 grab-bag——embedder（nomic-embed-text）對同語言文字的 cosine 擠在 0.53–0.69，連把 on-topic 主張排到 off-topic 之前都做不到（這是 R6 的同一個 embedder 天花板，memory loop 繼承了它）。recall 改為 **magnitude-aware hybrid**（cosine + BM25 字元級 CJK token，BM25 以自身 max 正規化後加權融合）。**刻意不用 RAG 層的 RRF**：RRF 是 rank-based、丟棄 BM25 的量級，且其 k=60 阻尼在 Cortex 這種小語料（~數十條）會把「字面命中得分 4× 次名」的尖峰訊號壓成「rank1 僅微幅勝 rank2」，被 embedder 平帶蓋過。實測：「構建知識圖譜的過程」查詢，字面命中主張從純向量的 **rank 9 → hybrid rank 1**。注意：BM25 在極小語料（≤2–3 頁）IDF 退化為 0；hybrid 的效益隨 Cortex 長大才完整。純概念、無詞彙重疊的查詢仍受 embedder 天花板限制（R6）。+1 test。
 
+### 2026-06-14 Phase 6 學習輔助軸 · ③：論證圖（Toulmin,批判性思考）
+
+router 的旗艦 type:把內容攤成論證骨架——主張 → 根據 → **隱含前提(warrant)** → 適用條件 → 反駁。
+
+- **`services/argument_map.py`**:`build_argument_map`（`_complete_json` 抽 Toulmin 結構）+ `render_argument_map`（結構化 Markdown,先不畫 Mermaid——穩健優先）。value-add 是**未明說的隱含前提**:連結根據到主張、作者沒講出來的假設,正是「找出隱藏邏輯」;並標出「最弱的一環」(最可爭議的 warrant)。重用既有 claim/evidence/falsifier 抽取的同源思路。
+- router `argument_map` type 不再是 stub,dispatch 到此模組;`@ling-visualize [[X]] as argument_map` 可用。
+- Live（鮑莫爾成本病）:正確抽出主張、明說根據,並挖出三條**未明說的隱含前提**（勞動力跨部門流動逼漲薪資、服務業生產率瓶頸、全社會薪資基準上推),最弱一環=勞動力自由流動且「必須」跟漲的假設。+6 tests。
+
 ### 2026-06-14 Phase 6 學習輔助軸 · ①：學習產物 Router（`@ling-visualize`）
 
 Ling-Ling 的使命是幫人**學**,但視覺輸出一直只有 Mermaid flowchart。重新框定:缺口不是圖種（Mermaid 本就支援約 10 種）,是「**內容認知結構 → 對的學習產物**」的對應。

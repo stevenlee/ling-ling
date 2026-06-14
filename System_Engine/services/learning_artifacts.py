@@ -111,7 +111,8 @@ def build_artifact(llm, content: str, *, forced_type: str | None = None) -> dict
         elif t in _MERMAID_KIND:
             artifact = _render_mermaid(llm, content, t)
         elif t == "argument_map":
-            artifact = ""  # rendered by the argument-map module (spec 3); router stub
+            from services.argument_map import build_argument_map, render_argument_map
+            artifact = render_argument_map(build_argument_map(llm, content))
         # t == "none" → no artifact
     except Exception as e:
         logging.warning(f"learning_artifacts: render failed for {t}: {e}")
