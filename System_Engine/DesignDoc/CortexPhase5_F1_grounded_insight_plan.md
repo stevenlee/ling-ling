@@ -1,6 +1,6 @@
 # Cortex Phase 5 · F1 — Cortex-grounded Insight（實施計劃）
 
-> 狀態：**F1 全部五條防禦已實作（2026-06-14），flag 仍預設 OFF。** 五防禦俱全，現在開 flag 是安全的——但建議：開 flag → 讓 grounded 洞察跑幾晚 → 跑 `echo_canary` → 無 alarm 再維持開啟（enable protocol）。F2（`@ling-recall`）、F3（`@ling-tensions`）已上線。
+> 狀態：**F1 開啟協定已啟動（2026-06-14）——`CORTEX_GROUNDED_INSIGHT_ENABLED=true`（`.env`），進入觀察期。** Live 驗證通過：flag 載入、grounding 70/30 切分（cold 對照組保留）、`_cortex_priors` 經 recall 回傳辯證框架 prior（附 falsifier）、基線 `echo_canary` 執行無誤回報 insufficient（尚無 grounded 樣本）。觀察期待辦：累積 ≥5 條 grounded 洞察後看 `echo_canary_weekly` 判斷——無同溫層告警則維持開啟,告警則回退關閉。⚠️ flag 在 `.env`,running daemon 需重啟生效。F2（`@ling-recall`）、F3（`@ling-tensions`）已上線。
 >
 > **五防禦落地對照**：
 > - ② 辯證 framing → `insight_agent._grounding_block`（測試：`test_grounding_block_is_dialectical`）。

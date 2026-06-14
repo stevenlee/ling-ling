@@ -2,6 +2,15 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-14 Cortex Phase 5 · F1 開啟協定啟動（grounded insight flag ON，進入觀察期）
+
+五道防禦齊備後,依計劃啟動開啟協定:`CORTEX_GROUNDED_INSIGHT_ENABLED=true`(寫在 `.env`——這是**安全閘**,不是口味,屬部署期決定且需重啟生效,與 Phase 6 口味開關歸在 Scripture 不同)。本次只翻 flag + live 驗證,未改程式邏輯。
+
+- **Live 驗證(真實 ollama + Cortex)**：(1) flag 載入為 True;(2) `_should_ground` 跨 500 idea 切出 72%(目標 70%),**cold 對照組 142 個確實保留**給金絲雀;(3) `_cortex_priors` 對「AI Agent 協作系統如何對抗熵增」這個 idea,經 recall 排序回傳 3 條最相關 prior(首條正是對應的「收斂機制」主張),`_grounding_block` 正確以「**請挑戰,不要附和**」辯證框架呈現,並附上 falsifier 當反例——反同溫層注入如設計運作。
+- **基線 canary**：on-demand 跑 `run_echo_canary` → `insufficient`（grounded 0、cold 13;既有洞察都在開 flag 前產生）。執行無誤,正確回報樣本不足、暫不評斷。
+- **觀察期**：`echo_canary_weekly` 已排程自動跑。協定要求累積 ≥5 條 grounded 洞察後,canary 才能判斷;以每晚 `insight_daily` × 0.7 grounding 比例,約需數晚。**無同溫層告警（grounded 組 novelty+falsifiability 未系統性偏低）才維持開啟**;若告警則回退關閉。計劃見 [DesignDoc/CortexPhase5_F1_grounded_insight_plan.md](System_Engine/DesignDoc/CortexPhase5_F1_grounded_insight_plan.md)。
+- ⚠️ flag 在 `.env`,running daemon **需重啟**才會生效。
+
 ### 2026-06-14 設定歸位：Phase 6 學習輔助開關從 `.env` 移到 Scripture.md（hot-reload）
 
 - **檢討**：`.env` 是**環境/部署**層的設定（endpoint、API key、provider/model 選擇、會動到成本或安全的子系統 gate）。`visual_router`（自動附學習產物）與 `argument_map_mermaid`（論證圖多附一張 Mermaid）兩個是**使用者輸出偏好**——純口味、無安全/架構含意——卻被我先塞進 `.env`,等於逼使用者改完要重啟 daemon 才生效。歸位到 `Scripture/Scripture.md` 的 YAML frontmatter,走既有 `DynamicSettings.reload()`,**改完即時生效**,使用者也不必碰程式環境。
