@@ -47,5 +47,5 @@
 ### 小提醒
 - 不指定 type 就讓系統自動選——它也可能判定「沒有強結構」而不畫圖。
 - 對象用 `[[WikiLink]]` 指定 `pages/` 或 `Notes/` 裡的筆記。
-- 長文的 `(Synthesis)` 總結頁與**洞察報告**都可開 `VISUAL_ROUTER_ENABLED` 讓它**自動**附上學習產物,不必每次手動下指令。
-- `argument_map` 預設只出結構化 Markdown;想額外要一張確定性的 Mermaid 論證圖,開 `ARGUMENT_MAP_MERMAID`。
+- 在 `Scripture/Scripture.md` 把 `visual_router: true` 打開,長文的 `(Synthesis)` 總結頁與**洞察報告**就會**自動**附上學習產物,不必每次手動下指令(改完即時生效,免重啟)。
+- `argument_map` 預設只出結構化 Markdown;想額外要一張確定性的 Mermaid 論證圖,在 Scripture 開 `argument_map_mermaid: true`。

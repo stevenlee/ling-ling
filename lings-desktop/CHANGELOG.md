@@ -2,6 +2,12 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-14 設定歸位：Phase 6 學習輔助開關從 `.env` 移到 Scripture.md（hot-reload）
+
+- **檢討**：`.env` 是**環境/部署**層的設定（endpoint、API key、provider/model 選擇、會動到成本或安全的子系統 gate）。`visual_router`（自動附學習產物）與 `argument_map_mermaid`（論證圖多附一張 Mermaid）兩個是**使用者輸出偏好**——純口味、無安全/架構含意——卻被我先塞進 `.env`,等於逼使用者改完要重啟 daemon 才生效。歸位到 `Scripture/Scripture.md` 的 YAML frontmatter,走既有 `DynamicSettings.reload()`,**改完即時生效**,使用者也不必碰程式環境。
+- 從 `core/config.py` 的 env 區移除這兩個常數,改為 `DynamicSettings` 綁定（`VISUAL_ROUTER_ENABLED` / `ARGUMENT_MAP_MERMAID`,預設 False);呼叫端 `learning_artifacts.py` 改讀 `settings.*`（live 讀取,故熱更新有效）。Scripture.md 新增「🖼️ Learning Aids」說明段。+1 test（hot-reload 綁定回歸）。
+- 原則釐清：config.py 既有註解「feature flag 一律 env」其實混了兩種東西——(a) 架構/安全 gate(該留 env,如 `CORTEX_GROUNDED_INSIGHT_ENABLED` 是必須關到防禦齊備的安全閘)與 (b) 使用者輸出偏好(該進 Scripture)。本次只搬 (b) 類的兩個,其餘 env gate 維持不動。
+
 ### 2026-06-14 Phase 6 學習輔助軸 · 收尾（auto-attach 全覆蓋 + per-type linter + 論證圖 Mermaid 選配）
 
 把 Phase 6 三條軸的後續一次補齊（皆 flag-gated,預設行為不變）：

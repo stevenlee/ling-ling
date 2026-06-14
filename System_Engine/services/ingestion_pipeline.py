@@ -670,8 +670,8 @@ class IngestionPipeline:
         )
         tag_line = " ".join(f"#{t}" for t in master_tags if "part-" not in t)
 
-        # Phase 6 auto-attach: a learning artifact for the summary (flag-gated,
-        # VISUAL_ROUTER_ENABLED; "" and zero LLM calls when off → byte-identical).
+        # Phase 6 auto-attach: a learning artifact for the summary (gated by
+        # Scripture's `visual_router`; "" and zero LLM calls when off → byte-identical).
         from services.learning_artifacts import maybe_artifact_section
         artifact_section = maybe_artifact_section(self.llm, synthesis_text)
 

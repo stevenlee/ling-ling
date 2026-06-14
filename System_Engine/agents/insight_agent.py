@@ -120,7 +120,7 @@ class InsightAgent(BaseAgent):
 
     def _maybe_artifact(self, content: str) -> str:
         """Phase 6 auto-attach: a learning-aid section for the insight body, or
-        "" when VISUAL_ROUTER_ENABLED is off (zero LLM calls). Fail-open —
+        "" when Scripture's `visual_router` is off (zero LLM calls). Fail-open —
         a visual is a bonus, never block the insight report on it."""
         try:
             from services.learning_artifacts import maybe_artifact_section

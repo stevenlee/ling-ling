@@ -135,7 +135,7 @@ def test_render_none_explains(tmp_path):
 
 def test_maybe_section_off_by_default(monkeypatch):
     from services.learning_artifacts import maybe_artifact_section
-    monkeypatch.setattr("core.config.VISUAL_ROUTER_ENABLED", False)
+    monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", False)
     called = {"n": 0}
 
     class L:
@@ -153,7 +153,7 @@ def test_maybe_section_off_by_default(monkeypatch):
 
 def test_maybe_section_on_attaches(monkeypatch):
     from services.learning_artifacts import maybe_artifact_section
-    monkeypatch.setattr("core.config.VISUAL_ROUTER_ENABLED", True)
+    monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", True)
     llm = FakeLLM(completion="| A | B |\n|---|---|\n| 1 | 2 |")
     # force-via-classify: classify returns comparison_table, render returns table
     llm._classify = {"type": "comparison_table", "confidence": 0.9}
@@ -164,6 +164,6 @@ def test_maybe_section_on_attaches(monkeypatch):
 
 def test_maybe_section_none_attaches_nothing(monkeypatch):
     from services.learning_artifacts import maybe_artifact_section
-    monkeypatch.setattr("core.config.VISUAL_ROUTER_ENABLED", True)
+    monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", True)
     llm = FakeLLM(classify={"type": "none", "confidence": 0.0})
     assert maybe_artifact_section(llm, "unstructured prose") == ""
