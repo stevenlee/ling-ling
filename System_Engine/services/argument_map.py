@@ -87,7 +87,7 @@ def _argument_mermaid(data: dict) -> str:
 def render_argument_map(data: dict, with_mermaid: bool = False) -> str:
     """Structured-Markdown Toulmin layout. Returns "" if there's no claim.
     When `with_mermaid`, appends a deterministic Mermaid graph of the same
-    structure (gated by ARGUMENT_MAP_MERMAID at the call site)."""
+    structure (gated by Scripture's `argument_map_mermaid` at the call site)."""
     if not data or not data.get("claim"):
         return ""
     L = ["## 🧩 論證結構（Toulmin）", "", f"**主張**：{data['claim']}", ""]

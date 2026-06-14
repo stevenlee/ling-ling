@@ -90,6 +90,6 @@ def test_mermaid_label_sanitized():
 
 def test_router_respects_argument_map_mermaid_flag(monkeypatch):
     from services.learning_artifacts import build_artifact
-    monkeypatch.setattr("core.config.ARGUMENT_MAP_MERMAID", True)
+    monkeypatch.setattr("core.config.settings.ARGUMENT_MAP_MERMAID", True)
     out = build_artifact(FakeLLM(_TOULMIN), "essay", forced_type="argument_map")
     assert "```mermaid" in out["artifact"]

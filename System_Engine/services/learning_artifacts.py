@@ -139,10 +139,10 @@ def build_artifact(llm, content: str, *, forced_type: str | None = None) -> dict
         elif t in _MERMAID_KIND:
             artifact = _render_mermaid(llm, content, t)
         elif t == "argument_map":
-            from core.config import ARGUMENT_MAP_MERMAID
+            from core.config import settings
             from services.argument_map import build_argument_map, render_argument_map
             artifact = render_argument_map(
-                build_argument_map(llm, content), with_mermaid=ARGUMENT_MAP_MERMAID
+                build_argument_map(llm, content), with_mermaid=settings.ARGUMENT_MAP_MERMAID
             )
         # t == "none" → no artifact
     except Exception as e:
@@ -154,12 +154,13 @@ def build_artifact(llm, content: str, *, forced_type: str | None = None) -> dict
 
 def maybe_artifact_section(llm, content: str) -> str:
     """A '## 🖼️ 學習輔助' section for `content`, or '' when disabled / 'none' /
-    render failed. Gated by VISUAL_ROUTER_ENABLED — this is the AUTO-attach to
-    synthesis/insight output (the on-demand @ling-visualize is never gated).
-    Returns '' (and makes zero LLM calls) when the flag is off, so callers stay
-    byte-identical by default. Fail-open."""
-    from core.config import VISUAL_ROUTER_ENABLED
-    if not VISUAL_ROUTER_ENABLED:
+    render failed. Gated by Scripture's `visual_router` — this is the AUTO-attach
+    to synthesis/insight output (the on-demand @ling-visualize is never gated).
+    Read live from `settings` so flipping it in Scripture.md takes effect without
+    a daemon restart. Returns '' (and makes zero LLM calls) when off, so callers
+    stay byte-identical by default. Fail-open."""
+    from core.config import settings
+    if not settings.VISUAL_ROUTER_ENABLED:
         return ""
     try:
         result = build_artifact(llm, content)

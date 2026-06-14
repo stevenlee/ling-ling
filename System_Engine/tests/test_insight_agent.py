@@ -629,7 +629,7 @@ def test_targeted_pairs_fallback_respects_exclude():
 
 def test_maybe_artifact_off_returns_empty(monkeypatch):
     from agents.insight_agent import InsightAgent
-    monkeypatch.setattr("core.config.VISUAL_ROUTER_ENABLED", False)
+    monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", False)
     agent = InsightAgent.__new__(InsightAgent)
     agent.llm = object()
     assert agent._maybe_artifact("some insight body") == ""

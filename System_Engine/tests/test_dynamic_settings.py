@@ -85,6 +85,24 @@ class TestDynamicSettingsReload:
         assert s.SEARCH_DEPTH == 5
         assert s.STRICT_MODE is False
 
+    def test_phase6_learning_aid_toggles_hot_reload(self, tmp_path, monkeypatch):
+        """Phase 6 output preferences live in Scripture (not .env) so creators
+        flip them without a daemon restart. Default off → on after reload."""
+        s = DynamicSettings()
+        assert s.VISUAL_ROUTER_ENABLED is False
+        assert s.ARGUMENT_MAP_MERMAID is False
+        f = _write_scripture(tmp_path, """
+            ---
+            be_a: assistant
+            visual_router: true
+            argument_map_mermaid: true
+            ---
+        """)
+        monkeypatch.setattr(config_mod, "SCRIPTURE_FILE", f)
+        s.reload()
+        assert s.VISUAL_ROUTER_ENABLED is True
+        assert s.ARGUMENT_MAP_MERMAID is True
+
     def test_agent_role_is_lowercased(self, tmp_path, monkeypatch):
         f = _write_scripture(tmp_path, """
             ---

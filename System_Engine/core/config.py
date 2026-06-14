@@ -148,12 +148,12 @@ CORTEX_GROUNDED_INSIGHT_ENABLED = os.getenv("CORTEX_GROUNDED_INSIGHT_ENABLED", "
 CORTEX_GROUND_MIN_FALSIFIABILITY = float(os.getenv("CORTEX_GROUND_MIN_FALSIFIABILITY", "0.5"))
 CORTEX_GROUND_TOP_K             = max(1, int(os.getenv("CORTEX_GROUND_TOP_K", "3")))
 CORTEX_GROUND_FRACTION          = max(0.0, min(1.0, float(os.getenv("CORTEX_GROUND_FRACTION", "0.7"))))
-# Phase 6 (learning artifacts). On-demand @ling-visualize is always available;
-# this gates the LATER auto-attach of artifacts to synthesis/insight output.
-VISUAL_ROUTER_ENABLED           = os.getenv("VISUAL_ROUTER_ENABLED", "false").lower() == "true"
-# Append a deterministic Mermaid graph to argument maps (default off — the
-# structured-Markdown Toulmin block is the primary, most-robust output).
-ARGUMENT_MAP_MERMAID            = os.getenv("ARGUMENT_MAP_MERMAID", "false").lower() == "true"
+# Phase 6 (learning artifacts) — the on-demand @ling-visualize is always
+# available. The two user-facing OUTPUT PREFERENCES it grows (auto-attach to
+# synthesis/insight, extra Mermaid on argument maps) live in Scripture, NOT
+# here: they're taste, not deployment risk, so a creator should flip them in
+# Scripture.md and have it take effect immediately. See DynamicSettings below
+# (VISUAL_ROUTER_ENABLED / ARGUMENT_MAP_MERMAID).
 CORTEX_UNMERGE_STRICT_AT        = float(os.getenv("CORTEX_UNMERGE_STRICT_AT", "0.10"))
 CORTEX_UNMERGE_RELAX_AT         = float(os.getenv("CORTEX_UNMERGE_RELAX_AT", "0.05"))
 CORTEX_UNMERGE_MIN_SAMPLES      = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))
@@ -250,6 +250,9 @@ class DynamicSettings:
         ("dreaming_from",      "DREAMING_FROM",      int),
         ("dreaming_to",        "DREAMING_TO",        int),
         ("self_healing",       "SELF_HEALING",       bool),
+        # Phase 6 learning-aid output preferences (user taste, hot-reloadable):
+        ("visual_router",      "VISUAL_ROUTER_ENABLED", bool),
+        ("argument_map_mermaid", "ARGUMENT_MAP_MERMAID", bool),
     )
 
     def __init__(self):
@@ -271,6 +274,11 @@ class DynamicSettings:
         self.MEMORY_LIMIT = 32768
         self.SEARCH_DEPTH = 3
         self.STRICT_MODE = True
+        # Phase 6: auto-attach learning artifacts to synthesis/insight output,
+        # and the optional deterministic Mermaid graph on argument maps. Default
+        # off — opt in via Scripture.md.
+        self.VISUAL_ROUTER_ENABLED = False
+        self.ARGUMENT_MAP_MERMAID = False
 
     def reload(self):
         if not SCRIPTURE_FILE.exists():
