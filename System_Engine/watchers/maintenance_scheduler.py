@@ -184,6 +184,14 @@ class MaintenanceScheduler(threading.Thread):
             result = run_weekly_memoir(trace_store)
             return MaintenanceResult(result.status, result.message)
 
+        def echo_canary() -> MaintenanceResult:
+            # F1 defense 5: watch grounded vs cold insight signals for the
+            # echo-chamber signature. Reports "insufficient" until F1 is enabled
+            # and grounded insights accumulate — harmless to run meanwhile.
+            from maintenance.echo_canary import run_echo_canary
+            result = run_echo_canary()
+            return MaintenanceResult("succeeded", f"[{result.status}] {result.message}")
+
         return [
             MaintenanceTask(
                 name="insight_daily",
@@ -291,6 +299,14 @@ class MaintenanceScheduler(threading.Thread):
                 idle_required=True,
                 intent="maintenance.weekly_memoir",
                 agent="WeeklyMemoir",
+            ),
+            MaintenanceTask(
+                name="echo_canary_weekly",
+                action=echo_canary,
+                interval_seconds=7 * 86400,
+                idle_required=True,
+                intent="maintenance.echo_canary",
+                agent="EchoCanary",
             ),
         ]
 
