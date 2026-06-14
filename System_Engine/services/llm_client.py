@@ -854,77 +854,21 @@ class LLMClient:
         return empty
 
     def translate_tags(self, tags: list[str]) -> dict:
-        system_prompt = "Return a JSON mapping of {original_tag: english_equivalent} for these tags."
-        user_msg = f"Tags: {tags}"
-        started = time.perf_counter()
-        raw = ""
-        try:
-            if self.provider == "gemini":
-                genai = _genai()
-                response = self.client.models.generate_content(
-                    model=self.model,
-                    contents=[user_msg],
-                    config=genai.types.GenerateContentConfig(
-                        system_instruction=system_prompt,
-                        temperature=0.1,
-                        response_mime_type="application/json",
-                    ),
-                )
-                raw = response.text or ""
-                prompt_tokens, completion_tokens, total_tokens = self._gemini_usage_counts(response)
-            else:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_msg},
-                    ],
-                    response_format={"type": "json_object"},
-                    temperature=0.1,
-                )
-                raw = response.choices[0].message.content or ""
-                prompt_tokens, completion_tokens, total_tokens = usage_to_counts(
-                    getattr(response, "usage", None)
-                )
-            try:
-                self.trace_store.record_llm_call(
-                    system_prompt=system_prompt,
-                    user_msg=user_msg,
-                    response_text=raw,
-                    provider=self.provider,
-                    model=self.model,
-                    stage="translate_tags",
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    latency_ms=elapsed_ms(started),
-                    status="succeeded",
-                    metadata={"tag_count": len(tags), "temperature": 0.1},
-                )
-            except Exception as trace_error:
-                logging.debug(f"LLM trace write failed: {trace_error}")
-        except Exception as e:
-            try:
-                self.trace_store.record_llm_call(
-                    system_prompt=system_prompt,
-                    user_msg=user_msg,
-                    response_text=raw or None,
-                    provider=self.provider,
-                    model=self.model,
-                    stage="translate_tags",
-                    latency_ms=elapsed_ms(started),
-                    status="failed",
-                    error=str(e),
-                    metadata={"tag_count": len(tags), "temperature": 0.1},
-                )
-            except Exception as trace_error:
-                logging.debug(f"LLM trace write failed: {trace_error}")
-            logging.warning(f"Tag translation failed: {e}")
-            return {}
+        """Map each tag to its English equivalent, as a JSON object.
 
-        # extract_json_object handles fenced JSON (some providers wrap in ```json)
-        # and stray prose around the object.
-        return extract_json_object(raw) or {}
+        Routes through `_complete_json`, so it inherits transport-level retry
+        (transient 429/503 are retried instead of silently returning {}) and
+        the centralized trace/token accounting — rather than re-implementing
+        provider dispatch and a ~35-line trace block by hand (audit C1).
+        Fail-open: a parse miss after the re-roll yields {}.
+        """
+        return self._complete_json(
+            kind="object",
+            system_prompt="Return a JSON mapping of {original_tag: english_equivalent} for these tags.",
+            user_msg=f"Tags: {tags}",
+            temperature=0.1,
+            trace_context={"stage": "translate_tags", "metadata": {"tag_count": len(tags)}},
+        )
 
     # ── Phase 0.3.1: Source Digest ────────────────────────────────────
 

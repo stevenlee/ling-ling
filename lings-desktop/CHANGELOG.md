@@ -2,7 +2,12 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
-### 2026-06-15 toranomaki 指令通盤檢討 + 修 3 個真功能 bug
+### 2026-06-15 audit 剩餘 correctness 收尾：translate_tags 走回統一路徑
+
+接 2026-06-13 全模組稽核。複查後三項中優先 correctness 中兩項已先前修掉（counter_agent 的空陣列誤判已改用 `is_empty_json_literal` 精確比對【B1】、RAG fallback 已改用 `query_notes` dict API 取原文+metadata 標題【B2】），剩 `translate_tags` 本次收尾。
+
+- **`services/llm_client.py` `translate_tags`【audit C1】**：原本繞過 `_complete_text`/`_complete_json` 直接打 provider API，短暫 429/503 會**靜默回 `{}` 不重試**，還手刻約 35 行 trace 區塊。改為單一 `_complete_json(kind="object", …)` 呼叫,繼承 transport retry（含 reasoning-channel 再擲一次）與集中式 trace/token 計帳。fail-open 行為不變（解析失敗回 `{}`）。
+- **測試**：+4（解析 mapping / fenced JSON / **transient 失敗會重試**（舊版會直接回空）/ parse miss fail-open）。llm_client 39 passed,相鄰套件共 93 passed。
 
 對 19 個 `@ling-*` 指令做了 firsthand 交叉稽核(toranomaki 文件 vs 實作)。路由全部有效,但揪出 3 個「指令達不到當初設計目的」的真 bug,本次修掉:
 

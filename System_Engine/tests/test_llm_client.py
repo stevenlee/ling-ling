@@ -399,6 +399,44 @@ class TestAssessFalsifiability:
         assert res["falsifier"] == ""
 
 
+class TestTranslateTags:
+    """translate_tags routes through _complete_json, inheriting transport
+    retry + centralized tracing (audit C1). These exercise that wiring."""
+
+    def _client(self, monkeypatch, responses):
+        # `responses` is a list consumed one per _complete_text call so we can
+        # simulate a transient failure followed by a good reply (the re-roll).
+        client = LLMClient.__new__(LLMClient)
+        seq = list(responses)
+
+        def fake(*a, **k):
+            item = seq.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        monkeypatch.setattr(client, "_complete_text", fake)
+        return client
+
+    def test_parses_mapping(self, monkeypatch):
+        c = self._client(monkeypatch, ['{"機器學習": "Machine Learning"}'])
+        assert c.translate_tags(["機器學習"]) == {"機器學習": "Machine Learning"}
+
+    def test_parses_fenced_json(self, monkeypatch):
+        c = self._client(monkeypatch, ['```json\n{"深度學習": "Deep Learning"}\n```'])
+        assert c.translate_tags(["深度學習"]) == {"深度學習": "Deep Learning"}
+
+    def test_transient_failure_is_retried(self, monkeypatch):
+        # First call raises (e.g. 429); _complete_json re-rolls and succeeds —
+        # the old hand-rolled impl returned {} on the first transient error.
+        c = self._client(monkeypatch, [RuntimeError("429"), '{"a": "b"}'])
+        assert c.translate_tags(["a"]) == {"a": "b"}
+
+    def test_parse_miss_fails_open(self, monkeypatch):
+        c = self._client(monkeypatch, ["not json", "still not json"])
+        assert c.translate_tags(["x"]) == {}
+
+
 class TestExtractClaimsAppliesWhen:
     def _client(self, monkeypatch, response):
         client = LLMClient.__new__(LLMClient)
