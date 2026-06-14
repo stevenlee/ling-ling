@@ -119,3 +119,22 @@ def build_artifact(llm, content: str, *, forced_type: str | None = None) -> dict
         artifact = ""
 
     return {"type": t, "reason": chosen.get("reason", ""), "artifact": artifact}
+
+
+def maybe_artifact_section(llm, content: str) -> str:
+    """A '## 🖼️ 學習輔助' section for `content`, or '' when disabled / 'none' /
+    render failed. Gated by VISUAL_ROUTER_ENABLED — this is the AUTO-attach to
+    synthesis/insight output (the on-demand @ling-visualize is never gated).
+    Returns '' (and makes zero LLM calls) when the flag is off, so callers stay
+    byte-identical by default. Fail-open."""
+    from core.config import VISUAL_ROUTER_ENABLED
+    if not VISUAL_ROUTER_ENABLED:
+        return ""
+    try:
+        result = build_artifact(llm, content)
+    except Exception as e:
+        logging.warning(f"learning_artifacts: auto-attach failed: {e}")
+        return ""
+    if not result.get("artifact"):
+        return ""
+    return f"## 🖼️ 學習輔助（{result['type']}）\n\n{result['artifact']}\n\n"
