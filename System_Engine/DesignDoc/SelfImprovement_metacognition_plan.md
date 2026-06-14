@@ -1,6 +1,7 @@
 # 自我評估 → 自我改善：Metacognition 層（實施計劃）
 
-> 狀態：**M1（統一自評器）實作中（2026-06-14）。** M2–M4 規劃中。
+> 狀態：**M1（自評器）+ 趨勢 + M2（診斷）已實作（2026-06-14）。** M2 預設關（`SELF_DIAGNOSIS_ENABLED`，LLM-costed），M3–M4 規劃中。
+> Live 驗證：M2 對真實紅燈軸產出精準診斷——正確隔離 `lens_report`（vs synthesis 穩定）、獨立指出 embedder 語義天花板 + facet_lift=0、Cortex 缺證據多樣性/可證偽門檻。趨勢已持久化（`self_assessment_history.json`），慢性軸（連續 ≥3 次紅/黃）會被特別標出。
 >
 > 方向：讓系統「能自動評估、能自動改善」。本計劃遵循專案既定的
 > **Nervous System First** 原則——感覺先於行動，低層是高層的前提。
@@ -69,9 +70,14 @@ M4  邊界內自動套用（flag）   只動安全數值旋鈕，阻尼+對照+�
 
 排程：`self_assessment_weekly`（仿 `routing_report_weekly`，idle、dreaming window、無需個別 flag——唯讀報告，受 `MAINTENANCE_SCHEDULER_ENABLED` 總開關管即可）。
 
-## M2–M4（規劃，待 M1 跑出真實資料後細化）
+## M2 — 診斷（已實作，flag 預設關）
 
-- **M2 診斷**：把 M1 的紅燈軸交給一次 LLM 推理（精簡 `complete`，非 answer_query），產出結構化「根因 + 候選改善」。輸入是聚合數字 + 表現最差元件的實際 prompt/template 文字。
+`maintenance/self_diagnosis.py`：`run_self_diagnosis(llm, assessment, ...)`。對 M1 計分卡中**每個紅/黃軸**，蒐集 deterministic 上下文（哪個報告型別最差、哪些 Cortex 主張教條/薄證據、檢索趨勢…），跑**一次精簡 LLM 呼叫**（`_complete_json`，非 answer_query）→ 結構化 `{root_cause, candidate_fixes[], confidence, needs}`。趨勢感知:慢性軸（streak≥3）與新問題框法不同。**逐軸 fail-open**;報告寫到 `fromLingLing/`,且明確框成「候選改善,尚未套用,需人工審核」。
+
+- Flag `SELF_DIAGNOSIS_ENABLED`（預設 false,LLM-costed）。週任務 `self_assessment_weekly` 在 flag 開且有紅/黃軸時,接在 M1 後跑 M2。
+- **已知限制（待 M3 補）**：M2 v1 尚未把「目標元件的實際 prompt/template 原文」餵進去,所以對已存在機制（如可證偽性欄位）偶有重複建議。把真實原文載入並產出 diff,是 M3 的工作。
+
+## M3–M4（規劃）
 - **M3 提案（人工閘）**：對最差的 template/operation，產生修訂草稿寫入 `Templates/.../_pending/`（或對應佇列），附「為什麼、改了什麼、預期改善哪個指標」。`@ling-` 指令一鍵核可。**永不靜默改 prompt。**
 - **M4 數值自調（flag，預設關）**：只對安全旋鈕（如 `SEARCH_DEPTH`、`CORTEX_GROUND_FRACTION`、bench 取樣數）做 damped 自調，每個都要對照 + 回退 + canary。沿用衰減校準的精確模式。
 

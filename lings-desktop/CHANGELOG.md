@@ -2,6 +2,16 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-14 Metacognition 層 · M2 診斷 + 趨勢分析
+
+M1 之上接出診斷層,並讓自評有歷史記憶。
+
+- **趨勢（M1 增強）**：`self_assessment` 每跑一次就把計分卡快照 append 到 `self_assessment_history.json`（capped `SELF_ASSESSMENT_HISTORY_MAX`,預設 180）。計算每軸相對前一次的趨勢箭頭（↑改善／↓惡化／→持平／•新）與 streak（連續同燈次數）。**慢性軸**（紅/黃連續 ≥3 次）會自動加一條「優先處理」觀察。計分卡報告新增「趨勢」欄。
+- **`maintenance/self_diagnosis.py`（M2）**：`run_self_diagnosis(llm, assessment)`。對每個紅/黃軸蒐集 deterministic 上下文（最差報告型別、教條/薄證據主張原文、檢索趨勢…）→ 跑**一次精簡 LLM 呼叫**（`_complete_json`,非 answer_query 樣板）→ 結構化 `{root_cause, candidate_fixes[], confidence, needs}`。趨勢感知（慢性 vs 新）、**逐軸 fail-open**。報告明確框成「候選改善,尚未套用,需人工審核」——診斷與改動分離是反漂移核心條款。
+- Flag `SELF_DIAGNOSIS_ENABLED`（預設 **false**,LLM-costed）。`self_assessment_weekly` 在 flag 開且有紅/黃軸時,接在 M1 後跑 M2。
+- **Live（真實 LLM + 資料）**：M2 診斷品質很高且扣著架構——正確隔離 `lens_report`（50% 失敗,vs synthesis 0%）、獨立指出 embedder 語義天花板 + facet_lift=0（檢索停在 73%）、Cortex 缺證據多樣性與可證偽門檻並提出「promote 為主張前需 ≥2 來源」。+18 tests（994 passed）。
+- 已知限制:M2 v1 尚未載入目標元件 prompt/template 原文,故偶與既有機制重複建議;載入原文 + 產 diff 是 M3。計劃見 [DesignDoc/SelfImprovement_metacognition_plan.md](System_Engine/DesignDoc/SelfImprovement_metacognition_plan.md)。
+
 ### 2026-06-14 Metacognition 層 · M1：統一自評器（自動評估 → 自動改善的感覺層）
 
 往「系統能自動評估、自動改善」方向開工。盤點發現系統其實已有 6 條窄自調迴路（衰減校準、帳本嚴格度、bench 自長/回歸告警、同溫層金絲雀、證偽），但**訊號散落六個子系統、沒有統一視圖**,且**沒有任何迴路會根據累積 verdict 改善生成品質（prompt/template）**。遵循專案 Nervous-System-First 原則——自動「評估」是感覺層,必須先於自動「改善」（行動層）——先做評估器。
