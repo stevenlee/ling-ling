@@ -1,6 +1,7 @@
 # 自我評估 → 自我改善：Metacognition 層（實施計劃）
 
-> 狀態：**M1（自評器）+ 趨勢 + M2（診斷）已實作（2026-06-14）。** M2 預設關（`SELF_DIAGNOSIS_ENABLED`，LLM-costed），M3–M4 規劃中。
+> 狀態：**M1（自評器）+ 趨勢 + M2（診斷）+ M3（提案,人工閘）已實作（2026-06-14）。** M2/M3 預設關（`SELF_DIAGNOSIS_ENABLED`／`SELF_IMPROVE_ENABLED`，LLM-costed）;M3 可經 `@ling-improve` 隨時手動發動。M4 規劃中。
+> **M3 live 發現（重要）**：本機模型 gemma4:26b 在「整檔 prompt 改寫」這種巢狀提示任務上會**離題複述 meta 指令**,把 35 行膨脹成 355 行。安全設計如預期擋下——它是提案、非自動套用,且結構守門（size ≤2.5×、原結構保留 ≥35%）會把離題改寫**直接丟棄**,佇列不收垃圾。代價:此後端下 M3 常常「不產生提案」而非產出爛提案——這是對的失敗方向。瓶頸是本機模型對忠實全檔改寫的能力,非架構;未來可改「結構化/分段編輯」或換更強的改寫模型。
 > Live 驗證：M2 對真實紅燈軸產出精準診斷——正確隔離 `lens_report`（vs synthesis 穩定）、獨立指出 embedder 語義天花板 + facet_lift=0、Cortex 缺證據多樣性/可證偽門檻。趨勢已持久化（`self_assessment_history.json`），慢性軸（連續 ≥3 次紅/黃）會被特別標出。
 >
 > 方向：讓系統「能自動評估、能自動改善」。本計劃遵循專案既定的
@@ -77,9 +78,20 @@ M4  邊界內自動套用（flag）   只動安全數值旋鈕，阻尼+對照+�
 - Flag `SELF_DIAGNOSIS_ENABLED`（預設 false,LLM-costed）。週任務 `self_assessment_weekly` 在 flag 開且有紅/黃軸時,接在 M1 後跑 M2。
 - **已知限制（待 M3 補）**：M2 v1 尚未把「目標元件的實際 prompt/template 原文」餵進去,所以對已存在機制（如可證偽性欄位）偶有重複建議。把真實原文載入並產出 diff,是 M3 的工作。
 
-## M3–M4（規劃）
-- **M3 提案（人工閘）**：對最差的 template/operation，產生修訂草稿寫入 `Templates/.../_pending/`（或對應佇列），附「為什麼、改了什麼、預期改善哪個指標」。`@ling-` 指令一鍵核可。**永不靜默改 prompt。**
-- **M4 數值自調（flag，預設關）**：只對安全旋鈕（如 `SEARCH_DEPTH`、`CORTEX_GROUND_FRACTION`、bench 取樣數）做 damped 自調，每個都要對照 + 回退 + canary。沿用衰減校準的精確模式。
+## M3 — 提案（已實作,人工閘）
+
+第一次「改自己」,但全程人在迴路。`maintenance/self_improve.py` + `services/improvement_store.py` + `@ling-improve` 指令。
+
+- **產生**：對診斷出的「報告品質」問題,把最差報告型別映射到產生它的 prompt 檔（`lens_report`→`agent_counter.md`、`synthesis`→`synthesize.md`、`report_insight*`→`agent_insight.md`）,載入**現行全文**,LLM 改寫 → 存成 `_pending` 提案（附原文 + diff）。其餘軸（檢索/Cortex）非單一 prompt 可解,誠實標為「需人工」。
+- **守門**：改寫須是「針對性最小編輯」——size 0.5×–2.5×、原結構保留 ≥35%,否則丟棄不入佇列（擋掉模型離題/複述）。
+- **審核**：`@ling-improve list/show <id>/approve <id>/reject <id>`。**永不自動套用**。approve 前檢查目標檔未被改動（不蓋使用者編輯）、只寫允許資產目錄（`Templates/`、`Personas/`、`Guidelines/`,不碰程式碼）、原檔備份到 `_applied/`（一鍵回退）。
+- **觸發**：`@ling-improve generate` 隨時手動跑 M1→M2→M3;或週任務在 `SELF_DIAGNOSIS_ENABLED`+`SELF_IMPROVE_ENABLED` 皆開時自動產生（仍不自動套用）。
+- toranomaki 範例:`@ling-improve.md`。
+
+## M4（規劃）
+
+- **M4 數值自調（flag，預設關）**：只對安全旋鈕（如 `SEARCH_DEPTH`、`CORTEX_GROUND_FRACTION`、bench 取樣數）做 damped 自調，每個都要對照 + 回退 + canary。沿用衰減校準的精確模式。這是唯一「不經人工閘」的一相,因此限定數值、且每個旋鈕都要有對照組與自動回退。
+- **M3 改善方向**：本機模型全檔改寫不穩 → 改用「結構化/分段編輯」（讓模型只回傳要替換的段落或 find/replace,而非整檔重寫),或對改寫步驟改用更強的模型。
 
 ## 測試與驗證
 

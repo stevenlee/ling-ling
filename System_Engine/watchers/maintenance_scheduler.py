@@ -204,11 +204,16 @@ class MaintenanceScheduler(threading.Thread):
             from maintenance.self_assessment import run_self_assessment
             result = run_self_assessment(trace_store)
             msg = result.message
-            from core.config import SELF_DIAGNOSIS_ENABLED
+            from core.config import SELF_DIAGNOSIS_ENABLED, SELF_IMPROVE_ENABLED
             if SELF_DIAGNOSIS_ENABLED:
                 from maintenance.self_diagnosis import run_self_diagnosis
                 dx = run_self_diagnosis(self.llm, result)
                 msg = f"{msg} ｜ 診斷：{dx.message}"
+                # M3: auto-generate revision proposals (queued, never applied).
+                if SELF_IMPROVE_ENABLED:
+                    from maintenance.self_improve import run_self_improve
+                    imp = run_self_improve(self.llm, result, dx)
+                    msg = f"{msg} ｜ 提案：{imp.message}"
             return MaintenanceResult(result.status, msg)
 
         return [
