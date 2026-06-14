@@ -82,11 +82,22 @@ class ImproveAgent(BaseAgent):
             return f"# ❓ 找不到提案 `{pid}`\n\n用 `@ling-improve list` 看現有提案。"
         fixes = "\n".join(f"- {f}" for f in p.get("addressed_fixes", []))
         diff = unified_diff(p)
+        edits = p.get("edits") or []
+        edits_md = ""
+        if edits:
+            parts = ["## 套用的編輯（find → replace）", ""]
+            for i, e in enumerate(edits, 1):
+                why = f" — {e['why']}" if e.get("why") else ""
+                parts.append(f"{i}.{why}")
+                parts.append(f"   - 原：`{(e.get('find') or '')[:120].replace(chr(10), ' ⏎ ')}`")
+                parts.append(f"   - 改：`{(e.get('replace') or '')[:120].replace(chr(10), ' ⏎ ')}`")
+            edits_md = "\n".join(parts) + "\n\n"
         return (
             f"# 🔍 提案 `{pid}`\n\n"
             f"- **軸**：{p['axis']}\n- **目標檔**：`{p['target_path']}`\n\n"
             f"## 根因\n{p.get('rationale') or '—'}\n\n"
             f"## 要落實的改善\n{fixes or '—'}\n\n"
+            f"{edits_md}"
             f"## 變更（diff）\n```diff\n{diff or '（無差異）'}\n```\n\n"
             f"---\n生效：`@ling-improve approve {pid}`　退回：`@ling-improve reject {pid}`"
         )

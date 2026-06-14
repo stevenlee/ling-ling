@@ -48,15 +48,58 @@ _TARGET_MAP = {
 # Approval may only ever write inside these (improvement_store re-checks too).
 ALLOWED_ASSET_DIRS = [TEMPLATES_DIR, PERSONAS_DIR, GUIDELINES_DIR]
 
-_REWRITE_SYSTEM = (
-    "你是 prompt/template 的修訂者,服務系統的自我改善。給你一份**現行的 prompt/模板檔全文**,"
-    "以及一份針對它的診斷與候選改善。你的任務:輸出這份檔案的**修訂全文**,把候選改善落實進去。\n"
+# Structured/sectional edits instead of a full-file rewrite. A weaker local
+# model derails when asked to reproduce a whole file (it echoes the
+# meta-instruction); asking only for find/replace snippets sidesteps that —
+# the model emits just the parts it changes, and we reconstruct the revision
+# deterministically, guaranteeing everything else is preserved verbatim.
+_EDIT_SYSTEM = (
+    "你是 prompt/模板的修訂器,服務系統的自我改善。給你一份**現行檔全文**與一份診斷+候選改善。"
+    "回傳一組**精確的 find/replace 編輯**來落實改善——只回要改的片段,不要重寫整檔。\n"
     "硬規則:\n"
-    "1. 只輸出修訂後的檔案完整內容,不要任何解說、不要 ``` 圍欄、不要前後綴。\n"
-    "2. **保留原檔的結構、格式慣例、變數佔位符（如 {var}、frontmatter）**;這是要直接取代原檔的。\n"
-    "3. 做**針對性的最小修改**以解決診斷,不要整篇重寫或改變其用途。\n"
-    "4. 若你判斷現行檔其實沒問題、改了弊大於利,原樣輸出即可。"
+    "1. 每個 `find` 必須是現行檔中**逐字、連續存在**的片段（含標點與換行）,不可改寫、不可節錄到對不上。\n"
+    "2. 做**最小修改**:只改需要改的地方,不要動無關內容,不要重排全檔。\n"
+    "3. `replace` 是該片段修訂後的版本,扣著改善目的;不要塞進與該片段無關的大段內容。\n"
+    "4. 若判斷現行檔其實不需改,回空的 edits。\n\n"
+    "回 JSON：{\"edits\": [{\"find\": \"<逐字片段>\", \"replace\": \"<修訂後片段>\", \"why\": \"<一句原因>\"}]}"
 )
+
+
+def _structured_rewrite(llm, original: str, root_cause: str, fixes_text: str):
+    """Ask for find/replace edits; apply them deterministically to `original`.
+    Returns (revised_text, applied_edits) or (None, []) if nothing usable.
+
+    An edit whose `find` isn't a verbatim substring (model hallucinated it) is
+    silently skipped — so a partially-wrong response still yields the edits
+    that DO match, and a fully-wrong one yields nothing (no garbage proposal)."""
+    try:
+        parsed = llm._complete_json(
+            kind="object",
+            system_prompt=_EDIT_SYSTEM,
+            user_msg=f"診斷根因：{root_cause}\n\n要落實的候選改善：\n{fixes_text}\n\n=== 現行檔全文 ===\n{original}",
+            temperature=0.2,
+            trace_context={"stage": "self_improve_edits", "metadata": {}},
+        )
+    except Exception as e:
+        logging.warning(f"self_improve: structured rewrite failed: {e}")
+        return None, []
+    edits = parsed.get("edits") if isinstance(parsed, dict) else None
+    if not isinstance(edits, list):
+        return None, []
+    revised = original
+    applied = []
+    for e in edits:
+        if not isinstance(e, dict):
+            continue
+        find = str(e.get("find") or "")
+        repl = str(e.get("replace") or "")
+        if not find or find == repl or find not in revised:
+            continue
+        revised = revised.replace(find, repl, 1)   # first occurrence only
+        applied.append({"find": find, "replace": repl, "why": str(e.get("why") or "").strip()})
+    if not applied or revised == original:
+        return None, []
+    return revised, applied
 
 
 @dataclass
@@ -140,25 +183,13 @@ def run_self_improve(
 
         original = target.read_text(encoding="utf-8")
         fixes = "\n".join(f"- {f}" for f in dx.candidate_fixes)
-        user_msg = (
-            f"診斷根因：{dx.root_cause}\n\n要落實的候選改善：\n{fixes}\n\n"
-            f"=== 現行檔案 `{target_rel}` 全文 ===\n{original}"
-        )
-        try:
-            revised = llm.complete(_REWRITE_SYSTEM, user_msg, temperature=0.2,
-                                   stage="self_improve_rewrite")
-        except Exception as e:
-            logging.warning(f"self_improve: rewrite failed for {target_rel}: {e}")
-            result.skipped_axes.append((dx.axis, f"LLM 改寫失敗：{e}"))
-            continue
 
-        revised = (revised or "").strip()
-        # Guardrails: must be non-trivial, different, AND a plausible targeted
-        # edit. The structural check catches the observed derail where a weaker
-        # model echoes the meta-instruction instead of revising the file.
-        if not revised or revised == original.strip():
-            result.skipped_axes.append((dx.axis, "LLM 未產生有效或不同的修訂,跳過"))
+        revised, edits = _structured_rewrite(llm, original, dx.root_cause, fixes)
+        if revised is None:
+            result.skipped_axes.append((dx.axis, "LLM 未產生可套用的編輯（find 對不上或無變更）,跳過"))
             continue
+        # Backstop: even reconstructed-from-edits, a giant replace could balloon
+        # the file. The structural check rejects non-targeted results.
         ok, why = _looks_like_targeted_edit(original, revised)
         if not ok:
             result.skipped_axes.append((dx.axis, f"{why},跳過"))
@@ -167,7 +198,7 @@ def run_self_improve(
         proposal = make_proposal(
             axis=dx.axis, target_path=target_rel, rationale=dx.root_cause,
             addressed_fixes=dx.candidate_fixes, original_content=original,
-            revised_content=revised,
+            revised_content=revised, edits=edits,
         )
         save_proposal(proposal, pending_dir)
         result.proposals.append(proposal)
