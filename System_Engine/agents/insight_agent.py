@@ -1466,9 +1466,13 @@ class InsightAgent(BaseAgent):
         from core.config import CORTEX_GROUNDED_INSIGHT_ENABLED, CORTEX_GROUND_FRACTION
         if not CORTEX_GROUNDED_INSIGHT_ENABLED:
             return False
+        # M4: the fraction may be auto-tuned against the echo canary; get_tuned
+        # returns the config default unless AUTOTUNE_ENABLED has nudged it.
+        from services.autotune_store import get_tuned
+        fraction = get_tuned("CORTEX_GROUND_FRACTION", CORTEX_GROUND_FRACTION)
         import hashlib
         bucket = int(hashlib.sha256(idea.encode("utf-8")).hexdigest(), 16) % 100
-        return bucket < int(round(CORTEX_GROUND_FRACTION * 100))
+        return bucket < int(round(fraction * 100))
 
     def _cortex_priors(self, idea: str) -> list:
         """Relevant Cortex claims to use as DIALECTICAL priors. Falsifiability-

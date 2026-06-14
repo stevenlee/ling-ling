@@ -150,6 +150,19 @@ def test_self_assessment_task_registered(tmp_path):
     assert t.interval_seconds == 7 * 86400 and t.idle_required is True
 
 
+def test_autotune_task_registered(tmp_path):
+    # Metacognition M4: weekly, idle-gated. Action no-ops unless AUTOTUNE_ENABLED
+    # (covered in test_autotune.py).
+    scheduler = MaintenanceScheduler(
+        project_root=Path(tmp_path), llm=MockLLMForDefaultTasks(), rag=None,
+        state_file=tmp_path / "maintenance_state.json", enabled=False,
+    )
+    names = [t.name for t in scheduler.tasks]
+    assert "autotune_weekly" in names
+    t = next(t for t in scheduler.tasks if t.name == "autotune_weekly")
+    assert t.interval_seconds == 7 * 86400 and t.idle_required is True
+
+
 def test_full_insight_date_part_supports_old_and_new_filenames():
     old_path = Path("🎐full-insight-20260529-213000.md")
     new_path = Path("[20260530-101119][Siddhartha][full-insight].md")

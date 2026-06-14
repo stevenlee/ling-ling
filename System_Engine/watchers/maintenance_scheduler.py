@@ -192,6 +192,17 @@ class MaintenanceScheduler(threading.Thread):
             result = run_echo_canary()
             return MaintenanceResult("succeeded", f"[{result.status}] {result.message}")
 
+        def autotune() -> MaintenanceResult:
+            # Metacognition M4: damped numeric auto-tuning, gated + bounded +
+            # auto-rollback. No-op (and no state write) unless AUTOTUNE_ENABLED
+            # and a knob's metric has enough samples.
+            from core.config import AUTOTUNE_ENABLED
+            if not AUTOTUNE_ENABLED:
+                return MaintenanceResult("skipped", "AUTOTUNE_ENABLED 為關閉。")
+            from maintenance.autotune import run_autotune
+            result = run_autotune()
+            return MaintenanceResult(result.status, result.message)
+
         def self_assessment() -> MaintenanceResult:
             # Metacognition M1: aggregate every quality signal (report verdicts,
             # LLM health, bench, Cortex tensions, decay, insight signals) into one
@@ -339,6 +350,16 @@ class MaintenanceScheduler(threading.Thread):
                 idle_required=True,
                 intent="maintenance.self_assessment",
                 agent="SelfAssessment",
+            ),
+            MaintenanceTask(
+                name="autotune_weekly",
+                action=autotune,
+                interval_seconds=7 * 86400,
+                idle_required=True,
+                window_start_hour=settings.DREAMING_FROM,
+                window_end_hour=settings.DREAMING_TO,
+                intent="maintenance.autotune",
+                agent="AutoTune",
             ),
         ]
 
