@@ -1,6 +1,20 @@
 # Cortex Phase 5 · F1 — Cortex-grounded Insight（實施計劃）
 
-> 狀態：**Stage 1（注入側）已實作 2026-06-14，flag 預設 OFF。Stage 2（firewall + canary）待做——flag 不准開啟直到 stage 2 落地。** F2（`@ling-recall`）與 F3（`@ling-tensions`）已上線。
+> 狀態：**F1 全部五條防禦已實作（2026-06-14），flag 仍預設 OFF。** 五防禦俱全，現在開 flag 是安全的——但建議：開 flag → 讓 grounded 洞察跑幾晚 → 跑 `echo_canary` → 無 alarm 再維持開啟（enable protocol）。F2（`@ling-recall`）、F3（`@ling-tensions`）已上線。
+>
+> **五防禦落地對照**：
+> - ② 辯證 framing → `insight_agent._grounding_block`（測試：`test_grounding_block_is_dialectical`）。
+> - ③ falsifiability 閘 → `_cortex_priors`（`test_cortex_priors_falsifiability_gate`）。
+> - 注入 + provenance 標記 → `_expand_seed` + `_grounded_on_acc` → 報告 frontmatter `grounded_on`。
+> - ① provenance 防火牆（兩條循環路徑都堵）：
+>   - **強化路徑**：`cortex_consolidation._merge_into` 若 grounded 洞察附和自己的先驗 → 記 evidence、跳過 S/confidence 強化（`test_firewall_skips_reinforcement_on_self_agreement`）。
+>   - **falsification 路徑**：`cortex_ledger._independent_insights(exclude_grounded_on=page.claim_id)` 把「被 prompt 來挑戰該主張」的洞察排除在獨立計數外，避免辯證 framing 製造出反例去殺自己的先驗（`test_independent_insights_excludes_grounded_self_dissent`）。
+> - ④ 非對稱信任 → 同上：只有外部證據能 reinforce，自我附和不能（`test_normal_merge_still_reinforces`）。
+> - ⑤ 同溫層金絲雀 → `maintenance/echo_canary.py::run_echo_canary`，比較 grounded vs cold 的 novelty/groundedness，novelty 系統性偏低 → alarm（`test_echo_canary.py`）。
+>
+> **開 flag 前的待辦（operational）**：把 `run_echo_canary` 註冊成週任務（mirror `weekly_memoir`）以自動監看；目前是 on-demand 函式。
+>
+> ~~原 stage 1/2 規劃如下↓~~
 >
 > **Stage 1 已完成（commit 在 feat/cortex-phase5-f1-grounded）**：
 > - `insight_agent._should_ground(idea)`：flag + `CORTEX_GROUND_FRACTION` 決定哪些 seed 注入（hash-based 決定性，留 cold 控制組給 canary）。

@@ -104,3 +104,70 @@ def test_expand_seed_grounded_injects_and_marks(tmp_path, monkeypatch):
     assert out["grounded_on"]                                  # provenance recorded
     assert "falsifiable prior claim" in captured["prompt"]     # prior injected
     assert "挑戰" in captured["prompt"]                         # dialectically
+
+
+# ── Stage 2: provenance firewall in consolidation (defenses 1+4) ────────
+
+from unittest.mock import MagicMock
+
+
+def _full_page(tmp_path, claim, **kw):
+    cid = make_claim_id(claim)
+    p = CortexPage(claim_id=cid, path=tmp_path / f"{cid}.md", claim=claim, **kw)
+    save_cortex_page(p)
+    return p
+
+
+def _worker(tmp_path):
+    from maintenance.cortex_consolidation import _Consolidator
+    w = _Consolidator(
+        MagicMock(), MagicMock(), cortex_dir=tmp_path,
+        state={"claim_embeddings": {}}, adjudication_cache={},
+        max_adjudications=0, top_k=3, sim_threshold=0.8, max_variants=5,
+    )
+    w._index_page = lambda p: None   # isolate the firewall from RAG indexing
+    return w
+
+
+def test_firewall_skips_reinforcement_on_self_agreement(tmp_path):
+    page = _full_page(tmp_path, "X causes Y", confidence=0.5, S=1.0, falsifiability=0.8)
+    w = _worker(tmp_path)
+    w.pages = [page]; w.by_claim_id = {page.claim_id: page}
+    before = page.confidence
+    ev = {"insight": "grounded.md", "sources": [], "date": "2026-06-14",
+          "summary": "s", "grounded_on": [page.claim_id]}
+
+    # A grounded insight "agrees" with the very claim it was grounded on.
+    w._merge_into(page, "X causes Y (restated)", ev, grounded_on=[page.claim_id])
+
+    assert w.firewalled == 1
+    assert page.confidence == before                      # NO reinforcement (circular)
+    assert any(e.get("insight") == "grounded.md" for e in page.evidence)  # link still recorded
+
+
+def test_normal_merge_still_reinforces(tmp_path):
+    page = _full_page(tmp_path, "X causes Y", confidence=0.5, S=1.0, falsifiability=0.8)
+    w = _worker(tmp_path)
+    w.pages = [page]; w.by_claim_id = {page.claim_id: page}
+    before = page.confidence
+    ev = {"insight": "external.md", "sources": [], "date": "2026-06-14", "summary": "s"}
+
+    # External (non-grounded) evidence: reinforce as usual.
+    w._merge_into(page, "X causes Y (restated)", ev, grounded_on=[])
+
+    assert w.firewalled == 0
+    assert page.confidence > before                       # external evidence DOES reinforce
+
+
+def test_firewall_only_fires_for_the_grounded_claim(tmp_path):
+    # Grounded on claim B, but merging into claim A → A is NOT self-agreement,
+    # so A still reinforces (the firewall is per-claim, not blanket).
+    page_a = _full_page(tmp_path, "claim A", confidence=0.5, falsifiability=0.8)
+    w = _worker(tmp_path)
+    w.pages = [page_a]; w.by_claim_id = {page_a.claim_id: page_a}
+    before = page_a.confidence
+    ev = {"insight": "g.md", "sources": [], "date": "2026-06-14", "summary": "s",
+          "grounded_on": ["cortex-someotherclaim"]}
+    w._merge_into(page_a, "claim A restated", ev, grounded_on=["cortex-someotherclaim"])
+    assert w.firewalled == 0
+    assert page_a.confidence > before
