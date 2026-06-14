@@ -196,13 +196,20 @@ class MaintenanceScheduler(threading.Thread):
             # Metacognition M1: aggregate every quality signal (report verdicts,
             # LLM health, bench, Cortex tensions, decay, insight signals) into one
             # health scorecard. Read-only, zero LLM. Sensing layer of the
-            # self-improvement arc — reports, never acts.
+            # self-improvement arc — reports, never acts. When SELF_DIAGNOSIS_ENABLED,
+            # chain M2: diagnose the red/yellow axes (one lean LLM call each).
             trace_store = getattr(self.llm, "trace_store", None)
             if trace_store is None:
                 return MaintenanceResult("skipped", "No trace store associated with LLM client.")
             from maintenance.self_assessment import run_self_assessment
             result = run_self_assessment(trace_store)
-            return MaintenanceResult(result.status, result.message)
+            msg = result.message
+            from core.config import SELF_DIAGNOSIS_ENABLED
+            if SELF_DIAGNOSIS_ENABLED:
+                from maintenance.self_diagnosis import run_self_diagnosis
+                dx = run_self_diagnosis(self.llm, result)
+                msg = f"{msg} ｜ 診斷：{dx.message}"
+            return MaintenanceResult(result.status, msg)
 
         return [
             MaintenanceTask(

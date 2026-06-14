@@ -154,6 +154,12 @@ CORTEX_GROUND_FRACTION          = max(0.0, min(1.0, float(os.getenv("CORTEX_GROU
 # here: they're taste, not deployment risk, so a creator should flip them in
 # Scripture.md and have it take effect immediately. See DynamicSettings below
 # (VISUAL_ROUTER_ENABLED / ARGUMENT_MAP_MERMAID).
+# Metacognition M2 (self-diagnosis): for each red/yellow axis in the M1
+# scorecard, run one lean LLM call → structured root-cause + candidate fixes
+# (read-only analysis; M3 turns the best into gated proposals). LLM-costed →
+# default OFF until validated. SELF_ASSESSMENT_HISTORY_MAX caps the trend log.
+SELF_DIAGNOSIS_ENABLED          = os.getenv("SELF_DIAGNOSIS_ENABLED", "false").lower() == "true"
+SELF_ASSESSMENT_HISTORY_MAX     = max(2, int(os.getenv("SELF_ASSESSMENT_HISTORY_MAX", "180")))
 CORTEX_UNMERGE_STRICT_AT        = float(os.getenv("CORTEX_UNMERGE_STRICT_AT", "0.10"))
 CORTEX_UNMERGE_RELAX_AT         = float(os.getenv("CORTEX_UNMERGE_RELAX_AT", "0.05"))
 CORTEX_UNMERGE_MIN_SAMPLES      = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))
@@ -216,6 +222,9 @@ CORTEX_ADJUDICATION_CACHE = DATABASE_DIR / "cortex_adjudications.json"
 SEED_HISTORY_FILE = DATABASE_DIR / "seed_history.json"
 CORTEX_DECAY_STATE_FILE = DATABASE_DIR / "cortex_decay_state.json"
 CORTEX_LEDGER_STATE_FILE = DATABASE_DIR / "cortex_ledger_state.json"
+# Metacognition: self-assessment scorecard history (one snapshot per run →
+# trend), capped append-only. M2 diagnosis reads it for chronic-vs-new.
+SELF_ASSESSMENT_HISTORY_FILE = DATABASE_DIR / "self_assessment_history.json"
 BENCH_AUTO_MAX_CASES = int(os.getenv("BENCH_AUTO_MAX_CASES", "30"))
 BENCH_AUTO_PER_RUN = int(os.getenv("BENCH_AUTO_PER_RUN", "5"))
 RAW_DIR = WIKI_VAULT_DIR / "raw"

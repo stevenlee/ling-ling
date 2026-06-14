@@ -38,6 +38,8 @@ from core.config import (
     INSIGHTS_DIR,
     MAINTENANCE_LOG_FILE,
     RETRIEVAL_BENCH_MIN_PASS_RATE,
+    SELF_ASSESSMENT_HISTORY_FILE,
+    SELF_ASSESSMENT_HISTORY_MAX,
 )
 from core.parser import parse_markdown_metadata
 
@@ -70,6 +72,7 @@ class SelfAssessmentResult:
     overall: str = UNKNOWN             # worst lamp across axes
     axes: list = field(default_factory=list)        # list[Axis]
     observations: list = field(default_factory=list)  # list[str] — M2 seeds
+    trend: dict = field(default_factory=dict)       # axis name → {arrow, prev, streak}
     report_path: Path | None = None
 
 
@@ -84,6 +87,68 @@ def _read_json(path: Path, default):
 
 def _mean(xs):
     return sum(xs) / len(xs) if xs else None
+
+
+# Compact, trend-worthy metric per axis (for the history snapshot).
+def _axis_metric(ax: "Axis") -> dict:
+    d = ax.detail or {}
+    keep = ("rate", "error_rate", "pass_rate", "dogmatic", "thin_evidence",
+            "contradictions", "falsified", "mean_novelty", "grounded_n", "cold_n")
+    return {k: d[k] for k in keep if k in d}
+
+
+def _persist_and_trend(history_file: Path, axes: list, overall: str, max_keep: int) -> dict:
+    """Append this run's snapshot to the trend log and compute per-axis trend
+    vs the PREVIOUS run. Fail-open: a broken/missing log just yields 'new'
+    everywhere and never blocks the assessment.
+
+    Returns {axis_name: {"arrow": ↑/↓/→/•, "prev": lamp|None, "streak": int}}
+    where streak = consecutive runs (incl. this one) at the current lamp.
+    """
+    hist = _read_json(history_file, [])
+    if not isinstance(hist, list):
+        hist = []
+    prev = hist[-1] if hist else None
+    prev_axes = (prev or {}).get("axes", {}) if isinstance(prev, dict) else {}
+
+    trend = {}
+    for ax in axes:
+        prev_lamp = (prev_axes.get(ax.name) or {}).get("lamp")
+        if prev_lamp is None or prev_lamp == UNKNOWN or ax.lamp == UNKNOWN:
+            arrow = "•"
+        elif _RANK[ax.lamp] > _RANK[prev_lamp]:
+            arrow = "↑"
+        elif _RANK[ax.lamp] < _RANK[prev_lamp]:
+            arrow = "↓"
+        else:
+            arrow = "→"
+        # streak: walk history backwards counting same lamp, +1 for this run.
+        streak = 1
+        for snap in reversed(hist):
+            if not isinstance(snap, dict):
+                break
+            if (snap.get("axes", {}).get(ax.name) or {}).get("lamp") == ax.lamp:
+                streak += 1
+            else:
+                break
+        trend[ax.name] = {"arrow": arrow, "prev": prev_lamp, "streak": streak}
+
+    snapshot = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "overall": overall,
+        "axes": {ax.name: {"lamp": ax.lamp, **_axis_metric(ax)} for ax in axes},
+    }
+    hist.append(snapshot)
+    if len(hist) > max_keep:
+        hist = hist[-max_keep:]
+    try:
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = history_file.with_suffix(history_file.suffix + ".tmp")
+        tmp.write_text(json.dumps(hist, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(history_file)
+    except Exception as e:
+        logging.warning(f"self_assessment: failed to persist trend history: {e}")
+    return trend
 
 
 # ── per-axis evaluators (each fail-open → returns an Axis) ────────────────
@@ -276,6 +341,7 @@ def run_self_assessment(
     ledger_file: Path | None = None,
     report_dir: Path | None = None,
     log_path: Path | None = None,
+    history_file: Path | None = None,
     window_days: int = DEFAULT_WINDOW_DAYS,
 ) -> SelfAssessmentResult:
     cortex_dir = cortex_dir or CORTEX_DIR
@@ -285,6 +351,7 @@ def run_self_assessment(
     ledger_file = ledger_file or CORTEX_LEDGER_STATE_FILE
     report_dir = report_dir or FROM_LLM_DIR
     log_path = log_path or MAINTENANCE_LOG_FILE
+    history_file = history_file or SELF_ASSESSMENT_HISTORY_FILE
 
     obs: list[str] = []
     axes = [
@@ -299,12 +366,21 @@ def run_self_assessment(
     rated = [a.lamp for a in axes if a.lamp != UNKNOWN]
     overall = min(rated, key=lambda l: _RANK[l]) if rated else UNKNOWN
 
+    trend = _persist_and_trend(history_file, axes, overall, SELF_ASSESSMENT_HISTORY_MAX)
+    # Chronic problems (red/yellow for ≥3 consecutive runs) deserve their own
+    # callout — a fresh red is noise, a standing red is a real backlog item.
+    for ax in axes:
+        t = trend.get(ax.name, {})
+        if ax.lamp in (RED, YELLOW) and t.get("streak", 1) >= 3:
+            obs.append(f"`{ax.name}` 已連續 {t['streak']} 次為 {ax.lamp} — 慢性問題,優先處理。")
+
     result = SelfAssessmentResult(
         status="succeeded",
-        message=f"自評 {overall}：" + "／".join(f"{a.name}{a.lamp}" for a in axes),
+        message=f"自評 {overall}：" + "／".join(f"{a.name}{a.lamp}{trend.get(a.name, {}).get('arrow', '')}" for a in axes),
         overall=overall,
         axes=axes,
         observations=obs,
+        trend=trend,
     )
 
     _append_maintenance_log(log_path, result, window_days)
@@ -337,11 +413,12 @@ def _write_report(report_dir: Path, result: SelfAssessmentResult, window_days: i
             "",
             "## 計分卡",
             "",
-            "| 軸 | 狀態 | 摘要 |",
-            "|---|:---:|---|",
+            "| 軸 | 狀態 | 趨勢 | 摘要 |",
+            "|---|:---:|:---:|---|",
         ]
         for a in result.axes:
-            lines.append(f"| {a.name} | {a.lamp} | {a.summary} |")
+            arrow = result.trend.get(a.name, {}).get("arrow", "")
+            lines.append(f"| {a.name} | {a.lamp} | {arrow} | {a.summary} |")
         if result.observations:
             lines += ["", "## 🔍 觀察（可改善之處，尚未採取行動）", ""]
             lines += [f"- {o}" for o in result.observations]

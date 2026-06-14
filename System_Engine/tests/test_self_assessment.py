@@ -161,3 +161,46 @@ def test_axis_failopen_does_not_crash_report(tmp_path):
     # the two trace-backed axes degrade to unknown, not crash
     assert _axis(r, "報告品質").lamp == UNKNOWN
     assert _axis(r, "LLM 健康").lamp == UNKNOWN
+
+
+# ── trend persistence ─────────────────────────────────────────────────────
+
+def test_history_persisted_and_capped(tmp_path, monkeypatch):
+    import maintenance.self_assessment as sa
+    monkeypatch.setattr(sa, "SELF_ASSESSMENT_HISTORY_MAX", 3)
+    p = _paths(tmp_path)
+    hist_file = tmp_path / "hist.json"
+    for _ in range(5):
+        run_self_assessment(FakeTrace(), history_file=hist_file, **p)
+    snaps = json.loads(hist_file.read_text())
+    assert len(snaps) == 3                        # capped
+    assert all("overall" in s and "axes" in s for s in snaps)
+
+
+def test_trend_arrows_and_streak(tmp_path):
+    p = _paths(tmp_path)
+    hist_file = tmp_path / "hist.json"
+    # Run 1: retrieval red.
+    p["bench_history_file"].write_text(json.dumps([{"ts": "t", "pass_rate": 0.5}]), encoding="utf-8")
+    r1 = run_self_assessment(FakeTrace(), history_file=hist_file, **p)
+    assert r1.trend["檢索品質"]["arrow"] == "•"   # no prior → new
+    assert r1.trend["檢索品質"]["streak"] == 1
+    # Run 2: retrieval still red → streak grows, stable arrow.
+    r2 = run_self_assessment(FakeTrace(), history_file=hist_file, **p)
+    assert r2.trend["檢索品質"]["arrow"] == "→"
+    assert r2.trend["檢索品質"]["streak"] == 2
+    # Run 3: retrieval recovers to green → improving arrow.
+    p["bench_history_file"].write_text(json.dumps([{"ts": "t", "pass_rate": 0.95}]), encoding="utf-8")
+    r3 = run_self_assessment(FakeTrace(), history_file=hist_file, **p)
+    assert r3.trend["檢索品質"]["arrow"] == "↑"
+
+
+def test_chronic_axis_adds_observation(tmp_path):
+    p = _paths(tmp_path)
+    hist_file = tmp_path / "hist.json"
+    p["bench_history_file"].write_text(json.dumps([{"ts": "t", "pass_rate": 0.5}]), encoding="utf-8")
+    r = None
+    for _ in range(3):
+        r = run_self_assessment(FakeTrace(), history_file=hist_file, **p)
+    # 3 consecutive reds on retrieval → a "慢性問題" observation appears.
+    assert any("慢性" in o and "檢索品質" in o for o in r.observations)
