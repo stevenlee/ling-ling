@@ -104,3 +104,41 @@ def test_render_none_explains(tmp_path):
     agent = VisualizeAgent.__new__(VisualizeAgent)
     body = agent._render("X", "src", {"type": "none", "reason": "散文", "artifact": ""})
     assert "沒有明顯的視覺結構" in body
+
+
+# ── auto-attach (flag-gated) ─────────────────────────────────────────────
+
+def test_maybe_section_off_by_default(monkeypatch):
+    from services.learning_artifacts import maybe_artifact_section
+    monkeypatch.setattr("core.config.VISUAL_ROUTER_ENABLED", False)
+    called = {"n": 0}
+
+    class L:
+        def _complete_json(self, **kw):
+            called["n"] += 1
+            return {"type": "flowchart", "confidence": 0.9}
+        def complete(self, *a, **k):
+            called["n"] += 1
+            return "x"
+
+    # Flag off → empty string AND zero LLM calls (byte-identical callers).
+    assert maybe_artifact_section(L(), "some content") == ""
+    assert called["n"] == 0
+
+
+def test_maybe_section_on_attaches(monkeypatch):
+    from services.learning_artifacts import maybe_artifact_section
+    monkeypatch.setattr("core.config.VISUAL_ROUTER_ENABLED", True)
+    llm = FakeLLM(completion="| A | B |\n|---|---|\n| 1 | 2 |")
+    # force-via-classify: classify returns comparison_table, render returns table
+    llm._classify = {"type": "comparison_table", "confidence": 0.9}
+    section = maybe_artifact_section(llm, "compare A and B")
+    assert section.startswith("## 🖼️ 學習輔助")
+    assert "| A | B |" in section
+
+
+def test_maybe_section_none_attaches_nothing(monkeypatch):
+    from services.learning_artifacts import maybe_artifact_section
+    monkeypatch.setattr("core.config.VISUAL_ROUTER_ENABLED", True)
+    llm = FakeLLM(classify={"type": "none", "confidence": 0.0})
+    assert maybe_artifact_section(llm, "unstructured prose") == ""

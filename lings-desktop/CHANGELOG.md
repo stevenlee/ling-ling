@@ -27,7 +27,7 @@ Ling-Ling 的使命是幫人**學**,但視覺輸出一直只有 Mermaid flowchar
 - **`@ling-visualize [[筆記]]`** 指令（on-demand）:解析筆記 → 選型 → 產出;`as <type>` 可強制類型。
 - 穩健性:壞 Mermaid 過不了 linter 就降級為「驗證失敗,不輸出壞圖」;classify/render 全走精簡 `complete`/`_complete_json`,避免 Visualization/template 樣板污染（recall 的教訓）。
 - Live（真實 vault）:鮑莫爾成本病 synthesis → 自動選 **flowchart**（因果機制）並產出正確的因果圖;`as mindmap` → 正確產出階層心智圖。兩者都通過 linter。+10 tests。
-- Flag `VISUAL_ROUTER_ENABLED`（預設 OFF）保留給「自動附到 synthesis/insight 輸出」的後續;on-demand 指令不受此 flag 限制。計劃見 [DesignDoc/LearningArtifacts_plan.md](System_Engine/DesignDoc/LearningArtifacts_plan.md)。
+- **Auto-attach（同批,flag-gated）**：`VISUAL_ROUTER_ENABLED=true` 時,長文 synthesis 的 Executive Summary 後自動附一段「## 🖼️ 學習輔助」（`maybe_artifact_section`,走 router 選型）。flag OFF（預設）→ 回空字串且**零 LLM 呼叫**,synthesis 輸出 byte-identical。on-demand `@ling-visualize` 不受此 flag 限制。計劃見 [DesignDoc/LearningArtifacts_plan.md](System_Engine/DesignDoc/LearningArtifacts_plan.md)。
 
 ### 2026-06-14 Cortex Phase 5 · F1：Cortex-grounded insight（五防禦俱全，flag OFF）
 
