@@ -11,6 +11,12 @@ Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [READM
 - **改用 LLM-over-full-Cortex（第二輪 live 回饋後的架構修正）**：連 hybrid 都救不了「關於 Hibert 的所有記憶」——一字 typo（Hibert vs Hilbert）打爆 exact-token BM25，embedder 又弱到接不起，字面命中主張排最後。**根本問題是工具選錯**：語料只有 9 條，這種規模不該用「檢索」——直接把整個 Cortex 塞進 LLM context，讓它讀完選 + 綜述，typo／概念匹配／框架詞全部自然處理。recall 現在預設 LLM-over-corpus（`CORTEX_RECALL_LLM_MAX=150` 內全塞；超過才用 hybrid `recall_claims` 預篩 `CORTEX_RECALL_PREFILTER`）。Live（typo query）：正確對應 Hilbert、只引用相關的 [#4]、附自我批判（信心 0.50 + 反例）。**同時修一個 bug**：原用 `answer_query` 會經 `_build_system_prompt` 注入 Visualization/template 樣板，害模型狂追一個沒人要的 Mermaid 圖並吐出整段 chain-of-thought（16682 字）；改用新的精簡 `LLMClient.complete(system_prompt, user_msg)`（不帶 persona/template/viz 機制）+ 「只輸出最終綜述」指令後，輸出降為 836 字、乾淨。
 - **Hybrid 融合（第一輪 live 回饋後，保留為大語料預篩）**：純向量在真實對話式查詢上回傳平帶 grab-bag——embedder（nomic-embed-text）對同語言文字的 cosine 擠在 0.53–0.69，連把 on-topic 主張排到 off-topic 之前都做不到（這是 R6 的同一個 embedder 天花板，memory loop 繼承了它）。recall 改為 **magnitude-aware hybrid**（cosine + BM25 字元級 CJK token，BM25 以自身 max 正規化後加權融合）。**刻意不用 RAG 層的 RRF**：RRF 是 rank-based、丟棄 BM25 的量級，且其 k=60 阻尼在 Cortex 這種小語料（~數十條）會把「字面命中得分 4× 次名」的尖峰訊號壓成「rank1 僅微幅勝 rank2」，被 embedder 平帶蓋過。實測：「構建知識圖譜的過程」查詢，字面命中主張從純向量的 **rank 9 → hybrid rank 1**。注意：BM25 在極小語料（≤2–3 頁）IDF 退化為 0；hybrid 的效益隨 Cortex 長大才完整。純概念、無詞彙重疊的查詢仍受 embedder 天花板限制（R6）。+1 test。
 
+### 2026-06-14 Cortex Phase 5 · F3：知識張力掃描（`@ling-tensions`）
+
+- **記憶的反面**：recall 答「我相信什麼」，tensions 答「我的信念在哪裡有張力」——對抗自我印證的解藥（把異議攤開）。純掃描，無 LLM、無 embedding，所以不受檢索品質影響。四個 bucket：**矛盾對**（ledger 標記的衝突，A↔B 去重、id 解析成主張全文）、**教條**（高信心 ≥0.5 但低可反駁性 ≤0.25——「不可能錯」的主張只會自我強化，同溫層的結構性燃料）、**證據單薄**（≤1 來源）、**已被推翻**（status falsified，附死因 counterpoints，透明保留）。
+- `services/cortex_tensions.py` 的 `scan_tensions(cortex_dir) -> TensionReport`（fail-open）+ `@ling-tensions` agent 渲染。Flag：`CORTEX_TENSION_DOGMATIC_FALS`(0.25) / `_DOGMATIC_CONF`(0.5) / `_THIN_EVIDENCE_MAX`(1)。
+- Live（真實 12 頁 Cortex）：正確標出 2 條 falsifiability=0.0 的教條主張（「純粹顯現」「知識圖譜」那種規範性/不可反駁陳述）——正是該人工複審的同溫層風險。+7 tests。
+
 ### 2026-06-13 全模組稽核與硬化（audit R7）
 
 對 System_Engine（~22k LOC）跑了一次多代理程式碼稽核（99 raw → 41 confirmed），逐項親手驗證後修正，不成立的記為「查證後不做」。完整脈絡見 [System_Engine/DesignDoc/SystemEngine_audit_20260613.md](System_Engine/DesignDoc/SystemEngine_audit_20260613.md) 與 [Roadmap R7 區](System_Engine/DesignDoc/Roadmap_Phase4.5_onwards.md)。

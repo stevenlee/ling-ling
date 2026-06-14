@@ -41,6 +41,7 @@ INTENT_ROUTES = [
     (["insight"],                            ["insight"],     "insight"),
     (["profiles", "profile"],                ["profiles", "profile"], "profiles"),
     (["recall"],                             ["recall"],      "recall"),
+    (["tensions", "tension"],                ["tensions", "tension"], "tensions"),
     (["cortex"],                             ["cortex"],      "cortex"),
     (["plan"],                               ["plan"],        "plan"),
     (["do"],                                 ["do"],          "do"),
