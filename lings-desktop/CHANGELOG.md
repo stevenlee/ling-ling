@@ -2,6 +2,16 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-15 Embedding 換 bge-m3 + 修頭部截斷 bug：golden bench 0.867 → 1.000
+
+firsthand 追因發現**真正的瓶頸**:`OllamaEmbeddingFunction` 把每段輸入硬砍到 `[:1200]` 字才嵌入(為了避開 nomic 的短 context)。在 `CHUNK_SIZE=5000` 下,每個向量只代表 chunk 的**前 ~24%**,其餘 76% 對向量檢索是隱形的——這才是檢索弱、要靠 reranker 硬撐的根因(不是模型選錯、也非空間 mismatch;實測短 chunk 與 nomic cosine=1.0,索引本來就是 nomic)。
+
+- **`services/rag_manager.py`**：`OllamaEmbeddingFunction` 的截斷改為 **model-aware**——nomic 仍 1200(其真實 context),長上下文模型(bge-m3,8192 token)給 8000;新增 `max_chars` 參數。
+- **`core/config.py`**：新增 `EMBEDDING_MAX_CHARS`(0=依模型自動)。
+- **換用 bge-m3**(多語、8192 長上下文、1024 維),透過 DGX docker 容器 `ai-infra-ollama-1` 提供;`.env` 設 `EMBEDDING_MODEL=bge-m3`,`init_rag.py --wipe` 全庫重建成 1024 維(12075 chunks)。bge-m3 在 GPU embed,本機只做切塊+寫庫;重建大量命中本地 embedding cache 故很快。
+- **結果**:golden bench **0.867 → 1.000**(15/15)。跨語言案例(「弱解的存在性…」→ 英文 PDE 書、求道者 → Siddhartha(EN))現在**靠向量本身**就命中,不再只靠 reranker 補救;連 Taylor(原本回 Hardy)也修好。bge-m3 多語 + 全文嵌入一次解掉截斷、弱檢索、跨語言。
+- **運維教訓**:重建過程中 daemon 與 reindex **同時寫同一個 Chroma sqlite → 索引損毀**(`count()` segfault)。ChromaDB 不支援多 writer;已乾淨重建。規則:任何寫入索引前先確認無 daemon、永遠單一存取者。
+
 ### 2026-06-15 跨語言檢索 prod 驗收：真槓桿是 reranker，不是查詢翻譯
 
 裝上 reranker（dev box 原本沒裝 `sentence-transformers`）後在現有索引上 firsthand A/B。結論翻轉了旗艦的假設：

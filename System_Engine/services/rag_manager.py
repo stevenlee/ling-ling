@@ -12,6 +12,7 @@ from core.config import (
     EMBEDDING_PROVIDER,
     EMBEDDING_MODEL,
     EMBEDDING_CACHE_ENABLED,
+    EMBEDDING_MAX_CHARS,
     RERANKER_ENABLED,
     RERANKER_MODEL,
     RERANKER_MULTIPLIER,
@@ -82,14 +83,21 @@ class GeminiEmbeddingFunction(chromadb.EmbeddingFunction):
 
 
 class OllamaEmbeddingFunction(chromadb.EmbeddingFunction):
-    def __init__(self, api_base: str, model_name: str = "nomic-embed-text"):
+    def __init__(self, api_base: str, model_name: str = "nomic-embed-text", max_chars: int = 1200):
         self.api_url = f"{api_base.rstrip('/')}/api/embed"
         self.model_name = model_name
+        # Per-input char cap to avoid Ollama context-length 400s. Sized to the
+        # model: nomic's context is short (~1200), bge-m3 holds 8192 tokens so
+        # it gets a far larger cap. Too small a cap silently embeds only the
+        # head of each chunk (the bug that crippled vector retrieval). 0 = none.
+        self.max_chars = max_chars
 
     def __call__(self, input: list[str]) -> list[list[float]]:
         import requests
-        # Truncate each input string to 1200 characters to prevent context length errors in Ollama
-        safe_input = [text[:1200] for text in input]
+        safe_input = [
+            (text[:self.max_chars] if self.max_chars and self.max_chars > 0 else text)
+            for text in input
+        ]
         try:
             resp = requests.post(
                 self.api_url,
@@ -138,7 +146,19 @@ class RAGManager:
             api_base = OLLAMA_API_BASE
             if api_base.endswith("/v1"):
                 api_base = api_base[:-3]
-            self.ef = OllamaEmbeddingFunction(api_base=api_base, model_name=EMBEDDING_MODEL or "nomic-embed-text")
+            ollama_model = EMBEDDING_MODEL or "nomic-embed-text"
+            # Auto-size the truncation cap to the model when not set explicitly:
+            # nomic's short context needs ~1200; long-context models (bge-m3,
+            # 8192 tokens) get a generous cap so chunks aren't head-truncated.
+            cap = EMBEDDING_MAX_CHARS
+            if cap <= 0:
+                # nomic: short context (~1200 safe). bge-m3 & other long-context
+                # models: 8000 covers the corpus (p90≈5862, CHUNK_SIZE=5000) and
+                # sits within bge-m3's 8192-token window — verified no 400s.
+                cap = 1200 if "nomic" in ollama_model.lower() else 8000
+            self.ef = OllamaEmbeddingFunction(
+                api_base=api_base, model_name=ollama_model, max_chars=cap
+            )
         else:
             self.ef = embedding_functions.DefaultEmbeddingFunction()
 

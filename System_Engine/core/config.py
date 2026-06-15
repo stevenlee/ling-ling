@@ -58,6 +58,12 @@ DIGEST_SOURCES_MAX_SOURCE_CHARS = int(os.getenv("DIGEST_SOURCES_MAX_SOURCE_CHARS
 EMBEDDING_PROVIDER              = os.getenv("EMBEDDING_PROVIDER", "local").lower()
 EMBEDDING_MODEL                 = os.getenv("EMBEDDING_MODEL") or None
 EMBEDDING_CACHE_ENABLED         = os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() == "true"
+# Per-input char cap before embedding, to stay under the model's context window
+# (Ollama 400s past it). 0 = auto by model: nomic-embed-text has a short context
+# (~1200 chars safe), long-context models like bge-m3 get a generous cap. Set
+# explicitly to override. NOTE: too small a cap silently embeds only the head of
+# each chunk — the bug that crippled vector retrieval under nomic+CHUNK_SIZE=5000.
+EMBEDDING_MAX_CHARS             = int(os.getenv("EMBEDDING_MAX_CHARS", "0"))
 
 # ─── Reranker Configuration ───────────────────────────────────────────
 RERANKER_ENABLED                = os.getenv("RERANKER_ENABLED", "false").lower() == "true"
