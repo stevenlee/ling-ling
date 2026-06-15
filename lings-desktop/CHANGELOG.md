@@ -2,6 +2,16 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-06-15 跨語言檢索 prod 驗收：真槓桿是 reranker，不是查詢翻譯
+
+裝上 reranker（dev box 原本沒裝 `sentence-transformers`）後在現有索引上 firsthand A/B。結論翻轉了旗艦的假設：
+
+- **多語 reranker（`bge-reranker-v2-m3`）才是 cross-lingual 的真解。** 開啟 `RERANKER_ENABLED` 後 golden-query bench **0.867 → 0.933**，「弱解的存在性…」→ 英文 PDE 書**排第 1**、求道者 → Siddhartha(EN) 排第 3。它直接拿原查詢（中文）對候選文本（英文）打分,候選早已被 hybrid 帶進池中。
+- **查詢翻譯擴展（上一筆的旗艦 feature）對這些案零增益**——開/關 bench 同為 14/15。翻譯只在「外語文件根本沒進候選池、reranker 無從排起」的 recall 邊角才有用。依決議**保留程式碼但維持 off-by-default**,並在 config 註解標明它是次要 recall hedge、reranker 才是主槓桿。
+- **疑似真因**：`requirements.txt` 把 `sentence-transformers` 註解掉了,所以即使 prod 設了 `RERANKER_ENABLED=true`,reranker 也會**靜默退回停用**(graceful fallback)。
+- **本次改動**：新增 `requirements-reranker.txt`(optional extras,拉 torch),requirements.txt 指向它並標明驗收數字;README 安裝段新增「強烈建議開啟多語 reranker」一節(裝法 + 0.867→0.933 + 未裝會靜默停用的警告);bench 的兩個 zh→en 案移除無效的 `cross_lingual: true`(reranker 開啟即會過)。
+- **下一步建議(未動,prod 決策)**：在 prod 安裝 reranker extra + 設 `RERANKER_ENABLED=true`(注意 reranker 有每查詢延遲成本)。
+
 ### 2026-06-15 跨語言檢索（query 翻譯 → 候選擴展，opt-in）
 
 旗艦 feature A。語料是 zh/en/de 混合,但 vector+BM25 候選生成基本單語:中文查詢很少把相關英文 chunk 帶進候選池,所以(本就多語的)reranker 根本沒機會排到它。修法:把查詢翻譯成語料的其他語言,各變體都檢索一輪,所有排序用 RRF 融合,再用**原始查詢**重排——加寬召回、不動索引、可關。

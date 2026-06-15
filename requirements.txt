@@ -7,5 +7,7 @@ chromadb
 PyYAML
 rank_bm25
 
-# Optional — install only when RERANKER_ENABLED=true:
-# sentence-transformers
+# Optional reranker (multilingual; the main cross-lingual retrieval lever):
+#   pip install -r requirements-reranker.txt   # then set RERANKER_ENABLED=true
+# Kept out of the core install so the base doesn't pull torch. Validated to
+# take the golden-query bench 0.867 → 0.933 (see requirements-reranker.txt).

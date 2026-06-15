@@ -69,13 +69,14 @@ HYBRID_RETRIEVAL_ENABLED        = os.getenv("HYBRID_RETRIEVAL_ENABLED", "false")
 BM25_MULTIPLIER                 = int(os.getenv("BM25_MULTIPLIER", "3"))
 
 # ─── Cross-lingual retrieval (query translation → candidate net) ──────
-# The corpus is multilingual (zh / en / de). A Chinese query's vector + BM25
-# never surface the relevant English doc into the candidate pool, so the
-# (already multilingual) reranker never gets to rank it — verified: "弱解的
-# 存在性…" returned Hamlet, not the English PDE book. Fix: translate the query
-# into the other corpus languages, retrieve candidates for each variant, fuse
-# all ranked lists via RRF, then rerank against the ORIGINAL query. Additive,
-# index-untouched, measurable. Opt-in (one extra LLM call per query).
+# NOTE: the PRIMARY cross-lingual lever is the multilingual reranker
+# (RERANKER_ENABLED + bge-reranker-v2-m3) — verified to rank a zh query's
+# English doc at #1, taking the bench 0.867→0.933 with NO translation. This
+# query-translation path is a secondary RECALL hedge: it only helps when the
+# foreign-language doc never reaches the candidate pool at all (so the reranker
+# can't rank it). Default off. When on, translate the query into the other
+# corpus languages, retrieve per variant, RRF-fuse, rerank against the ORIGINAL
+# query. Additive, index-untouched, one extra LLM call per query.
 CROSS_LINGUAL_ENABLED           = os.getenv("CROSS_LINGUAL_ENABLED", "false").lower() == "true"
 # Languages the corpus holds; a query is translated into each of these EXCEPT
 # its own detected language. Comma-separated ISO-ish codes.

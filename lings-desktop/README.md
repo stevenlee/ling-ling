@@ -59,6 +59,18 @@ vim .env
 
 啟動腳本會在第一次執行時建立 `venv` 並安裝 `requirements.txt`。
 
+#### 強烈建議：開啟多語 reranker
+
+核心安裝刻意不含 `torch`。但 cross-encoder reranker（`BAAI/bge-reranker-v2-m3`，**多語**）是檢索品質的最大槓桿——它能把中文查詢正確排到英文/德文文件。實測：開啟後 golden-query bench **0.867 → 0.933**，並修好 zh→en 失敗（「弱解的存在性…」→ 英文 PDE 書排第 1）。**未安裝此套件時，即使 `RERANKER_ENABLED=true` 也會靜默退回停用。**
+
+```bash
+venv/bin/pip install -r requirements-reranker.txt   # 拉 sentence-transformers + torch
+# 然後在 .env 設：
+RERANKER_ENABLED=true
+```
+
+> 跨語言查詢另有一個 opt-in 的「查詢翻譯擴展」（`CROSS_LINGUAL_ENABLED`，預設關），用於 reranker 也排不到（候選池根本沒有該外語文件）的 recall 邊角；一般情況 reranker 已足夠。
+
 健康檢查：
 
 ```bash

@@ -1,0 +1,12 @@
+# Optional reranker extra — install to enable the cross-encoder reranker.
+#
+#   pip install -r requirements-reranker.txt
+#
+# Pulls sentence-transformers (and torch, a few hundred MB). The reranker
+# (BAAI/bge-reranker-v2-m3) is MULTILINGUAL, so once enabled it ranks a
+# Chinese query against English/German candidate text correctly — the main
+# cross-lingual retrieval lever. Validated: enabling it (RERANKER_ENABLED=true)
+# took the golden-query bench 0.867 → 0.933 and fixed the zh→en failure
+# (弱解的存在性… → the English PDE book at rank 1). Without this package the
+# reranker silently falls back to disabled even when RERANKER_ENABLED=true.
+sentence-transformers
