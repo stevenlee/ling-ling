@@ -49,6 +49,68 @@ class TestEmbeddingFunctions:
             timeout=60
         )
 
+    @patch("requests.post")
+    def test_ollama_batch_nan_isolates_bad_item(self, mock_post):
+        # bge-m3 NaN on one input 500s the whole batch; we isolate per-item so
+        # the good vectors still index and the bad one gets a placeholder.
+        good = [0.5] * 1024
+
+        def resp_for(*args, **kwargs):
+            inp = kwargs["json"]["input"]
+            r = MagicMock()
+            if len(inp) > 1:                       # the batch call → NaN 500
+                r.status_code = 500
+                r.text = '{"error":"failed to encode response: json: unsupported value: NaN"}'
+                return r
+            if inp[0] == "bad":                    # the offending single input
+                r.status_code = 500
+                r.text = "NaN"
+                return r
+            r.status_code = 200
+            r.json.return_value = {"embeddings": [good]}
+            return r
+
+        mock_post.side_effect = resp_for
+        fn = OllamaEmbeddingFunction(api_base="http://t", model_name="bge-m3", max_chars=0)
+        out = fn(["ok1", "bad", "ok2"])   # chromadb coerces to ndarray → element-wise asserts
+        assert len(out) == 3
+        assert out[0][0] == 0.5 and out[2][0] == 0.5 and out[0][-1] == 0.5
+        assert len(out[1]) == 1024 and out[1][0] == 1.0 and float(sum(out[1][1:])) == 0.0  # unit placeholder
+
+    @patch("requests.post")
+    def test_ollama_nan_in_200_response_isolated(self, mock_post):
+        good = [0.5] * 1024
+        nan_vec = [float("nan")] * 1024
+
+        def resp_for(*args, **kwargs):
+            inp = kwargs["json"]["input"]
+            r = MagicMock()
+            r.status_code = 200
+            if len(inp) > 1:                       # batch returns a NaN vector
+                r.json.return_value = {"embeddings": [good, nan_vec]}
+            else:
+                r.json.return_value = {"embeddings": [nan_vec if inp[0] == "bad" else good]}
+            return r
+
+        mock_post.side_effect = resp_for
+        fn = OllamaEmbeddingFunction(api_base="http://t", model_name="bge-m3", max_chars=0)
+        out = fn(["ok", "bad"])
+        assert out[0][0] == 0.5 and out[0][-1] == 0.5
+        assert out[1][0] == 1.0 and float(sum(out[1][1:])) == 0.0
+
+    @patch("requests.post")
+    def test_ollama_all_fail_raises(self, mock_post):
+        # Every item failing on its own is an outage, not an input-specific NaN
+        # — must raise (not silently fill placeholders).
+        r = MagicMock()
+        r.status_code = 500
+        r.text = "Internal Server Error"
+        mock_post.return_value = r
+        fn = OllamaEmbeddingFunction(api_base="http://t", model_name="bge-m3", max_chars=0)
+        import pytest
+        with pytest.raises(RuntimeError):
+            fn(["a", "b"])
+
     def test_gemini_embedding_function(self):
         # Mock google-genai Client structure
         mock_client_class = MagicMock()

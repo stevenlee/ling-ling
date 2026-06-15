@@ -31,6 +31,12 @@ from services.bm25_index import BM25Index, rrf_merge
 OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "http://localhost:11434/v1")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+
+def _vec_has_nan(vec) -> bool:
+    """True if any element is NaN (NaN != itself). Guards against embedding
+    backends that emit NaN for pathological inputs."""
+    return any(x != x for x in vec)
+
 # Decorator to handle temporary database locks in SQLite
 def retry_on_db_lock(retries=3, delay=1):
     def decorator(func):
@@ -92,25 +98,71 @@ class OllamaEmbeddingFunction(chromadb.EmbeddingFunction):
         # head of each chunk (the bug that crippled vector retrieval). 0 = none.
         self.max_chars = max_chars
 
-    def __call__(self, input: list[str]) -> list[list[float]]:
+    def _embed(self, batch: list[str]) -> list[list[float]] | None:
+        """POST one batch. Returns embeddings, or None on an HTTP error (e.g.
+        Ollama's 500 ``json: unsupported value: NaN`` — bge-m3 occasionally
+        emits a NaN embedding for a specific input). Raises only on transport
+        errors, so the caller's transient-retry path still applies."""
         import requests
+        resp = requests.post(
+            self.api_url,
+            json={"model": self.model_name, "input": batch},
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            logging.error(f"Ollama embedding HTTP error {resp.status_code}: {resp.text}")
+            return None
+        return resp.json()["embeddings"]
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
         safe_input = [
             (text[:self.max_chars] if self.max_chars and self.max_chars > 0 else text)
             for text in input
         ]
         try:
-            resp = requests.post(
-                self.api_url,
-                json={"model": self.model_name, "input": safe_input},
-                timeout=60
-            )
-            if resp.status_code != 200:
-                logging.error(f"Ollama embedding HTTP error {resp.status_code}: {resp.text}")
-            resp.raise_for_status()
-            return resp.json()["embeddings"]
+            embs = self._embed(safe_input)
         except Exception as e:
             logging.error(f"Ollama embedding failed for model {self.model_name}: {e}")
-            raise e
+            raise
+        if (embs is not None and len(embs) == len(safe_input)
+                and not any(_vec_has_nan(e) for e in embs)):
+            return embs
+        # bge-m3 intermittently emits NaN for one specific input, and Ollama
+        # then 500s the ENTIRE batch — silently losing a document's whole facet
+        # / chunk set. Isolate per-item so one bad input can't drop the rest.
+        return self._embed_resilient(safe_input)
+
+    def _embed_resilient(self, safe_input: list[str]) -> list[list[float]]:
+        out: list[list[float] | None] = [None] * len(safe_input)
+        dim: int | None = None
+        bad: list[int] = []
+        for i, text in enumerate(safe_input):
+            try:
+                e = self._embed([text])
+            except Exception:
+                e = None
+            if e and len(e) == 1 and not _vec_has_nan(e[0]):
+                out[i] = e[0]
+                dim = dim or len(e[0])
+            else:
+                bad.append(i)
+        if bad and len(bad) == len(safe_input):
+            # Every item failed on its own — this is an outage, not an
+            # input-specific NaN. Don't mask it with placeholders; raise so the
+            # caller's retry / skip-and-log path handles it honestly.
+            raise RuntimeError(
+                f"Ollama embedding failed for all {len(safe_input)} inputs (model {self.model_name})"
+            )
+        for i in bad:
+            logging.error(
+                "Ollama embedding produced NaN/error for one input; substituting a "
+                f"placeholder vector so the batch still indexes. text={safe_input[i][:100]!r}"
+            )
+            placeholder = [0.0] * (dim or 0)
+            if placeholder:
+                placeholder[0] = 1.0   # unit vector: valid cosine, avoids zero-norm NaN
+            out[i] = placeholder
+        return out  # type: ignore[return-value]
 
     def embed_query(self, input: list[str]) -> list[list[float]]:
         return self(input)
