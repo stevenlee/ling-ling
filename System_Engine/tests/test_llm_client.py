@@ -213,6 +213,25 @@ class TestLanguageHint:
         hint = client._get_lang_hint()
         assert "do NOT mix" in hint
 
+    def test_localized_suffix_maps_language(self, monkeypatch):
+        import services.llm_client as llm_mod
+        client = LLMClient.__new__(LLMClient)
+        monkeypatch.setattr(llm_mod.settings, "OUTPUT_LANGUAGE", "Traditional Chinese")
+        assert client._localized_suffix() == ".zh"
+        monkeypatch.setattr(llm_mod.settings, "OUTPUT_LANGUAGE", "Japanese")
+        assert client._localized_suffix() == ".ja"
+        monkeypatch.setattr(llm_mod.settings, "OUTPUT_LANGUAGE", "English")
+        assert client._localized_suffix() == ""
+
+    def test_field_labels_localized_not_english_fallback(self, monkeypatch):
+        # Regression: labels used to fall back to English because the map was
+        # keyed on _get_lang_hint()'s long string. Now keyed on the suffix.
+        import services.llm_client as llm_mod
+        client = LLMClient.__new__(LLMClient)
+        monkeypatch.setattr(llm_mod.settings, "OUTPUT_LANGUAGE", "Traditional Chinese")
+        labels = llm_mod._LABELS_BY_SUFFIX.get(client._localized_suffix(), llm_mod._DEFAULT_LABELS)
+        assert labels["file"] == "檔案名稱" and labels["content"] == "素材內容"
+
 
 # ── answer_query prompt assembly ────────────────────────────────────
 

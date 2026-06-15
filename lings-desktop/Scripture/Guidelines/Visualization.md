@@ -2,11 +2,14 @@
 - **Diagram Selection**:
   - Use `mindmap` for hierarchical concepts, brainstorming, or multi-attribute descriptions.
   - Use `flowchart LR` (Left-to-Right) for processes, logic sequences, or cause-and-effect.
-- **CRITICAL: QUOTING RULE**
-  - ALL labels and names (Nodes AND Subgraphs) MUST be enclosed in double quotes. 
+- **CRITICAL: QUOTING RULE (flowchart / graph only)**
+  - In `flowchart`/`graph`, ALL labels and names (Nodes AND Subgraphs) MUST be enclosed in double quotes.
   - ✅ RIGHT: A["Concept (Detail)"]
   - ✅ RIGHT: subgraph "Logic Flow Layer"
-  - ✅ RIGHT: root(("Main Topic"))
+- **MINDMAP EXCEPTION — do NOT quote**
+  - `mindmap` is indentation-based. Double quotes on a node (`"Topic"` / `id["Topic"]`) are a parse error that kills the whole diagram.
+  - Write plain text and avoid special chars `() [] {}` in node text.
+  - ✅ RIGHT: `root((Main Topic))`, then indented plain-text children.
 - **Style**:
   - Directly output Markdown content. **DO NOT** wrap your entire response in \` \` \`markdown \` code blocks.
   - Keep diagrams concise (5-10 nodes) and avoid over-complicating.

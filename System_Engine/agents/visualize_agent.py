@@ -71,7 +71,11 @@ class VisualizeAgent(BaseAgent):
             L.append("這篇內容沒有明顯的視覺結構（流程／比較／時序／階層／論證）,"
                      "硬畫成圖反而會誤導,因此不產生圖表。可改用 `@ling-visualize [[X]] as <type>` 指定類型。")
         elif not result.get("artifact"):
-            L.append("（產生圖表時驗證失敗,已略過以免輸出壞掉的圖。可重試或指定其他類型。）")
+            if t == "argument_map":
+                L.append("這篇內容沒有可辨識的論證結構（不是在主張／論證什麼）,因此無法產生論證圖。"
+                         "論證圖適合評論、立場、申論型內容；說明或敘述型內容請改用其他類型。")
+            else:
+                L.append("（產生圖表時驗證失敗,已略過以免輸出壞掉的圖。可重試或指定其他類型。）")
         else:
             L.append(result["artifact"])
         return "\n".join(L)

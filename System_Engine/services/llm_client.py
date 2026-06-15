@@ -49,9 +49,13 @@ from services.trace_store import TraceStore, elapsed_ms, usage_to_counts
 
 _OPENAI_COMPATIBLE_PROVIDERS = frozenset({"vllm", "ollama"})
 
-_LANG_HINT_MAP = {
-    "Traditional Chinese (繁體中文)": {"file": "檔案名稱", "content": "素材內容"},
-    "Japanese (日本語)":              {"file": "ファイル名", "content": "素材内容"},
+# User-message field labels, keyed by the localized-content suffix (".zh"/".ja")
+# from `_localized_suffix()`. Keying on the suffix — not on `_get_lang_hint()`'s
+# free text — avoids a silent fallback to English labels (the hint string is
+# longer than any map key, so the old `_get_lang_hint()` lookup never matched).
+_LABELS_BY_SUFFIX = {
+    ".zh": {"file": "檔案名稱", "content": "素材內容"},
+    ".ja": {"file": "ファイル名", "content": "素材内容"},
 }
 _DEFAULT_LABELS = {"file": "Filename", "content": "Content"}
 
@@ -572,13 +576,26 @@ class LLMClient:
             if require_yaml_header
             else "Do not include YAML frontmatter unless the user explicitly asks for it."
         )
+        # Leading language banner — first thing the model reads. Personas,
+        # operations and several templates are English-only; without an explicit
+        # override the model copies their English section headers verbatim and
+        # the whole page can drift to English. Stated first AND restated last
+        # (common_rules) so it survives the English bulk in the middle.
+        lang_banner = (
+            f"OUTPUT LANGUAGE (highest priority): write the ENTIRE response — every section "
+            f"heading and all body text — in {lang_hint}. Any English headings or labels in the "
+            f"instructions/template below are illustrative only; translate them into {lang_hint}, "
+            f"never copy them verbatim."
+        )
         common_rules = (
-            f"\n## Output Language\nPlease output everything in {lang_hint}.{strict_hint}\n\n"
+            f"\n## Output Language\nOutput everything — including all section headings — in {lang_hint}. "
+            f"The section headers shown in the template are illustrative; render them in {lang_hint}, "
+            f"never reproduce them in English.{strict_hint}\n\n"
             f"## Task\n{instruction_type}\n\n{viz_instructions}\n\n{yaml_rule}"
         )
         sections = [s for s in (role_instructions, operation_instructions, template_instructions) if s]
         sections.append(common_rules)
-        prompt = "\n\n".join(sections)
+        prompt = lang_banner + "\n\n" + "\n\n".join(sections)
 
         resolution = self.capability_manager.resolve(
             persona=persona_resolved,
@@ -649,7 +666,7 @@ class LLMClient:
             persona=persona,
             forced_template=forced_template,
         )
-        labels = _LANG_HINT_MAP.get(self._get_lang_hint(), _DEFAULT_LABELS)
+        labels = _LABELS_BY_SUFFIX.get(self._localized_suffix(), _DEFAULT_LABELS)
 
         try:
             if image_path:
@@ -671,6 +688,10 @@ class LLMClient:
                 if context_hint:
                     user_text += f"[Context]: {context_hint}\n\n"
                 user_text += f"{labels['content']}:\n{markdown_content}"
+                # End-of-message language pin: the part path has no other
+                # user-turn reminder (unlike synthesis), and the directive in
+                # the system prompt can be outweighed by an English template.
+                user_text += f"\n\n（請以 {self._get_lang_hint()} 輸出整篇,包含所有章節標題。）"
                 response = self._complete_text(
                     system_prompt,
                     user_text,

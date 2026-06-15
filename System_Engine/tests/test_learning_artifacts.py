@@ -34,6 +34,43 @@ def test_classify_invalid_type_falls_to_none():
     assert classify_structure(llm, "x")["type"] == "none"
 
 
+# ── classify top-2 (ranked) ──────────────────────────────────────────────
+
+def test_classify_structures_ranked():
+    from services.learning_artifacts import classify_structures
+    llm = FakeLLM(classify={"ranked": [
+        {"type": "flowchart", "confidence": 0.9, "reason": "流程"},
+        {"type": "mindmap", "confidence": 0.7, "reason": "階層"},
+    ]})
+    out = classify_structures(llm, "x")
+    assert [c["type"] for c in out] == ["flowchart", "mindmap"]
+
+
+def test_classify_structures_drops_none_when_real_present():
+    from services.learning_artifacts import classify_structures
+    llm = FakeLLM(classify={"ranked": [
+        {"type": "timeline", "confidence": 0.8},
+        {"type": "none", "confidence": 0.5},
+    ]})
+    assert [c["type"] for c in classify_structures(llm, "x")] == ["timeline"]
+
+
+def test_classify_structures_legacy_single_dict():
+    # Back-compat: a legacy {"type": ...} reply still yields a 1-item ranking.
+    from services.learning_artifacts import classify_structures
+    llm = FakeLLM(classify={"type": "quadrant", "confidence": 0.8})
+    assert [c["type"] for c in classify_structures(llm, "x")] == ["quadrant"]
+
+
+def test_classify_structures_dedups():
+    from services.learning_artifacts import classify_structures
+    llm = FakeLLM(classify={"ranked": [
+        {"type": "flowchart", "confidence": 0.9},
+        {"type": "flowchart", "confidence": 0.6},
+    ]})
+    assert [c["type"] for c in classify_structures(llm, "x")] == ["flowchart"]
+
+
 # ── build_artifact ───────────────────────────────────────────────────────
 
 def test_forced_table_renders_table():
@@ -167,3 +204,15 @@ def test_maybe_section_none_attaches_nothing(monkeypatch):
     monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", True)
     llm = FakeLLM(classify={"type": "none", "confidence": 0.0})
     assert maybe_artifact_section(llm, "unstructured prose") == ""
+
+
+def test_maybe_section_emits_two_when_two_render(monkeypatch):
+    import services.learning_artifacts as la
+    monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", True)
+    monkeypatch.setattr(la, "build_artifacts", lambda llm, content: [
+        {"type": "flowchart", "reason": "", "artifact": "```mermaid\nflowchart TD\nA-->B\n```"},
+        {"type": "mindmap", "reason": "", "artifact": "```mermaid\nmindmap\n  root((X))\n```"},
+    ])
+    section = la.maybe_artifact_section(object(), "content")
+    assert section.count("## 🖼️ 學習輔助") == 2
+    assert "（flowchart）" in section and "（mindmap）" in section

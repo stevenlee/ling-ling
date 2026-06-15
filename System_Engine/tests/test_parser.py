@@ -442,3 +442,85 @@ def test_mermaid_empty_label_preserved():
     out, changed = _quote_labels_in_line("A[]")
     assert out == "A[]"          # shape preserved, not dropped
     assert changed is False
+
+
+# ── mindmap: flowchart quoting must not corrupt indentation-based nodes ──
+
+def test_mindmap_strips_node_quotes():
+    from core.parser import repair_mermaid_mindmap_labels
+    text = '```mermaid\nmindmap\n  root(("主題"))\n    "分支A"\n    id["分支B"]\n```'
+    out, fixes = repair_mermaid_mindmap_labels(text)
+    assert '"' not in out
+    assert "root((主題))" in out and "分支A" in out and "id[分支B]" in out
+    assert any(f["type"] == "stripped_mindmap_quotes" for f in fixes)
+
+
+def test_mindmap_quote_strip_idempotent():
+    from core.parser import repair_mermaid_mindmap_labels
+    text = "```mermaid\nmindmap\n  root((主題))\n    分支A\n```"
+    out, fixes = repair_mermaid_mindmap_labels(text)
+    assert out == text and not fixes
+
+
+def test_label_quote_pass_skips_mindmap():
+    # The flowchart label-quoter must NOT add quotes inside a mindmap block.
+    from core.parser import repair_mermaid_label_quotes
+    text = "```mermaid\nmindmap\n  root((主題))\n    id[分支A]\n```"
+    out, fixes = repair_mermaid_label_quotes(text)
+    assert 'id["分支A"]' not in out and out == text
+
+
+def test_label_quote_pass_still_quotes_flowchart():
+    # Regression guard: flowchart blocks are still quoted as before.
+    from core.parser import repair_mermaid_label_quotes
+    text = "```mermaid\nflowchart TD\n  A[Hello] --> B[World]\n```"
+    out, _ = repair_mermaid_label_quotes(text)
+    assert 'A["Hello"]' in out and 'B["World"]' in out
+
+
+def test_full_pipeline_mindmap_unquoted():
+    # End-to-end: a mindmap with model-emitted quotes comes out clean.
+    from core.parser import run_markdown_quality_checks
+    text = '```mermaid\nmindmap\n  root(("成本病"))\n    "供給面"\n    "需求面"\n```'
+    cleaned, _ = run_markdown_quality_checks(text)
+    assert '"' not in cleaned
+    assert "root((成本病))" in cleaned
+
+
+# ── JSON extraction: LaTeX/illegal-backslash recovery ───────────────────
+# Regression for argument_map silently producing nothing: LaTeX math in a JSON
+# string value (`$\Delta \chi^2$`) is an illegal escape that breaks json.loads.
+
+def test_extract_json_object_recovers_latex_backslashes():
+    from core.parser import extract_json_object
+    raw = '```json\n{"claim": "模型 $\\Delta \\chi^2$ 顯著", "grounds": ["\\mathcal{M}_0"]}\n```'
+    out = extract_json_object(raw)
+    assert out.get("claim", "").startswith("模型")
+    assert "mathcal" in out.get("grounds", [""])[0]
+
+
+def test_extract_json_object_latex_simple():
+    from core.parser import extract_json_object
+    out = extract_json_object('{"x": "value with \\alpha and \\beta math"}')
+    assert "alpha" in out.get("x", "")
+
+
+def test_extract_json_array_recovers_latex():
+    from core.parser import extract_json_array
+    out = extract_json_array('[{"t": "$\\Delta$ test"}, {"t": "ok"}]')
+    assert len(out) == 2 and "test" in out[0]["t"]
+
+
+def test_extract_json_valid_unaffected():
+    # Strict-parse-first: legal escapes (\n, \", \\) must be preserved exactly.
+    from core.parser import extract_json_object
+    out = extract_json_object('{"a": "line1\\nline2", "b": "say \\"hi\\"", "c": "back\\\\slash"}')
+    assert out["a"] == "line1\nline2"
+    assert out["b"] == 'say "hi"'
+    assert out["c"] == "back\\slash"
+
+
+def test_extract_json_embedded_object_with_latex():
+    from core.parser import extract_json_object
+    out = extract_json_object('preamble text {"claim": "用 \\sigma 表示"} trailing')
+    assert "sigma" in out.get("claim", "")

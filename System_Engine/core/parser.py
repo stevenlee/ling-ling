@@ -739,8 +739,32 @@ def repair_mermaid_quoted_endpoint_labels(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+def _peek_mermaid_kind(lines: list[str], fence_idx: int) -> str:
+    """Leading keyword of the first non-empty content line in the fence opened
+    at ``lines[fence_idx]`` (the ```` ```mermaid ```` line), lowercased.
+
+    Used so flowchart-oriented repairs can recognise — and bail out of — blocks
+    whose syntax they'd corrupt (notably ``mindmap``, which is indentation-based
+    and rejects flowchart-style quoted labels). Returns '' if the fence is empty.
+    """
+    for look in lines[fence_idx + 1:]:
+        s = look.strip()
+        if not s:
+            continue
+        if s == "```":
+            return ""
+        return s.split()[0].lower()
+    return ""
+
+
 def repair_mermaid_label_quotes(text: str) -> tuple[str, list[dict]]:
-    """Quote bare labels inside mermaid node shapes within fenced blocks."""
+    """Quote bare labels inside mermaid node shapes within fenced blocks.
+
+    Skips ``mindmap`` blocks: their nodes are indentation-based, and adding
+    flowchart-style quotes (``"分支"`` / ``id["分支"]``) is a parse error that
+    takes the whole diagram down. Mindmap quote cleanup is handled by
+    ``repair_mermaid_mindmap_labels``.
+    """
     if not text:
         return "", []
 
@@ -748,19 +772,22 @@ def repair_mermaid_label_quotes(text: str) -> tuple[str, list[dict]]:
     out: list[str] = []
     fixes: list[dict] = []
     in_mermaid = False
+    skip_block = False
 
     for idx, line in enumerate(lines):
         stripped = line.strip().lower()
         if not in_mermaid and stripped == "```mermaid":
             in_mermaid = True
+            skip_block = _peek_mermaid_kind(lines, idx).startswith("mindmap")
             out.append(line)
             continue
         if in_mermaid and stripped == "```":
             in_mermaid = False
+            skip_block = False
             out.append(line)
             continue
 
-        if in_mermaid:
+        if in_mermaid and not skip_block:
             m = _QUOTED_NODE_DEF_RE.match(line)
             pre_processed = line
             if m:
@@ -784,6 +811,56 @@ def repair_mermaid_label_quotes(text: str) -> tuple[str, list[dict]]:
                 out.append(new_line)
             else:
                 out.append(line)
+        else:
+            out.append(line)
+
+    return "\n".join(out), fixes
+
+
+def repair_mermaid_mindmap_labels(text: str) -> tuple[str, list[dict]]:
+    r"""Strip double quotes from ``mindmap`` node text inside mermaid fences.
+
+    Mermaid ``mindmap`` is indentation-based and does NOT use flowchart-style
+    quoted labels. A node written ``"分支"`` or ``id["分支"]`` (whether emitted by
+    the model or introduced by an upstream quote pass) is a parse error that
+    takes the whole diagram down. Mindmap text renders fine unquoted (CJK
+    included), so we drop ``"`` from every mindmap content line — the root shape
+    ``root(("主題"))`` collapses to the valid ``root((主題))``.
+
+    Scoped to ``mindmap`` blocks only; other diagram kinds are untouched.
+    Idempotent (a second pass finds no quotes left to strip).
+    """
+    if not text or '"' not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+    is_mindmap = False
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+            is_mindmap = _peek_mermaid_kind(lines, idx).startswith("mindmap")
+            out.append(line)
+            continue
+        if in_mermaid and stripped == "```":
+            in_mermaid = False
+            is_mindmap = False
+            out.append(line)
+            continue
+
+        if in_mermaid and is_mindmap and '"' in line:
+            new_line = line.replace('"', "")
+            fixes.append(_make_fix(
+                "stripped_mindmap_quotes",
+                line=idx + 1,
+                before=line,
+                after=new_line,
+            ))
+            out.append(new_line)
         else:
             out.append(line)
 
@@ -1248,6 +1325,7 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
         repair_mermaid_double_quotes,
         repair_mermaid_quoted_endpoint_labels,
         repair_mermaid_label_quotes,
+        repair_mermaid_mindmap_labels,
         repair_mermaid_latex_labels,
         repair_markdown_tables,
         repair_markdown_bold_spacing,
@@ -1311,13 +1389,34 @@ def _candidate_payloads(text: str) -> Iterable[str]:
     yield text.strip()
 
 
+# A backslash that does NOT begin a valid JSON escape (`\" \\ \/ \b \f \n \r \t`
+# or `\uXXXX`). LLMs routinely emit LaTeX/math (`$\Delta \chi^2$`, `\mathcal`,
+# `\frac`) — and Windows paths — inside JSON string values, where `\D` / `\c`
+# are illegal escapes that make json.loads reject the WHOLE object. argument_map
+# on academic content was silently producing nothing for exactly this reason.
+_ILLEGAL_JSON_ESCAPE_RE = re.compile(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})')
+
+
+def _loads_lenient(candidate: str):
+    """json.loads, retried once with illegal backslash-escapes doubled.
+
+    Strict parse first (so valid JSON is never altered); only on failure do we
+    repair `\\X`→`\\\\X` for any X that isn't a legal escape and reparse. Returns
+    the parsed value or raises the original error."""
+    try:
+        return json.loads(candidate)
+    except Exception:
+        repaired = _ILLEGAL_JSON_ESCAPE_RE.sub(r'\\\\', candidate)
+        return json.loads(repaired)   # may raise — caller handles
+
+
 def extract_json_array(text: str) -> list:
     """Extract a JSON array of dicts from LLM output."""
     if not text:
         return []
     for candidate in _candidate_payloads(text):
         try:
-            parsed = json.loads(candidate)
+            parsed = _loads_lenient(candidate)
         except Exception:
             parsed = None
         if isinstance(parsed, list):
@@ -1325,7 +1424,7 @@ def extract_json_array(text: str) -> list:
         match = re.search(r'\[.*\]', candidate, re.DOTALL)
         if match:
             try:
-                parsed = json.loads(match.group(0))
+                parsed = _loads_lenient(match.group(0))
             except Exception:
                 continue
             if isinstance(parsed, list):
@@ -1340,18 +1439,21 @@ def extract_json_object(text: str) -> dict:
     decoder = json.JSONDecoder()
     for candidate in _candidate_payloads(text):
         try:
-            parsed = json.loads(candidate)
+            parsed = _loads_lenient(candidate)
         except Exception:
             parsed = None
         if isinstance(parsed, dict):
             return parsed
-        for match in re.finditer(r'\{', candidate):
-            try:
-                parsed, _ = decoder.raw_decode(candidate[match.start():])
-            except Exception:
-                continue
-            if isinstance(parsed, dict):
-                return parsed
+        # Embedded object: raw_decode from each `{`, strict first then with
+        # illegal backslash-escapes repaired (same LaTeX/path failure mode).
+        for variant in (candidate, _ILLEGAL_JSON_ESCAPE_RE.sub(r'\\\\', candidate)):
+            for match in re.finditer(r'\{', variant):
+                try:
+                    parsed, _ = decoder.raw_decode(variant[match.start():])
+                except Exception:
+                    continue
+                if isinstance(parsed, dict):
+                    return parsed
     return {}
 
 

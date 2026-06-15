@@ -46,6 +46,9 @@ from services.text_splitter import TextSplitter
 _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
 _FRONTMATTER_RE = re.compile(r'^---\s*\n.*?\n---\s*\n?', re.DOTALL)
 _PART_DIGEST_HEADER = "## 🧩 Part Digest Appendix"
+# Auto-attached learning-artifact section (visual_router). Prefix shared by all
+# emitted sections so re-runs can strip and regenerate them idempotently.
+_ARTIFACT_HEADER = "## 🖼️ 學習輔助"
 _CRITIQUE_HEADER = "## 🔍 Quality Critique"
 # Verdicts come from Operations/critique.md ("keep, revise, or reject").
 # The model is allowed to use either English or zh-translated equivalents, and
@@ -614,6 +617,7 @@ class IngestionPipeline:
             part_digests.append(digest)
             self._append_part_digest_to_note(
                 result, digest, section_path=part_info.get("section_path"),
+                part_content=part_content,
             )
             self._index_digest_facets(
                 result.get("_page_path"), result.get("_title"), digest,
@@ -929,7 +933,10 @@ class IngestionPipeline:
         out.append("")
         return out
 
-    def _append_part_digest_to_note(self, ingest_result: dict, digest, section_path: list | None = None) -> None:
+    def _append_part_digest_to_note(
+        self, ingest_result: dict, digest, section_path: list | None = None,
+        part_content: str | None = None,
+    ) -> None:
         page_path_value = ingest_result.get("_page_path") if isinstance(ingest_result, dict) else None
         if not page_path_value:
             return
@@ -939,14 +946,27 @@ class IngestionPipeline:
             return
 
         appendix = self.format_digest_appendix([digest])
-        if not appendix:
+        # Per-part learning artifact (top-2 visuals), gated by visual_router;
+        # "" and zero LLM calls when off → byte-identical default behaviour.
+        artifact_section = ""
+        if part_content:
+            from services.learning_artifacts import maybe_artifact_section
+            artifact_section = maybe_artifact_section(self.llm, part_content)
+        if not appendix and not artifact_section:
             return
 
         content = page_path.read_text(encoding="utf-8").rstrip()
-        if _PART_DIGEST_HEADER in content:
-            content = content.split(_PART_DIGEST_HEADER, 1)[0].rstrip()
+        # Strip any previously-appended auto sections (whichever comes first) so
+        # re-ingesting the same part regenerates rather than duplicates them.
+        cut = len(content)
+        for marker in (_ARTIFACT_HEADER, _PART_DIGEST_HEADER):
+            i = content.find(marker)
+            if i != -1:
+                cut = min(cut, i)
+        content = content[:cut].rstrip()
 
-        updated = f"{content}\n\n{appendix}\n"
+        tail = f"{artifact_section}{appendix}".strip()
+        updated = f"{content}\n\n{tail}\n"
         page_path.write_text(updated, encoding="utf-8")
 
         title = ingest_result.get("_title") or page_path.stem
