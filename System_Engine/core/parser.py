@@ -9,6 +9,7 @@ The public surface (callers across agents/, services/, watchers/, maintenance/):
     repair_mermaid_fences(text)             -> (str, list[dict])
     repair_mermaid_quoted_endpoint_labels(text) -> (str, list[dict])
     repair_mermaid_label_quotes(text)       -> (str, list[dict])
+    repair_mermaid_quadrant_points(text)    -> (str, list[dict])
     repair_mermaid_latex_labels(text)       -> (str, list[dict])
     repair_latex_carriage_returns(text)     -> (str, list[dict])
     repair_latex_escape_collisions(text)    -> (str, list[dict])
@@ -176,6 +177,13 @@ _MERMAID_CONN_END_QUOTED_LABEL_RE = re.compile(
 # left to the strip pass — `"A1" --> "B1"` → `A1 --> B1`, which renders
 # identically and keeps the id stable for bare-id cross-references elsewhere.
 _MERMAID_BARE_ID_RE = re.compile(r'^[\w\-一-鿿]+$')
+# quadrantChart data point: `<name>: [x, y]`. Mermaid requires the point name in
+# double quotes; the LLM routinely drops them (esp. for CJK/space names), which
+# fails the whole chart. Lookahead skips lines whose name is already quoted or a
+# `%%` comment. Trailing styling (e.g. ` radius: 5`) after the coords is allowed.
+_MERMAID_QUADRANT_POINT_RE = re.compile(
+    r'^(\s*)([^"%\s].*?)\s*:\s*(\[\s*[\d.]+\s*,\s*[\d.]+\s*\].*)$'
+)
 # Pre-scan: collect ids already used in a fence so a synthesized id can't
 # collide with an author's node. Leading id, or id immediately before a shape.
 _MERMAID_EXISTING_ID_RE = re.compile(
@@ -867,6 +875,61 @@ def repair_mermaid_mindmap_labels(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+# ─── Mermaid: quadrantChart point quoting ─────────────────────────────
+
+
+def repair_mermaid_quadrant_points(text: str) -> tuple[str, list[dict]]:
+    r"""Wrap ``quadrantChart`` data-point names in double quotes.
+
+    A point is written ``"<name>": [x, y]``; Mermaid requires the quotes and the
+    LLM routinely omits them (``Campaign A: [0.3, 0.6]``), which fails the whole
+    chart — especially for names with spaces or CJK. We quote the bare name on
+    every point line inside a ``quadrantChart`` fence, leaving the axis / title /
+    ``quadrant-N`` definition lines (no ``: [x, y]`` shape) untouched.
+
+    Scoped to ``quadrantChart`` blocks only. Idempotent (already-quoted names are
+    skipped by the regex lookahead).
+    """
+    if not text or "[" not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+    is_quadrant = False
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+            is_quadrant = _peek_mermaid_kind(lines, idx).startswith("quadrantchart")
+            out.append(line)
+            continue
+        if in_mermaid and stripped == "```":
+            in_mermaid = False
+            is_quadrant = False
+            out.append(line)
+            continue
+
+        if in_mermaid and is_quadrant:
+            m = _MERMAID_QUADRANT_POINT_RE.match(line)
+            if m:
+                new_line = f'{m.group(1)}"{m.group(2)}": {m.group(3)}'
+                if new_line != line:
+                    fixes.append(_make_fix(
+                        "quoted_quadrant_point",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    ))
+                    out.append(new_line)
+                    continue
+        out.append(line)
+
+    return "\n".join(out), fixes
+
+
 # ─── Mermaid: LaTeX-in-label degradation ──────────────────────────────
 
 
@@ -1326,6 +1389,7 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
         repair_mermaid_quoted_endpoint_labels,
         repair_mermaid_label_quotes,
         repair_mermaid_mindmap_labels,
+        repair_mermaid_quadrant_points,
         repair_mermaid_latex_labels,
         repair_markdown_tables,
         repair_markdown_bold_spacing,

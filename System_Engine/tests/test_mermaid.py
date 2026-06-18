@@ -19,6 +19,7 @@ from core.parser import (
     repair_mermaid_fences,
     repair_mermaid_label_quotes,
     repair_mermaid_latex_labels,
+    repair_mermaid_quadrant_points,
     run_markdown_quality_checks,
 )
 
@@ -212,6 +213,54 @@ class TestLatexLabels:
         body = r'graph TD\nE{"驗證: $$\\mathcal{T}_{New} \\cong \\mathcal{M}_0?$$"}'
         once, _ = self._strip(body)
         twice, fixes = repair_mermaid_latex_labels(once)
+        assert once == twice
+        assert fixes == []
+
+
+# ── quadrantChart point quoting ────────────────────────────────────
+
+class TestQuadrantPoints:
+    """Mermaid quadrantChart point names must be double-quoted; the LLM
+    routinely drops the quotes, which fails the whole chart."""
+
+    def _quote(self, body):
+        text = f"```mermaid\n{body}\n```"
+        return repair_mermaid_quadrant_points(text)
+
+    def test_quotes_bare_point_name(self):
+        result, fixes = self._quote("quadrantChart\n    Campaign B: [0.45, 0.23]")
+        assert '    "Campaign B": [0.45, 0.23]' in result
+        assert any(f["type"] == "quoted_quadrant_point" for f in fixes)
+
+    def test_quotes_cjk_name_with_space(self):
+        result, _ = self._quote("quadrantChart\n    重構模組 A: [0.8, 0.9]")
+        assert '    "重構模組 A": [0.8, 0.9]' in result
+
+    def test_already_quoted_untouched(self):
+        text = '```mermaid\nquadrantChart\n    "已正確": [0.1, 0.1]\n```'
+        result, fixes = repair_mermaid_quadrant_points(text)
+        assert result == text
+        assert fixes == []
+
+    def test_axis_and_quadrant_lines_untouched(self):
+        body = ("quadrantChart\n    title 影響力\n    x-axis Low --> High\n"
+                "    quadrant-1 立即處理\n    P: [0.5, 0.5]")
+        result, _ = self._quote(body)
+        assert "    title 影響力" in result
+        assert "    x-axis Low --> High" in result
+        assert "    quadrant-1 立即處理" in result
+        assert '    "P": [0.5, 0.5]' in result
+
+    def test_non_quadrant_block_untouched(self):
+        text = "```mermaid\nflowchart TD\n    A: [0.1, 0.2]\n```"
+        result, fixes = repair_mermaid_quadrant_points(text)
+        assert result == text
+        assert fixes == []
+
+    def test_idempotent(self):
+        body = "quadrantChart\n    Campaign B: [0.45, 0.23]\n    重構 A: [0.8, 0.9]"
+        once, _ = self._quote(body)
+        twice, fixes = repair_mermaid_quadrant_points(once)
         assert once == twice
         assert fixes == []
 
