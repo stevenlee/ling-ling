@@ -88,6 +88,11 @@ def _pair_key(claim_a: str, claim_b: str) -> str:
 def _cosine(a, b) -> float:
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
+    # Defensive: a model switch (e.g. bge-m3 768→1024) can leave stale-dim
+    # vectors in the embedding cache. Mismatched shapes are "not a neighbour",
+    # never a crash. _refresh_page_embeddings re-embeds them to self-heal.
+    if a.shape != b.shape:
+        return 0.0
     denom = float(np.linalg.norm(a) * np.linalg.norm(b))
     if denom == 0.0:
         return 0.0
@@ -162,15 +167,23 @@ class _Consolidator:
 
     def _refresh_page_embeddings(self) -> None:
         cached = self.state.setdefault("claim_embeddings", {})
+        # Live embedding width (one probe per run). A model switch (bge-m3
+        # 768→1024) leaves stale-dim vectors in the cache that match on
+        # `updated`/`claim_hash` yet crash cosine — re-embed them. None when
+        # embeddings are unavailable (mock LLMs) → skip the dim check.
+        probe = self._embed("dimension probe")
+        live_dim = len(probe) if probe is not None else None
         for page in self.pages:
             entry = cached.get(page.claim_id)
             # Invalidate on `updated` OR on the claim text itself — an
             # external editor (Obsidian) can change the Core Claim without
-            # bumping frontmatter `updated` (review nitpick, phase-2 R1).
+            # bumping frontmatter `updated` (review nitpick, phase-2 R1) — OR
+            # on a dimension change from a model switch.
             if (
                 entry
                 and entry.get("updated") == page.updated
                 and entry.get("claim_hash") == _claim_hash(page.claim)
+                and (live_dim is None or len(entry.get("embedding") or ()) == live_dim)
             ):
                 self.embeddings[page.claim_id] = entry["embedding"]
                 continue

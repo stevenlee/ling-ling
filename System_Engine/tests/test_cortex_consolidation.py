@@ -337,6 +337,31 @@ class TestQuotasAndCache:
         entries = list(state["claim_embeddings"].values())
         assert any(e["embedding"] == [0.0, 1.0] for e in entries)  # BETA vector
 
+    def test_stale_dim_cached_embedding_is_reembedded_not_crashed(self, tmp_path):
+        """A model switch (bge-m3 768→1024) leaves stale-dim vectors in the
+        embedding cache. Comparing a live-dim claim against them used to crash
+        cosine; now they re-embed to the live width and the run survives."""
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "n1.md", body="MARKER-A")
+        llm = FakeLLM(claims_map={"MARKER-A": [{"claim": "ALPHA original claim.", "summary": "s"}]})
+        run_consolidation(llm, FakeRAG(), **env)
+
+        # Simulate an old-model embedding left behind by a dimension switch.
+        state = json.loads(env["state_file"].read_text())
+        cid = next(iter(state["claim_embeddings"]))
+        state["claim_embeddings"][cid]["embedding"] = [0.1, 0.2, 0.3]  # 3-dim, stale
+        env["state_file"].write_text(json.dumps(state), encoding="utf-8")
+
+        _write_insight(env["insights_dir"], "n2.md", body="MARKER-B")
+        llm2 = FakeLLM(claims_map={"MARKER-B": [{"claim": "NEARALPHA cousin claim.", "summary": "s"}]})
+        result = run_consolidation(llm2, FakeRAG(), **env)
+
+        assert result.status == "succeeded"          # no ValueError crash
+        assert result.insights_processed == 1
+        # The stale 3-dim vector was re-embedded back to the live 2-dim width.
+        state = json.loads(env["state_file"].read_text())
+        assert all(len(e["embedding"]) == 2 for e in state["claim_embeddings"].values())
+
     def test_corrupted_state_and_cache_recover(self, tmp_path):
         env = _env(tmp_path)
         env["state_file"].parent.mkdir(parents=True, exist_ok=True)
