@@ -6,6 +6,12 @@ digest_limit: 8192
 digest_overlap: 1024
 dreaming_from: 3
 dreaming_to: 5
+daydream: true
+daydream_spontaneous: true
+daydream_consolidation_budget: 10
+daydream_bite_adjudications: 4
+daydream_insight_budget: 1
+daydream_spontaneous_budget: 1
 self_healing: true
 creativity: 0.4
 max_output: 16384

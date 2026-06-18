@@ -63,7 +63,14 @@ def main():
     from maintenance.facet_backfill import FacetBackfillPump
     facet_pump = FacetBackfillPump(llm_client, rag_manager)
     global_busy_state.register_idle_callback(facet_pump.on_idle)
-    
+
+    # 3.3. Daydream pump — daytime makeup + spontaneous reflection. Registered
+    # AFTER the facet pump so it is the lowest priority of all idle callbacks:
+    # user work and facet backfill always get a turn first.
+    from maintenance.daydream import DaydreamPump
+    daydream_pump = DaydreamPump(llm_client, rag_manager)
+    global_busy_state.register_idle_callback(daydream_pump.on_idle)
+
     # 4. Schedule Watchdogs
     observer = watchdog.observers.Observer()
     
@@ -102,9 +109,10 @@ def main():
     event_handler_clippings.start()
 
     # 5.1. Startup kick: covers the daemon-starts-idle case where no
-    # busy→idle edge would otherwise wake the pump.
+    # busy→idle edge would otherwise wake the pumps.
     facet_pump.kick()
-    
+    daydream_pump.kick()
+
     ui.info(f"Provider: [bold cyan]{LLM_PROVIDER}[/bold cyan] | Model: [bold green]{llm_client.model}[/bold green] | Role: [bold yellow]{settings.AGENT_ROLE}[/bold yellow]")
     ui.info("☀️ 반가워요!(Ban-ga-wo-yo!) (๑˃̵ᴗ˂̵)و")
     
@@ -115,6 +123,8 @@ def main():
         observer.stop()
         event_handler_prompts.stop()
         event_handler_clippings.stop()
+        facet_pump.stop()
+        daydream_pump.stop()
         ui.stop()
         ui.info("まだね~ Another 40-hours-practice day! (๑˃̵ᴗ˂̵)و ✨")
     observer.join()

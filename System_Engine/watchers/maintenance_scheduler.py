@@ -73,31 +73,10 @@ class MaintenanceScheduler(threading.Thread):
         insight_agent = InsightAgent(self.llm, self.rag)
 
         def daily_insight() -> MaintenanceResult:
-            # Doc-anchored by default: targeted montecarlo over seeds picked
-            # by the interest+exploration sampler. Vault-wide rumination
-            # measured poorly (80% broken links, refute coverage 0) and is
-            # demoted to the weekly task below.
-            from core.config import INSIGHT_SEED_TARGETS
-            from services.seed_sampler import SeedSampler
-
-            sampler = SeedSampler(self.rag, getattr(self.llm, "trace_store", None))
-            targets = sampler.select_targets(INSIGHT_SEED_TARGETS)
-            if not targets:
-                insight_agent.generate_full_insight(
-                    user_directive="Scheduled daily comprehensive reflection."
-                )
-                return MaintenanceResult(
-                    "succeeded", "No seed targets; fell back to full insight."
-                )
-            links = " ".join(f"[[{t}]]" for t in targets)
-            insight_agent.generate_insight(
-                "montecarlo",
-                user_directive=f"Scheduled doc-anchored insight. {links}",
-                target_titles=targets,
-            )
-            return MaintenanceResult(
-                "succeeded", f"Doc-anchored insight generated for: {', '.join(targets)}."
-            )
+            # Shared with the daytime DaydreamPump — single generation path.
+            from maintenance.daily_insight import run_daily_insight
+            result = run_daily_insight(self.llm, self.rag)
+            return MaintenanceResult(result.status, result.summary)
 
         def weekly_full_insight() -> MaintenanceResult:
             insight_agent.generate_full_insight(

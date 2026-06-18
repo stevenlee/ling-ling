@@ -417,6 +417,29 @@ def _is_candidate(meta: dict) -> bool:
     return True
 
 
+def has_pending_insights(insights_dir: Path = None, state_file: Path = None) -> bool:
+    """Cheap predicate: does any unprocessed insight with healthy signals await
+    consolidation? Mirrors run_consolidation's candidate gate so the daytime
+    DaydreamPump and the nightly pass share one definition of "owed" — and
+    returns on the first hit instead of scanning the whole directory."""
+    insights_dir = insights_dir or INSIGHTS_DIR
+    state_file = state_file or CORTEX_STATE_FILE
+    if not insights_dir.exists():
+        return False
+    state = _load_json(state_file, {})
+    processed = state.get("processed", {}) if isinstance(state, dict) else {}
+    for path in sorted(insights_dir.glob("*.md")):
+        if path.name in processed:
+            continue
+        try:
+            meta = parse_markdown_metadata(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if _is_candidate(meta):
+            return True
+    return False
+
+
 def _insight_sources(meta: dict, body: str, pages_dir: Path, notes_dir: Path) -> list[str]:
     sources = []
     for key in _SOURCE_KEYS:

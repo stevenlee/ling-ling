@@ -117,6 +117,14 @@ FACET_BACKFILL_DAILY_BUDGET     = int(os.getenv("FACET_BACKFILL_DAILY_BUDGET", "
 FACET_BACKFILL_MAX_ATTEMPTS     = int(os.getenv("FACET_BACKFILL_MAX_ATTEMPTS", "3"))
 FACET_BACKFILL_MIN_BYTES        = int(os.getenv("FACET_BACKFILL_MIN_BYTES", "400"))
 
+# ─── Daydream (daytime makeup + spontaneous reflection, idle, low-priority) ──
+# Night belongs to the scheduler's deep sleep (1–5am dreaming window). If that
+# window is busy the day's cognition is otherwise lost. The DaydreamPump runs
+# DURING THE DAY whenever idle, lowest priority of all idle callbacks, one
+# small bite per step. Its behavioural knobs (enabled / spontaneous / per-day
+# budgets) are Scripture-driven and hot-reloadable — see DynamicSettings below,
+# alongside dreaming_from/to. Only the state-file path lives here (infra).
+
 # ─── Cortex Memory Phase 1 ────────────────────────────────────────────
 INSIGHT_SIGNALS_ENABLED         = os.getenv("INSIGHT_SIGNALS_ENABLED", "true").lower() == "true"
 INSIGHT_REFUTE_ENABLED          = os.getenv("INSIGHT_REFUTE_ENABLED", "true").lower() == "true"
@@ -268,6 +276,7 @@ RETRIEVAL_BENCH_FILE = SCRATCH_DIR / "retrieval_bench.yml"
 RETRIEVAL_BENCH_AUTO_FILE = SCRATCH_DIR / "retrieval_bench_auto.yml"
 BENCH_HISTORY_FILE = DATABASE_DIR / "bench_history.json"
 FACET_BACKFILL_STATE_FILE = DATABASE_DIR / "facet_backfill_state.json"
+DAYDREAM_STATE_FILE = DATABASE_DIR / "daydream_state.json"
 CORTEX_STATE_FILE = DATABASE_DIR / "cortex_state.json"
 CORTEX_ADJUDICATION_CACHE = DATABASE_DIR / "cortex_adjudications.json"
 SEED_HISTORY_FILE = DATABASE_DIR / "seed_history.json"
@@ -313,6 +322,13 @@ class DynamicSettings:
         ("digest_min_factor",  "DIGEST_MIN_FACTOR",  float),
         ("dreaming_from",      "DREAMING_FROM",      int),
         ("dreaming_to",        "DREAMING_TO",        int),
+        # Daydream: daytime makeup + spontaneous reflection (sibling of dreaming):
+        ("daydream",                   "DAYDREAM_ENABLED",              bool),
+        ("daydream_spontaneous",       "DAYDREAM_SPONTANEOUS_ENABLED",  bool),
+        ("daydream_consolidation_budget", "DAYDREAM_CONSOLIDATION_BUDGET", int),
+        ("daydream_bite_adjudications",   "DAYDREAM_BITE_ADJUDICATIONS",   int),
+        ("daydream_insight_budget",       "DAYDREAM_INSIGHT_BUDGET",       int),
+        ("daydream_spontaneous_budget",   "DAYDREAM_SPONTANEOUS_BUDGET",   int),
         ("self_healing",       "SELF_HEALING",       bool),
         # Phase 6 learning-aid output preferences (user taste, hot-reloadable):
         ("visual_router",      "VISUAL_ROUTER_ENABLED", bool),
@@ -332,6 +348,14 @@ class DynamicSettings:
         self.DIGEST_MIN_FACTOR = 0.25       # min_size = target * factor
         self.DREAMING_FROM = 1
         self.DREAMING_TO = 5
+        # Daydream knobs (hot-reloadable). Daytime makeup + spontaneous
+        # reflection; per-day budgets bound the LLM spend.
+        self.DAYDREAM_ENABLED = True
+        self.DAYDREAM_SPONTANEOUS_ENABLED = True
+        self.DAYDREAM_CONSOLIDATION_BUDGET = 10   # insight-bites/day
+        self.DAYDREAM_BITE_ADJUDICATIONS = 4      # per-bite adjudication cap
+        self.DAYDREAM_INSIGHT_BUDGET = 1          # makeup generations/day
+        self.DAYDREAM_SPONTANEOUS_BUDGET = 1      # spontaneous generations/day
         self.SELF_HEALING = True
         self.CREATIVITY = 0.4
         self.MAX_OUTPUT = 4096
