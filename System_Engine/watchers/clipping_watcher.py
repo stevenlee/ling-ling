@@ -28,6 +28,7 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
     """
 
     _SUPPORTED_EXTENSIONS = {'.md', '.png', '.jpg', '.jpeg'}
+    _IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.tiff'}
 
     def __init__(self, llm_client, rag_manager):
         super().__init__()
@@ -255,12 +256,46 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
             dest = archive_dir / f"{filepath.stem}_{datetime.now().strftime('%Y%m%d-%H%M%S')}{filepath.suffix}"
         shutil.move(str(filepath), str(dest))
 
+    def _is_image_only_dir(self, d: Path) -> bool:
+        """True if d is a non-empty directory whose visible entries are all
+        image files. Guards the flat-layout sidecar fallback so we never sweep
+        an unrelated folder that merely shares the document's name."""
+        if not (d.exists() and d.is_dir()):
+            return False
+        entries = [p for p in d.iterdir() if not p.name.startswith(".")]
+        return bool(entries) and all(
+            p.is_file() and p.suffix.lower() in self._IMAGE_EXTENSIONS for p in entries
+        )
+
     def _archive_markdown_with_sidecar_images(self, filepath: Path):
+        parent, stem = filepath.parent, filepath.stem
         self._archive_processed_file(filepath, RAW_CONSOLIDATE_DIR)
-        sidecar_dir = filepath.parent / "images" / filepath.stem
-        if sidecar_dir.exists() and sidecar_dir.is_dir():
-            archive_dir = RAW_CONSOLIDATE_DIR / "images"
-            self._archive_processed_file(sidecar_dir, archive_dir)
+        archive_dir = RAW_CONSOLIDATE_DIR / "images"
+
+        # Canonical sidecar layout is Consolidate/images/<stem>/. An upstream
+        # transfer that drops the `images/` parent leaves a flat, doc-named
+        # Consolidate/<stem>/ of images instead (root-caused 2026-06-19 to a
+        # manual output_dir→Consolidate copy that grabbed the inner folder).
+        # Accept that layout too, but only when it's image-only so an unrelated
+        # same-named folder is never swept.
+        canonical = parent / "images" / stem
+        flat = parent / stem
+        if canonical.exists() and canonical.is_dir():
+            self._archive_processed_file(canonical, archive_dir)
+        elif self._is_image_only_dir(flat):
+            self._archive_processed_file(flat, archive_dir)
+
+        # Belt-and-suspenders: never let a mismatched layout accumulate
+        # silently. If anything named after this doc is still in Consolidate
+        # after archival, say so instead of leaving it to pile up.
+        for leftover in (parent / stem, parent / "images" / stem):
+            if leftover.exists():
+                ui.warning(
+                    f"Consolidate 仍殘留與「{stem}」同名的項目："
+                    f"{leftover.relative_to(parent)}（sidecar 圖片版型不符，"
+                    "已保留未搬移，請手動確認）"
+                )
+                break
 
     def process_clipping(self, filepath: Path):
         self.process_file(filepath)

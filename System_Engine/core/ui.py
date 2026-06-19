@@ -69,6 +69,9 @@ class LingLingUI:
     def error(self, message):
         console.print(f"[bold red]{ERROR_EMOJI} ERROR[/bold red] | {message}")
 
+    def warning(self, message):
+        console.print(f"[bold yellow]🔔 NOTE[/bold yellow] | {message}")
+
     def cmd_received(self, cmd_name):
         console.print(f"\n[bold yellow]📥 收到指令：[/bold yellow][white on blue] {cmd_name} [/white on blue]")
 

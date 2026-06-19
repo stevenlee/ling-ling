@@ -9,7 +9,70 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
+import watchers.clipping_watcher as cw_mod
 from watchers.clipping_watcher import ClippingWatcher
+
+
+def _archiver(tmp_path, monkeypatch):
+    """Minimal watcher + tmp archive root + captured warnings for the
+    sidecar-archival tests."""
+    raw = tmp_path / "raw_consolidate"
+    monkeypatch.setattr(cw_mod, "RAW_CONSOLIDATE_DIR", raw)
+    warnings = []
+    monkeypatch.setattr(cw_mod.ui, "warning", lambda m: warnings.append(m))
+    cons = tmp_path / "Consolidate"
+    cons.mkdir()
+    return ClippingWatcher.__new__(ClippingWatcher), raw, cons, warnings
+
+
+def _img(path: Path):
+    path.write_bytes(b"\xff\xd8\xff")  # suffix is what matters; content irrelevant
+
+
+def test_canonical_sidecar_layout_archived(tmp_path, monkeypatch):
+    w, raw, cons, warnings = _archiver(tmp_path, monkeypatch)
+    (cons / "images" / "Doc").mkdir(parents=True)
+    md = cons / "Doc.md"; md.write_text("# x", encoding="utf-8")
+    _img(cons / "images" / "Doc" / "a.jpeg")
+
+    w._archive_markdown_with_sidecar_images(md)
+
+    assert (raw / "Doc.md").exists()
+    assert (raw / "images" / "Doc" / "a.jpeg").exists()
+    assert not (cons / "images" / "Doc").exists()
+    assert warnings == []
+
+
+def test_flat_imageonly_folder_fallback_archived(tmp_path, monkeypatch):
+    """Upstream dropped the images/ parent → flat Consolidate/<stem>/ of
+    images. It must still be archived (and silently)."""
+    w, raw, cons, warnings = _archiver(tmp_path, monkeypatch)
+    (cons / "Doc").mkdir()
+    md = cons / "Doc.md"; md.write_text("# x", encoding="utf-8")
+    _img(cons / "Doc" / "_page_1_Picture_1.jpeg")
+
+    w._archive_markdown_with_sidecar_images(md)
+
+    assert (raw / "Doc.md").exists()
+    assert (raw / "images" / "Doc" / "_page_1_Picture_1.jpeg").exists()
+    assert not (cons / "Doc").exists()
+    assert warnings == []
+
+
+def test_flat_nonimage_folder_not_swept_but_warns(tmp_path, monkeypatch):
+    """A same-named folder that isn't image-only must NOT be swept — but the
+    leftover should be surfaced, not left silently."""
+    w, raw, cons, warnings = _archiver(tmp_path, monkeypatch)
+    (cons / "Doc").mkdir()
+    md = cons / "Doc.md"; md.write_text("# x", encoding="utf-8")
+    (cons / "Doc" / "notes.txt").write_text("keep me", encoding="utf-8")
+
+    w._archive_markdown_with_sidecar_images(md)
+
+    assert (raw / "Doc.md").exists()
+    assert not (raw / "images" / "Doc").exists()   # not swept
+    assert (cons / "Doc").exists()                  # left in place
+    assert warnings and "Doc" in warnings[0]        # but surfaced
 
 
 def _watcher():
