@@ -11,9 +11,12 @@ Keep this list aligned with watchers/prompt_watcher.py::INTENT_ROUTES.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from core.config import COMMAND_PREFIX
+
+_WIKILINK_RE = re.compile(r"\[\[(.*?)\]\]")
 
 
 @dataclass(frozen=True)
@@ -95,7 +98,12 @@ def build_command_file(spec: CommandSpec, values: dict, *, stamp: str) -> tuple[
 
     targets = values.get("targets") or []
     if isinstance(targets, str):
-        targets = [t.strip() for t in targets.replace(",", " ").split() if t.strip()]
+        # Titles contain spaces/parens (e.g. "X (Stitched)"), so NEVER split on
+        # whitespace. If the user typed Obsidian-style [[...]] links, extract
+        # those verbatim; otherwise the whole field is a single title.
+        s = targets.strip()
+        bracketed = [t.strip() for t in _WIKILINK_RE.findall(s)]
+        targets = bracketed if bracketed else ([s] if s else [])
     if targets:
         lines.append(" ".join(f"[[{t}]]" for t in targets))
 

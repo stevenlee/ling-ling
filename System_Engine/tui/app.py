@@ -67,7 +67,10 @@ class ComposeScreen(ModalScreen[str | None]):
                     opts = [(c, c) for c in f.choices]
                     w = Select(opts, prompt="(不指定)", allow_blank=True, id=f"f_{f.key}")
                 else:  # links / text
-                    placeholder = "DocA DocB (空白分隔)" if f.kind == "links" else (f.help or "")
+                    placeholder = (
+                        "整段=一個標題（含空白OK）；多個用 [[A]] [[B]]"
+                        if f.kind == "links" else (f.help or "")
+                    )
                     w = Input(placeholder=placeholder, id=f"f_{f.key}")
                 self._widgets[f.key] = w
                 yield w

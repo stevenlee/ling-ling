@@ -62,6 +62,25 @@ class TestCommandSpecsRoundTrip:
         assert "[[N]]" in content
         assert "as timeline" in content
 
+    def test_title_with_spaces_and_parens_survives_intact(self):
+        """REGRESSION: a single Input string with spaces/parens (e.g.
+        'X (Stitched)') must stay ONE target, not get split on whitespace."""
+        spec = next(s for s in COMMANDS if s.intent == "visualize")
+        title = "公部門人工智慧應用參考手冊 (Stitched)"
+        _, content = build_command_file(spec, {"targets": title}, stamp="t")
+        assert f"[[{title}]]" in content
+        # The real PromptWatcher wikilink extractor recovers the full title.
+        import re
+        found = re.findall(r"\[\[(.*?)\]\]", content)
+        assert found == [title]
+
+    def test_bracketed_multi_target_string_is_extracted(self):
+        spec = next(s for s in COMMANDS if s.intent == "merge")
+        _, content = build_command_file(
+            spec, {"targets": "[[A note]] [[B (Synthesis)]]"}, stamp="t")
+        import re
+        assert re.findall(r"\[\[(.*?)\]\]", content) == ["A note", "B (Synthesis)"]
+
     def test_fieldless_brain_op_is_filename_only(self):
         spec = next(s for s in COMMANDS if s.intent == "consolidate")
         fn, content = build_command_file(spec, {}, stamp="t")
