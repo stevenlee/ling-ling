@@ -197,6 +197,69 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 
+class TestPromptWatcherBrainOps:
+    def test_detect_intent_routes_brain_ops(self):
+        w = PromptWatcher(MagicMock(), MagicMock())
+        cases = {
+            "@ling-dream.md": "dream",
+            "@ling-consolidate.md": "consolidate",
+            "@ling-decay.md": "decay",
+            "@ling-ledger.md": "ledger",
+            "@ling-assess.md": "assess",
+            "@ling-resynthesize.md": "resynthesize",
+        }
+        for name, intent in cases.items():
+            assert w._detect_intent(name.lower(), "") == intent
+
+    def test_consolidate_command_invokes_run_consolidation(self, monkeypatch, tmp_path):
+        import maintenance.cortex_consolidation as cc
+        calls = []
+
+        def fake(llm, rag, **kw):
+            calls.append((llm, rag))
+            return SimpleNamespace(status="succeeded", message="2 new claim(s)")
+
+        monkeypatch.setattr(cc, "run_consolidation", fake)
+
+        mock_llm = MagicMock(); mock_llm.provider = "vllm"; mock_llm.model = "m"
+        w = PromptWatcher(mock_llm, MagicMock())
+        monkeypatch.setattr(w, "_archive_raw", MagicMock())
+        out = tmp_path / "from"; out.mkdir()
+        monkeypatch.setattr("watchers.prompt_watcher.FROM_LLM_DIR", out)
+
+        f = tmp_path / "@ling-consolidate.md"; f.write_text("go", encoding="utf-8")
+        w.process_prompt(f)
+
+        assert len(calls) == 1                      # ran the real maintenance fn
+        reports = list(out.iterdir())
+        assert reports and "admin-rpt" in reports[0].name
+        assert "2 new claim(s)" in reports[0].read_text(encoding="utf-8")
+
+    def test_resynthesize_copies_source_and_images_into_consolidate(self, monkeypatch, tmp_path):
+        raw = tmp_path / "raw_consolidate"
+        (raw / "images" / "MyDoc").mkdir(parents=True)
+        (raw / "MyDoc.md").write_text("# doc", encoding="utf-8")
+        (raw / "images" / "MyDoc" / "a.jpeg").write_bytes(b"\xff\xd8\xff")
+        cons = tmp_path / "Consolidate"
+        monkeypatch.setattr("core.config.RAW_CONSOLIDATE_DIR", raw)
+        monkeypatch.setattr("core.config.CONSOLIDATE_DIR", cons)
+
+        w = PromptWatcher(MagicMock(), MagicMock())
+        msg = w._resynthesize(["MyDoc"])
+
+        assert (cons / "MyDoc.md").exists()                       # source re-queued
+        assert (cons / "images" / "MyDoc" / "a.jpeg").exists()    # sidecar restored
+        assert "MyDoc" in msg
+
+    def test_resynthesize_reports_missing_source(self, monkeypatch, tmp_path):
+        raw = tmp_path / "raw_consolidate"; raw.mkdir()
+        monkeypatch.setattr("core.config.RAW_CONSOLIDATE_DIR", raw)
+        monkeypatch.setattr("core.config.CONSOLIDATE_DIR", tmp_path / "Consolidate")
+        w = PromptWatcher(MagicMock(), MagicMock())
+        msg = w._resynthesize(["Ghost"])
+        assert "找不到" in msg and "Ghost" in msg
+
+
 class TestPromptWatcherWorker:
     def _watcher(self):
         return PromptWatcher(MagicMock(), MagicMock())

@@ -45,12 +45,24 @@ INTENT_ROUTES = [
     (["tensions", "tension"],                ["tensions", "tension"], "tensions"),
     (["improve", "improvements"],            ["improve"],     "improve"),
     (["cortex"],                             ["cortex"],      "cortex"),
+    # Brain ops — fire a maintenance/cognition pass on demand (TUI or Obsidian).
+    # They run the SAME functions the scheduler/daydream pump use, under the
+    # busy lock the worker already holds. No agent class; dispatched directly.
+    (["resynthesize", "re-synthesize"],      ["resynthesize", "re-synthesize"], "resynthesize"),
+    (["consolidate"],                        ["consolidate"], "consolidate"),
+    (["dream"],                              ["dream"],       "dream"),
+    (["decay"],                              ["decay"],       "decay"),
+    (["ledger"],                             ["ledger"],      "ledger"),
+    (["assess", "checkup"],                  ["assess", "checkup"], "assess"),
     (["plan"],                               ["plan"],        "plan"),
     (["do"],                                 ["do"],          "do"),
     (["zip"],                                ["zip"],         "kb_zip"),
     (["unzip"],                              ["unzip"],       "kb_unzip"),
     (["reset"],                              ["reset"],       "kb_reset"),
 ]
+
+# Intents dispatched directly to a maintenance/cognition function (no agent).
+_BRAIN_OPS = {"dream", "consolidate", "decay", "ledger", "assess", "resynthesize"}
 
 class PromptWatcher(watchdog.events.FileSystemEventHandler):
     def __init__(self, llm_client, rag_manager):
@@ -285,6 +297,16 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                     output_path = FROM_LLM_DIR / f"✅admin-rpt-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
                     output_path.write_text(f"---\ntitle: \"管理報告\"\ntype: report_admin\n---\n\n{res}", encoding='utf-8')
 
+                # Brain ops — run a cognition/maintenance pass directly (no agent),
+                # reusing the busy lock the worker already holds.
+                elif intent_key in _BRAIN_OPS:
+                    res = self._run_brain_op(intent_key, target_entities)
+                    output_path = FROM_LLM_DIR / f"✅admin-rpt-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+                    output_path.write_text(
+                        f"---\ntitle: \"{intent_key} 報告\"\ntype: report_admin\n---\n\n{res}",
+                        encoding='utf-8',
+                    )
+
                 elif intent_key == "repair_tags":
                     from maintenance.repair_tags import repair_tags_interactively
                     repair_tags_interactively(filepath)
@@ -394,6 +416,69 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             logging.error(f"Error answering {filepath.name}: {str(e)}")
             self._write_error_output(filepath, e)
             self._archive_raw(filepath)
+
+    def _run_brain_op(self, intent_key: str, target_entities: list[str]) -> str:
+        """Run a brain-op maintenance/cognition function directly (no agent) and
+        return a one-line human summary for the admin report. Reuses the exact
+        functions the scheduler/daydream pump call; the worker already holds the
+        busy lock, so these run under the same contention discipline."""
+        if intent_key == "resynthesize":
+            return self._resynthesize(target_entities)
+
+        trace_store = getattr(self.llm, "trace_store", None)
+        if intent_key == "dream":
+            from maintenance.daily_insight import run_daily_insight
+            result = run_daily_insight(self.llm, self.rag, occasion="Manual")
+        elif intent_key == "consolidate":
+            from maintenance.cortex_consolidation import run_consolidation
+            result = run_consolidation(self.llm, self.rag)
+        elif intent_key == "decay":
+            from maintenance.cortex_decay_pass import run_decay_pass
+            result = run_decay_pass(self.llm, self.rag)
+        elif intent_key == "ledger":
+            from maintenance.cortex_ledger import run_ledger_pass
+            result = run_ledger_pass(self.llm, self.rag)
+        elif intent_key == "assess":
+            if trace_store is None:
+                return "skipped：沒有 trace store，無法體檢。"
+            from maintenance.self_assessment import run_self_assessment
+            result = run_self_assessment(trace_store)
+        else:
+            return f"未知的大腦指令：{intent_key}"
+
+        status = getattr(result, "status", "done")
+        # run_* results expose either .message or .summary — accept both.
+        message = getattr(result, "message", None) or getattr(result, "summary", "") or str(result)
+        return f"[{status}] {message}"
+
+    def _resynthesize(self, target_entities: list[str]) -> str:
+        """Re-queue an already-ingested document for synthesis by copying its
+        archived source back into Consolidate/ (ClippingWatcher picks it up).
+        Sidecar images are restored too so `images/<title>/` links resolve."""
+        from core.config import RAW_CONSOLIDATE_DIR, CONSOLIDATE_DIR
+        titles = [t.split('|')[0].strip() for t in target_entities]
+        if not titles:
+            return "skipped：請以 [[標題]] 指定要重新 synthesis 的文件。"
+        done, missing = [], []
+        for title in titles:
+            src = RAW_CONSOLIDATE_DIR / f"{title}.md"
+            if not src.exists():
+                missing.append(title)
+                continue
+            CONSOLIDATE_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src), str(CONSOLIDATE_DIR / src.name))
+            sidecar = RAW_CONSOLIDATE_DIR / "images" / title
+            if sidecar.is_dir():
+                dest = CONSOLIDATE_DIR / "images" / title
+                if not dest.exists():
+                    shutil.copytree(str(sidecar), str(dest))
+            done.append(title)
+        parts = []
+        if done:
+            parts.append(f"已重新投入 Consolidate（將重跑 synthesis）：{', '.join(done)}")
+        if missing:
+            parts.append(f"找不到原始檔（raw/consolidate/）：{', '.join(missing)}")
+        return "；".join(parts) or "無動作"
 
     def _archive_raw(self, filepath: Path):
         if not filepath.exists(): return
