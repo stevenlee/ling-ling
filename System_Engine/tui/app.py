@@ -14,11 +14,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from rich.table import Table
+from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
-    Button, Checkbox, Footer, Header, Input, Label, OptionList, RichLog, Select, Static,
+    Button, Checkbox, Footer, Header, Input, Label, OptionList, Select, Static,
 )
 from textual.widgets.option_list import Option
 
@@ -111,8 +113,8 @@ class LingLingTUI(App):
     #body { height: 1fr; }
     #commands { width: 38%; border: round $primary; }
     #right { width: 1fr; }
-    #activity { height: 60%; border: round $secondary; }
-    #results { height: 1fr; border: round $secondary; }
+    #activity-box { height: 60%; border: round $secondary; }
+    #results-box { height: 1fr; border: round $secondary; }
     #compose-box { width: 70%; height: auto; max-height: 90%; padding: 1 2; border: thick $primary; background: $surface; }
     #compose-buttons { height: auto; padding-top: 1; }
     .dim { color: $text-muted; }
@@ -133,12 +135,17 @@ class LingLingTUI(App):
         with Horizontal(id="body"):
             yield OptionList(*self._options, id="commands")
             with Vertical(id="right"):
-                yield RichLog(id="activity", wrap=True, markup=True, highlight=False)
-                yield RichLog(id="results", wrap=False, markup=True, highlight=False)
+                with VerticalScroll(id="activity-box"):
+                    yield Static(id="activity")
+                with VerticalScroll(id="results-box"):
+                    yield Static(id="results")
         yield Footer()
 
     def on_mount(self) -> None:
         self.title = "Ling-Ling 玲玲小老師 — TUI"
+        self.query_one("#commands", OptionList).border_title = "命令"
+        self.query_one("#activity-box", VerticalScroll).border_title = "最近活動（新→舊）"
+        self.query_one("#results-box", VerticalScroll).border_title = "最新產出 fromLingLing/"
         self.refresh_status()
         self.refresh_activity()
         self.set_interval(2.0, self.refresh_status)
@@ -178,21 +185,45 @@ class LingLingTUI(App):
         self.query_one("#status", Static).update(line)
 
     def refresh_activity(self) -> None:
-        act = self.query_one("#activity", RichLog)
-        act.clear()
-        act.write("[b]最近活動 (trace)[/]")
-        for r in trace_reader.recent_runs(12):
-            color = {"running": "yellow", "succeeded": "green", "failed": "red"}.get(r["status"], "white")
-            started = (r.get("started_at") or "")[5:19].replace("T", " ")
-            act.write(f"[{color}]{r['status']:9}[/] {started}  {r['intent']}")
-        for line in trace_reader.tail_maintenance_log(6):
-            act.write(f"[dim]{line.lstrip('# ').strip()}[/]")
+        # Snapshots, newest at TOP. A scrollable Static (not a streaming log) so
+        # the view doesn't jump to the oldest line.
+        runs = trace_reader.recent_runs(25)
+        # Only ONE run can truly be live (the busy lock serialises work): the
+        # newest 'running' row, and only while the daemon is busy. Any other
+        # 'running' row is an orphan (daemon died mid-run) — show it dim as 中斷?
+        # so the feed doesn't read like a dozen things are executing at once.
+        live_id = (
+            runs[0]["run_id"]
+            if runs and trace_reader.is_busy() and runs[0].get("status") == "running"
+            else None
+        )
+        t = Table(expand=True, show_edge=False, pad_edge=False, box=None)
+        t.add_column("時間", no_wrap=True, width=11, style="dim")
+        t.add_column("狀態", no_wrap=True, width=10)
+        t.add_column("動作", overflow="ellipsis", no_wrap=True)
+        for r in runs:
+            ts = (r.get("started_at") or "")[5:16].replace("T", " ")
+            st = r.get("status") or ""
+            if st == "running" and r.get("run_id") != live_id:
+                label, color = "中斷?", "grey50"
+            elif st == "interrupted":
+                label, color = "中斷", "grey50"
+            else:
+                label = st
+                color = {"running": "yellow", "succeeded": "green", "failed": "red"}.get(st, "white")
+            t.add_row(ts, Text(label, style=color), r.get("intent") or "")
+        if not runs:
+            t.add_row("", "", "（暫無紀錄）")
+        self.query_one("#activity", Static).update(t)
 
-        res = self.query_one("#results", RichLog)
-        res.clear()
-        res.write("[b]最新產出 (fromLingLing/)[/]")
-        for item in trace_reader.recent_results(15):
-            res.write(item["name"])
+        files = trace_reader.recent_results(30)
+        rt = Table(expand=True, show_header=False, show_edge=False, pad_edge=False, box=None)
+        rt.add_column("檔名", overflow="ellipsis", no_wrap=True)
+        for item in files:
+            rt.add_row(item["name"])
+        if not files:
+            rt.add_row("（暫無產出）")
+        self.query_one("#results", Static).update(rt)
 
     # ── actions ──────────────────────────────────────────────────────
 

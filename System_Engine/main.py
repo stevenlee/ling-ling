@@ -49,6 +49,16 @@ def main():
     except Exception as e:
         logging.error(f"Migration runner crashed (continuing without migrating): {e}")
 
+    # 2.2. Reap orphaned trace runs from a previous session. The PID lock means
+    # we're the only daemon, so any run still marked 'running' is a zombie left
+    # by a process that died mid-run — retire it so it stops showing as live.
+    try:
+        reaped = rag_manager.trace_store.reap_orphan_runs()
+        if reaped:
+            ui.info(f"Reaped {reaped} orphaned 'running' trace run(s) from a previous session.")
+    except Exception as e:
+        logging.warning(f"Orphan-run reaping failed (non-fatal): {e}")
+
     # 3. Initialize Watchers
     event_handler_clippings = ClippingWatcher(llm_client, rag_manager)
     event_handler_prompts = PromptWatcher(llm_client, rag_manager)

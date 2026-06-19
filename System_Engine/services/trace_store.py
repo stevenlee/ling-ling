@@ -58,6 +58,24 @@ class TraceStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
+    def reap_orphan_runs(self) -> int:
+        """Retire runs stuck in 'running' by marking them 'interrupted'.
+
+        Call ONLY at daemon startup. The PID lock makes the daemon
+        single-instance, so when it boots no run is live — any row still
+        'running' is an orphan left by a previous process that died mid-run
+        (kill/restart) before writing its end status. Without this they
+        accumulate forever and masquerade as live activity. Returns the count.
+        """
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE runs SET status='interrupted', ended_at=?, "
+                "error=COALESCE(error, 'daemon restarted while running') "
+                "WHERE status='running'",
+                (_utc_now(),),
+            )
+            return cur.rowcount
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=10.0)
         conn.row_factory = sqlite3.Row
