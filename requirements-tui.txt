@@ -1,0 +1,5 @@
+# Ling-Ling TUI companion (optional). Install with:
+#   venv/bin/pip install -r requirements-tui.txt
+# Textual pulls in Rich (already a core dep). The TUI is a separate process and
+# never imports the daemon's RAG/LLM stack, so this stays out of the core deps.
+textual>=0.60

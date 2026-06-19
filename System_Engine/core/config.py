@@ -277,6 +277,10 @@ RETRIEVAL_BENCH_AUTO_FILE = SCRATCH_DIR / "retrieval_bench_auto.yml"
 BENCH_HISTORY_FILE = DATABASE_DIR / "bench_history.json"
 FACET_BACKFILL_STATE_FILE = DATABASE_DIR / "facet_backfill_state.json"
 DAYDREAM_STATE_FILE = DATABASE_DIR / "daydream_state.json"
+# Live daemon status for out-of-process readers (the TUI). Written by
+# ui.set_status on every activity transition; .kb_lock only marks hard locks,
+# so it can't be the busy signal — the real busy flag is in-memory in the daemon.
+DAEMON_STATUS_FILE = DATABASE_DIR / "daemon_status.json"
 CORTEX_STATE_FILE = DATABASE_DIR / "cortex_state.json"
 CORTEX_ADJUDICATION_CACHE = DATABASE_DIR / "cortex_adjudications.json"
 SEED_HISTORY_FILE = DATABASE_DIR / "seed_history.json"

@@ -81,6 +81,28 @@ class LingLingUI:
             self._is_busy = is_busy
             if self._live:
                 self._live.update(self._get_status_renderable())
+        self._persist_status(message, is_busy)
+
+    @staticmethod
+    def _persist_status(message, is_busy):
+        """Mirror busy state + activity to a file so out-of-process readers
+        (the TUI) can see it — the in-memory busy flag is invisible to them, and
+        .kb_lock only marks hard locks. Best-effort; never breaks the daemon."""
+        try:
+            import json
+            from datetime import datetime
+            from core.config import DAEMON_STATUS_FILE
+            DAEMON_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            payload = json.dumps(
+                {"busy": bool(is_busy), "message": str(message),
+                 "ts": datetime.now().isoformat(timespec="seconds")},
+                ensure_ascii=False,
+            )
+            tmp = DAEMON_STATUS_FILE.with_name(DAEMON_STATUS_FILE.name + ".tmp")
+            tmp.write_text(payload, encoding="utf-8")
+            tmp.replace(DAEMON_STATUS_FILE)
+        except Exception:
+            pass
 
     def stop(self):
         if self._live:

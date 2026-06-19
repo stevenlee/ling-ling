@@ -135,6 +135,29 @@ Confidence: medium
 - `@ling-zip` / `@ling-unzip`：備份與還原知識庫。
 - `@ling-RESET`：清除內容前會先強制備份。
 
+### 大腦運作命令（手動觸發排程/鞏固，與排程器/白日夢共用同一套函式）
+
+- `@ling-dream`：立刻做一次反思（doc-anchored 洞察生成），不必等夜間做夢窗口。
+- `@ling-consolidate`：立刻把未鞏固的 insight 蒸餾進 Cortex（消化積壓）。
+- `@ling-decay`：跑一次 Cortex 衰減 / 強化。
+- `@ling-ledger`：跑一次 Cortex falsification 帳本。
+- `@ling-assess`：自我體檢——彙整品質訊號成健康記分卡（唯讀，無副作用）。
+- `@ling-resynthesize [[標題]]`：把既有文件的原始檔重新投入 `Consolidate/`，重跑 synthesis（sidecar 圖片一併還原）。
+
+## TUI cockpit（終端機操作台）
+
+除了 Obsidian，還可以用一個**終端機 TUI** 直接下命令、看狀態。它是一個**獨立的伴生程式**：
+
+```bash
+./tui.sh        # 首次會自動安裝 textual (requirements-tui.txt)
+```
+
+- **命令調色盤**：選一個命令、填好 `[[目標]]` 與選項，按 Enter 就把 `@ling-*.md` 投進 `toLingLing/`——跟 Obsidian 完全同一條管線（兩邊並存）。
+- **狀態列**：忙碌/閒置（讀 `.kb_lock`）、當前正在跑的 run、provider/role/做夢窗口。
+- **活動feed + 產出**：即時讀 `llm_trace.sqlite`（唯讀）、`maintenance.log.md` 與 `fromLingLing/`。
+
+設計上 TUI **絕不**開 ChromaDB（單寫入安全）：所有「大腦運作」都是 daemon 在執行，TUI 只負責投命令與唯讀顯示。daemon 沒開時，投進去的命令會留在 `toLingLing/` 等它啟動後處理。
+
 ## 專案結構
 
 ```text
