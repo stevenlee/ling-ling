@@ -984,6 +984,7 @@ class LLMClient:
     ) -> dict:
         """Create a structured map digest for one part of a long document."""
         lang_hint = self._get_lang_hint()
+        hl_max = max(0, int(settings.HIGHLIGHT_MAX))
         system_prompt = (
             "You create compact, evidence-aware map digests for a later synthesis pass.\n"
             f"Output language: {lang_hint}.\n"
@@ -1007,12 +1008,18 @@ class LLMClient:
             '  "evidence": ["2-5 source-grounded details, examples, quotes, terms, or data points"],\n'
             '  "terms": ["important proper nouns or technical terms"],\n'
             '  "open_questions": ["ambiguities, missing context, contradictions, or follow-up questions"],\n'
-            '  "handoff": "what the next or final synthesis must remember"\n'
+            '  "handoff": "what the next or final synthesis must remember",\n'
+            f'  "highlights": ["up to {hl_max} spans copied VERBATIM from the generated part note — the lines a reader most needs to notice"]\n'
             "}\n\n"
             "Rules:\n"
             "- Prefer specific details over generic summary language.\n"
             "- Do not invent facts that are not supported by the source chunk or generated note.\n"
             "- Keep each list item concise but information-rich.\n"
+            "- highlights MUST be copied character-for-character from the GENERATED PART NOTE above "
+            "(not the raw source chunk) and never paraphrased — a deterministic pass locates each span "
+            "by exact match, so any drift silently drops the highlight.\n"
+            f"- Choose at most {hl_max} highlights, the most essential only; fewer is better than padding. "
+            "Each should be a complete sentence or clause, not a single word, and must not itself contain '=='.\n"
         )
 
         try:
@@ -1053,6 +1060,7 @@ class LLMClient:
         parsed.setdefault("terms", [])
         parsed.setdefault("open_questions", [])
         parsed.setdefault("handoff", "")
+        parsed.setdefault("highlights", [])
         return parsed
 
     def _part_digest_fallback(self, title: str, part_number: int, part_note: str, pending_concepts: str) -> dict:
@@ -1067,6 +1075,7 @@ class LLMClient:
             "terms": [],
             "open_questions": [],
             "handoff": pending_concepts or "",
+            "highlights": [],
         }
 
     @staticmethod

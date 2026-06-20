@@ -20,6 +20,8 @@ search_depth: 3
 strict_mode: true
 visual_router: true
 argument_map_mermaid: true
+highlight_spans: true
+highlight_max: 5
 ---
 
 # 📜 Scripture (Settings)
@@ -48,6 +50,8 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 ### 🖼️ Learning Aids (Phase 6)
 - **visual_router**: If `true`, long-doc Synthesis pages and Insight reports automatically get a "🖼️ 學習輔助" section — Ling Ling picks the right visual (comparison table / flowchart / mindmap / timeline / quadrant / concept map / argument map) for the content's structure, or attaches nothing if there's no strong structure. Each attach costs one extra LLM round. The on-demand `@ling-visualize` command always works regardless of this setting.
 - **argument_map_mermaid**: If `true`, argument maps (Toulmin structure) additionally get a deterministic Mermaid graph below the Markdown. Pure structure-to-graph, no extra LLM call.
+- **highlight_spans**: If `true`, each Part note gets its key sentences wrapped in `== ==` highlights. The spans ride along on the existing Part Digest call (no extra LLM round); a deterministic pass marks only verbatim matches, never touching the original wording.
+- **highlight_max**: Maximum number of `== ==` highlights per Part note (default 5). Hard cap even if the model proposes more.
 
 ---
 *Note: Lower `digest_limit` improves accuracy for complex texts but creates more parts.*

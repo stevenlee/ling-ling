@@ -952,8 +952,6 @@ class IngestionPipeline:
         if part_content:
             from services.learning_artifacts import maybe_artifact_section
             artifact_section = maybe_artifact_section(self.llm, part_content)
-        if not appendix and not artifact_section:
-            return
 
         content = page_path.read_text(encoding="utf-8").rstrip()
         # Strip any previously-appended auto sections (whichever comes first) so
@@ -965,13 +963,67 @@ class IngestionPipeline:
                 cut = min(cut, i)
         content = content[:cut].rstrip()
 
+        # Inline key-point highlighting (== ==): a deterministic, non-destructive
+        # wrap of verbatim spans the digest call already chose. No extra LLM call.
+        highlighted = 0
+        if settings.HIGHLIGHT_ENABLED and isinstance(digest, dict):
+            content, highlighted = self._apply_highlights(
+                content, digest.get("highlights"), settings.HIGHLIGHT_MAX,
+            )
+
+        if not appendix and not artifact_section and not highlighted:
+            return
+
         tail = f"{artifact_section}{appendix}".strip()
-        updated = f"{content}\n\n{tail}\n"
+        updated = f"{content}\n\n{tail}\n" if tail else f"{content}\n"
         page_path.write_text(updated, encoding="utf-8")
 
         title = ingest_result.get("_title") or page_path.stem
         tags = ingest_result.get("_tags") or ingest_result.get("tags", [])
         self.rag.add_document(page_path, title, updated, tags=tags, section_path=section_path or None)
+
+    @staticmethod
+    def _apply_highlights(text: str, highlights, max_spans: int = 5) -> tuple[str, int]:
+        """Wrap up to ``max_spans`` verbatim spans in Obsidian ``== ==`` markers.
+
+        Deterministic and non-destructive by design:
+        - a span not found verbatim in the body is skipped, never paraphrased in
+          (so LLM drift drops the highlight rather than corrupting the note);
+        - the YAML frontmatter is never touched;
+        - a span already wrapped is left alone, so re-ingesting a part is
+          idempotent rather than producing ``====…====``.
+
+        Returns the (possibly) updated text and the number of spans applied.
+        """
+        if not highlights or max_spans <= 0:
+            return text, 0
+
+        # Confine marking to the body — never inside the YAML frontmatter.
+        body_start = 0
+        if text.startswith("---"):
+            fence = text.find("\n---", 3)
+            if fence != -1:
+                nl = text.find("\n", fence + 1)
+                body_start = nl + 1 if nl != -1 else len(text)
+        head, body = text[:body_start], text[body_start:]
+
+        applied = 0
+        for raw in highlights:
+            if applied >= max_spans:
+                break
+            phrase = digest_value_to_text(raw).strip()
+            if len(phrase) < 4 or "==" in phrase:
+                continue
+            idx = body.find(phrase)
+            if idx == -1:
+                continue
+            # Skip if the span already abuts a marker (idempotent re-ingest).
+            if body[max(0, idx - 2):idx] == "==":
+                continue
+            body = f"{body[:idx]}=={phrase}=={body[idx + len(phrase):]}"
+            applied += 1
+
+        return head + body, applied
 
     # ── Stitched article ────────────────────────────────────────────
 
