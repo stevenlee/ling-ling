@@ -1227,6 +1227,24 @@ def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
                 # Lookahead to see if next line is a separator
                 if i + 1 < len(lines):
                     next_stripped = lines[i+1].strip()
+                    # A separator a previous pass hid in a comment leaves the
+                    # table headerless and unrenderable (and the data rows below
+                    # never register as a table). Unwrap and restore a clean
+                    # separator matching the header's column count.
+                    sep = next_stripped
+                    while sep.startswith("<!--") and sep.endswith("-->"):
+                        sep = sep[4:-3].strip()
+                    if sep != next_stripped and sep.startswith("|") and _TABLE_SEP_RE.match(sep):
+                        cols = stripped.count("|") - 1
+                        clean_sep = "|" + "|".join([" --- " for _ in range(cols)]) + "|"
+                        fixes.append(_make_fix(
+                            "restored_hidden_table_separator",
+                            line=i+2,
+                            before=lines[i+1],
+                            after=clean_sep,
+                        ))
+                        lines[i+1] = clean_sep
+                        next_stripped = clean_sep
                     if next_stripped.startswith("|") and _TABLE_SEP_RE.match(next_stripped):
                         in_table = True
                         expected_pipes = stripped.count("|")
@@ -1275,6 +1293,47 @@ def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
             out.append(line)
             i += 1
         else:
+            indent = line[:len(line) - len(line.lstrip())]
+
+            # Unwrap any HTML-comment layers a previous quality pass may have
+            # added, so re-running this check never nests them
+            # (<!-- <!-- ... --> -->). The inner text is re-decided below.
+            was_comment = stripped.startswith("<!--") and stripped.endswith("-->")
+            inner = stripped
+            while inner.startswith("<!--") and inner.endswith("-->"):
+                inner = inner[4:-3].strip()
+
+            # A line that carries pipes and closes with '|' is a real table row;
+            # if it is only missing its leading '|', restore it and reprocess via
+            # the data-row path rather than hiding the user's data in a comment.
+            if inner.endswith("|") and inner.count("|") >= 2:
+                repaired = f"{indent}{inner if inner.startswith('|') else '| ' + inner}"
+                if repaired != line:
+                    fixes.append(_make_fix(
+                        "restored_hidden_table_row" if was_comment
+                        else "repaired_table_row_missing_leading_pipe",
+                        line=i+1,
+                        before=line,
+                        after=repaired,
+                    ))
+                lines[i] = repaired
+                continue  # re-process the now well-formed row; do not advance i
+
+            # Genuine non-row text that was previously hidden: collapse any
+            # nesting back to a single comment layer instead of re-wrapping.
+            if was_comment:
+                collapsed = f"{indent}<!-- {inner} -->"
+                if collapsed != line:
+                    fixes.append(_make_fix(
+                        "collapsed_nested_table_comment",
+                        line=i+1,
+                        before=line,
+                        after=collapsed,
+                    ))
+                out.append(collapsed)
+                i += 1
+                continue
+
             # Interspersed text detection
             table_continues = False
             for look in range(i+1, min(i+6, len(lines))):
@@ -1283,7 +1342,7 @@ def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
                     break
                 if not lines[look].strip():
                     break
-                    
+
             if table_continues:
                 fixes.append(_make_fix(
                     "hidden_interspersed_table_text",
