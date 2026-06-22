@@ -43,6 +43,9 @@ INTENT_ROUTES = [
     # Publishing track — turn a note's Synthesis into a learning-first blog
     # review/report (報導者／書評人). Dispatches to ReviewAgent.
     (["review"],                             ["review"],      "review"),
+    # Publish track step 1 (ling-ling push): transform Blog/ → kafu/content/.
+    # Build + deploy stay on the kafu side (`make publish`). Dispatches BlogAgent.
+    (["blog"],                               ["blog"],        "blog"),
     (["profiles", "profile"],                ["profiles", "profile"], "profiles"),
     (["recall"],                             ["recall"],      "recall"),
     (["tensions", "tension"],                ["tensions", "tension"], "tensions"),

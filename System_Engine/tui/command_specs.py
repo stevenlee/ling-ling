@@ -70,6 +70,9 @@ COMMANDS: tuple[CommandSpec, ...] = (
                     Field("as_type", "genre", "choice",
                           choices=("book", "explainer", "paper", "patent")),
                 )),
+    CommandSpec("blog", "blog", "發布到 kafu (Blog→content)", "Cortex",
+                "把 lings-desktop/Blog/ 的 review 轉成 Quartz 內容送進 kafu/content/；"
+                "之後到 kafu 跑 `make publish` 上線"),
     CommandSpec("recall", "recall", "回想 (蒸餾主張)", "Cortex", fields=(_TARGETS, _BODY)),
     CommandSpec("tensions", "tensions", "知識張力掃描", "Cortex"),
     CommandSpec("cortex", "cortex", "Cortex 三層驗證", "Cortex"),
