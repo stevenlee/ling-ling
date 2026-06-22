@@ -126,10 +126,13 @@ def main() -> None:
     import argparse
     from datetime import date as _date
 
-    from core.config import WIKI_VAULT_DIR
+    # repo_root/lings-desktop/Blog, computed from this file's location — no
+    # dependency on the engine's config, so this runs as a plain script:
+    #   python services/blog_transform.py --content <quartz>/content
+    default_blog = Path(__file__).resolve().parents[2] / "lings-desktop" / "Blog"
 
     ap = argparse.ArgumentParser(description="Publish curated reviews to a Quartz content/ dir.")
-    ap.add_argument("--blog", default=str(WIKI_VAULT_DIR / "Blog"), help="curation folder")
+    ap.add_argument("--blog", default=str(default_blog), help="curation folder")
     ap.add_argument("--content", required=True, help="Quartz repo content/ dir")
     ap.add_argument("--date", default=_date.today().isoformat(), help="publish date (YYYY-MM-DD)")
     args = ap.parse_args()
