@@ -110,7 +110,11 @@ class OllamaEmbeddingFunction(chromadb.EmbeddingFunction):
             timeout=60,
         )
         if resp.status_code != 200:
-            logging.error(f"Ollama embedding HTTP error {resp.status_code}: {resp.text}")
+            # Recoverable upstream: __call__ falls back to per-item embedding and
+            # _embed_resilient substitutes a placeholder for the bad input. Log at
+            # debug so a handled NaN-500 doesn't masquerade as an error; a genuine
+            # outage still surfaces via _embed_resilient's "all inputs failed" raise.
+            logging.debug(f"Ollama embedding HTTP {resp.status_code}: {resp.text[:200]}")
             return None
         return resp.json()["embeddings"]
 
@@ -130,6 +134,10 @@ class OllamaEmbeddingFunction(chromadb.EmbeddingFunction):
         # bge-m3 intermittently emits NaN for one specific input, and Ollama
         # then 500s the ENTIRE batch — silently losing a document's whole facet
         # / chunk set. Isolate per-item so one bad input can't drop the rest.
+        logging.warning(
+            f"Ollama embedding: a batch of {len(safe_input)} hit a NaN/error; "
+            f"isolating per-item (model {self.model_name})."
+        )
         return self._embed_resilient(safe_input)
 
     def _embed_resilient(self, safe_input: list[str]) -> list[list[float]]:
@@ -154,8 +162,8 @@ class OllamaEmbeddingFunction(chromadb.EmbeddingFunction):
                 f"Ollama embedding failed for all {len(safe_input)} inputs (model {self.model_name})"
             )
         for i in bad:
-            logging.error(
-                "Ollama embedding produced NaN/error for one input; substituting a "
+            logging.warning(
+                "Ollama embedding produced NaN/error for one input; substituted a "
                 f"placeholder vector so the batch still indexes. text={safe_input[i][:100]!r}"
             )
             placeholder = [0.0] * (dim or 0)
