@@ -10,9 +10,9 @@ type: "translation"
 ---
 ```
 
-After the closing `---`, the Markdown body:
+After the closing `---`, the Markdown body. The first-line H1 must be **one sentence capturing this part's core** (concrete, like a headline) — do **not** use a generic title like "Translation & Comparison Report" that repeats on every part:
 
-# Translation & Comparison Report
+# (One sentence capturing this part's core, as the title)
 
 ## Summary
 
