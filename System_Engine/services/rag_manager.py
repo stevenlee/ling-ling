@@ -1211,12 +1211,45 @@ class RAGManager:
             })
         return out
 
+    def _get_all(self, include: list[str]) -> dict:
+        """Fetch the whole collection (ids + requested fields) in pages.
+
+        chromadb 1.5.x raises "too many SQL variables" on a single unbounded
+        get() over a large collection (every id lands in one IN(...) clause),
+        so we page with limit/offset well under SQLite's bound-variable limit.
+        """
+        PAGE = 500
+        want_docs, want_metas = "documents" in include, "metadatas" in include
+        ids: list = []
+        docs: list = []
+        metas: list = []
+        offset = 0
+        while True:
+            batch = self.collection.get(include=include, limit=PAGE, offset=offset)
+            bids = batch.get("ids") or []
+            if not bids:
+                break
+            ids.extend(bids)
+            if want_docs:
+                docs.extend(batch.get("documents") or [])
+            if want_metas:
+                metas.extend(batch.get("metadatas") or [])
+            if len(bids) < PAGE:
+                break
+            offset += PAGE
+        out: dict = {"ids": ids}
+        if want_docs:
+            out["documents"] = docs
+        if want_metas:
+            out["metadatas"] = metas
+        return out
+
     def all_chunks(self, include: tuple[str, ...] = ("metadatas", "documents")) -> dict:
         """Every indexed chunk's fields, as ChromaDB's {ids, documents,
         metadatas} dict. A named accessor so callers (e.g. InsightAgent's
         sampling/context builders) don't reach into `.collection` directly and
         couple to the vector store (audit R7-C-2)."""
-        return self.collection.get(include=list(include))
+        return self._get_all(list(include))
 
     def chunks_by_title(
         self,
@@ -1409,7 +1442,7 @@ class RAGManager:
             for file in root.rglob("*.md"):
                 valid_doc_ids.add(self._get_doc_id(file))
 
-        results = self.collection.get(include=["metadatas"])
+        results = self._get_all(["metadatas"])
         ids = results.get("ids") or []
         metadatas = results.get("metadatas") or []
 
@@ -1508,7 +1541,7 @@ class RAGManager:
     def get_all_indexed_titles(self) -> set:
         """Retrieves a set of all unique document titles currently in the database."""
         try:
-            results = self.collection.get(include=['metadatas'])
+            results = self._get_all(['metadatas'])
             metadatas = results.get('metadatas', [])
             titles = set(m.get('title') for m in metadatas if m and 'title' in m)
             return titles

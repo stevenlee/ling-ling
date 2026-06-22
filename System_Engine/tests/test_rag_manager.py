@@ -613,12 +613,34 @@ class TestPublicChunkAccessors:
 
         class C:
             def __init__(self): self.calls = []
-            def get(self, where=None, include=None, limit=None):
+            def get(self, where=None, include=None, limit=None, offset=0):
                 self.calls.append({"where": where, "include": include, "limit": limit})
                 return {"ids": [], "documents": [], "metadatas": []}
 
         rag.collection = C()
         return rag
+
+    def test_get_all_paginates_and_aggregates(self):
+        """_get_all must page with limit/offset (chromadb 1.5.x overflows
+        SQLite's variable limit on an unbounded get) and aggregate all rows."""
+        rag = RAGManager.__new__(RAGManager)
+
+        class Paged:
+            def __init__(self, n): self.n = n; self.calls = 0
+            def get(self, where=None, include=None, limit=None, offset=0):
+                self.calls += 1
+                ids = [f"id{i}" for i in range(offset, min(offset + limit, self.n))]
+                out = {"ids": ids}
+                if include and "metadatas" in include:
+                    out["metadatas"] = [{"title": f"t{i}"} for i in ids]
+                return out
+
+        for n in (0, 500, 501, 1234):
+            rag.collection = Paged(n)
+            res = rag._get_all(["metadatas"])
+            assert len(res["ids"]) == n
+            assert len(res["metadatas"]) == n
+            assert rag.collection.calls <= (n // 500) + 2  # terminates, no infinite loop
 
     def test_all_chunks_default_and_metadata_only(self):
         rag = self._rag()

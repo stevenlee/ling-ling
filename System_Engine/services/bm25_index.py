@@ -60,9 +60,23 @@ class BM25Index:
             self._unavailable = True
             return
         try:
-            results = self.collection.get(include=["documents"])
-            chunk_ids = results.get("ids", []) or []
-            documents = results.get("documents", []) or []
+            # Page through the index: chromadb 1.5.x overflows SQLite's
+            # bound-variable limit on a single unbounded get() of a large
+            # collection ("too many SQL variables").
+            PAGE = 500
+            chunk_ids: list = []
+            documents: list = []
+            offset = 0
+            while True:
+                batch = self.collection.get(include=["documents"], limit=PAGE, offset=offset)
+                bids = batch.get("ids", []) or []
+                if not bids:
+                    break
+                chunk_ids.extend(bids)
+                documents.extend(batch.get("documents", []) or [])
+                if len(bids) < PAGE:
+                    break
+                offset += PAGE
             if not documents:
                 self._bm25 = None
                 self._chunk_ids = []
