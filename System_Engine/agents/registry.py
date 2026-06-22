@@ -12,6 +12,7 @@ from agents.recall_agent import RecallAgent
 from agents.tension_agent import TensionAgent
 from agents.visualize_agent import VisualizeAgent
 from agents.improve_agent import ImproveAgent
+from agents.review_agent import ReviewAgent
 
 class AgentRegistry:
     def __init__(self, llm, rag):
@@ -35,6 +36,7 @@ class AgentRegistry:
             "tensions": TensionAgent,
             "visualize": VisualizeAgent,
             "improve": ImproveAgent,
+            "review": ReviewAgent,
         }
 
     def get_agent(self, command_key: str):

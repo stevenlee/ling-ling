@@ -63,6 +63,13 @@ COMMANDS: tuple[CommandSpec, ...] = (
         Field("execute", "執行計畫", "flag"),
     )),
     # ── Cortex queries ──
+    CommandSpec("review", "review", "書評／報導 (發布稿)", "Cortex",
+                "把一篇 Synthesis 寫成助學習的書評/報導；genre 省略時：標題有專利號→patent，否則 book",
+                fields=(
+                    Field("targets", "目標 [[筆記]]", "links", required=True),
+                    Field("as_type", "genre", "choice",
+                          choices=("book", "explainer", "paper", "patent")),
+                )),
     CommandSpec("recall", "recall", "回想 (蒸餾主張)", "Cortex", fields=(_TARGETS, _BODY)),
     CommandSpec("tensions", "tensions", "知識張力掃描", "Cortex"),
     CommandSpec("cortex", "cortex", "Cortex 三層驗證", "Cortex"),
