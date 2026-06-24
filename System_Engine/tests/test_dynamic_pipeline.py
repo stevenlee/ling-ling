@@ -20,12 +20,13 @@ class FakeLLM:
         self.model = "fake-model"
         self.trace_store = MagicMock()
 
-    def generate_entity_page(self, markdown_content, filename, index_content, context_hint=None, persona=None, forced_template=None):
+    def generate_entity_page(self, markdown_content, filename, index_content, context_hint=None, persona=None, forced_template=None, part_number=None, **kwargs):
         self.generate_entity_page_calls.append({
             "content": markdown_content,
             "filename": filename,
             "persona": persona,
             "forced_template": forced_template,
+            "part_number": part_number,
         })
         return {
             "title": filename,
