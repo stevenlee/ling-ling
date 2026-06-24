@@ -417,3 +417,54 @@ class TestUpdateWikiIndex:
         # Assert the Status, Im, Re columns were mapped and aligned correctly
         assert "| [[Article N (Synthesis)\\|Article N]] | reading | 5 | 4 | Custom 5-column note. |" in table
 
+
+class TestRecentBlock:
+    """🆕 最近新增 — newest-first block at the top of index.md."""
+
+    def _vault(self, monkeypatch, tmp_path, docs: dict[str, str]):
+        """docs maps title → date_created; each becomes a one-page entity."""
+        pages = tmp_path / "pages"
+        notes = tmp_path / "Notes"
+        raw = tmp_path / "raw" / "consolidate"
+        notes.mkdir(parents=True)
+        raw.mkdir(parents=True)
+        for title, date in docs.items():
+            d = pages / title
+            d.mkdir(parents=True)
+            (d / f"{title}.md").write_text(
+                f"---\ntitle: {title}\ntags: [t]\ndate_created: '{date}'\n---\n\nBody",
+                encoding="utf-8",
+            )
+        monkeypatch.setattr(vault_utils, "PAGES_DIR", pages)
+        monkeypatch.setattr(vault_utils, "NOTES_DIR", notes)
+        monkeypatch.setattr(vault_utils, "RAW_CONSOLIDATE_DIR", raw)
+        monkeypatch.setattr(vault_utils, "INDEX_FILE", tmp_path / "index.md")
+        monkeypatch.setattr(vault_utils, "READING_INDEX_FILE", tmp_path / "ReadingIndex.md")
+        return tmp_path / "index.md"
+
+    def test_recent_block_orders_newest_first_and_respects_limit(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(vault_utils.settings, "RECENT_COUNT", 2)
+        index = self._vault(monkeypatch, tmp_path, {
+            "Old Doc": "2026-01-01",
+            "Mid Doc": "2026-03-15",
+            "New Doc": "2026-06-20",
+        })
+        vault_utils.update_wiki_index()
+        out = index.read_text(encoding="utf-8")
+
+        head = out.split("## 🆕 最近新增", 1)[1].split("##", 1)[0]
+        # Only the 2 newest appear, newest first; the oldest is excluded.
+        assert head.index("[[New Doc]]") < head.index("[[Mid Doc]]")
+        assert "[[Old Doc]]" not in head
+        assert "`📅 2026-06-20`" in head
+        # The alphabetical Entities list below still carries every doc.
+        assert "[[Old Doc]]" in out
+
+    def test_recent_count_zero_disables_block(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(vault_utils.settings, "RECENT_COUNT", 0)
+        index = self._vault(monkeypatch, tmp_path, {"A Doc": "2026-06-20"})
+        vault_utils.update_wiki_index()
+        out = index.read_text(encoding="utf-8")
+        assert "## 🆕 最近新增" not in out
+        assert "[[A Doc]]" in out  # still listed alphabetically below
+

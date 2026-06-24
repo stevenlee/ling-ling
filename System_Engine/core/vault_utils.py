@@ -10,6 +10,7 @@ from core.config import (
     NOTES_DIR,
     PAGES_DIR,
     RAW_CONSOLIDATE_DIR,
+    settings,
 )
 
 READING_INDEX_FILE = INDEX_FILE.parent / "ReadingIndex.md"
@@ -295,6 +296,46 @@ def _importance_relevance_label(annotation: dict) -> str:
     return " ".join(scores)
 
 
+def _recent_entries(sections: dict) -> list[dict]:
+    """Flatten sections into one entry per document for the "🆕 最近新增" block.
+
+    Each entry is {date, title (for sorting), icon, link, tags}. For an entity
+    folder the document is linked through its most readable page (Synthesis >
+    Stitched > main) and dated by the newest file in the folder, so re-ingesting
+    one part legitimately bumps the doc up. Part chunks are never their own entry.
+    """
+    def _link_rank(meta: dict):
+        """Sort key picking the page to link: Synthesis > Stitched > naturally
+        first (so a doc with only Part notes links Part 1, not a random part)."""
+        t = meta["title"]
+        return (not ("(Synthesis)" in t), not ("(Stitched)" in t), _natural_sort_key(t))
+
+    entries: list[dict] = []
+    for s_info in sections.values():
+        for folder, files in s_info["files"].items():
+            if not files:
+                continue
+            if folder == "Root":
+                for meta in files:
+                    entries.append({
+                        "date": meta["date"], "title": meta["title"],
+                        "icon": _file_icon(meta["title"]),
+                        "link": meta["title"], "tags": meta["tags"],
+                    })
+                continue
+            mains = [f for f in files if not _PART_RE.search(f["title"])]
+            pref = min(mains or files, key=_link_rank)
+            date = max((f["date"] for f in files if f["date"]), default="")
+            entries.append({
+                "date": date, "title": folder, "icon": _file_icon(pref["title"]),
+                "link": pref["title"], "tags": pref["tags"],
+            })
+    # Newest first; stable sort keeps same-day ties in natural title order.
+    entries.sort(key=lambda e: _natural_sort_key(e["title"]))
+    entries.sort(key=lambda e: e["date"] or "", reverse=True)
+    return entries
+
+
 def _folder_header(date: str, annotation: dict) -> str:
     parts = []
     if date:
@@ -350,6 +391,17 @@ def update_wiki_index(filepath: Path = None, title: str = None, *, sync_reading_
             "- ✍️ [[ReadingIndex]]",
             "",
         ]
+
+        # 🆕 最近新增 — newest N docs at the top so new arrivals are easy to spot,
+        # while the alphabetical sections below stay intact for lookup-by-name.
+        limit = max(0, settings.RECENT_COUNT)
+        recent = _recent_entries(sections)[:limit] if limit else []
+        if recent:
+            lines.append("## 🆕 最近新增")
+            for e in recent:
+                date_str = f"`📅 {e['date']}` " if e["date"] else ""
+                lines.append(f"- {date_str}{e['icon']} [[{e['link']}]]{_tag_inline(e['tags'])}")
+            lines.append("")
 
         for s_name, s_info in sections.items():
             if s_name == "Notes" and not s_info["files"]:

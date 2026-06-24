@@ -29,7 +29,7 @@ Ling-Ling 是一個 file-based agent。你用 Obsidian 管理資料，Ling-Ling 
 - **LingLens 概念透鏡**：`@ling-lens` 可用概念視角掃描文章，找出不能只靠 Ctrl+F 找到的語意實例；`@ling-count` 保留為 legacy alias。
 - **Agentic command workflow**：在 `toLingLing/` 放入 `@ling-*` 指令檔，即可觸發巡邏、修復、洞察、合併、備份、還原等任務。支援 `/template` 指令動態切換輸出格式。
 - **Markdown quality checker**：寫入 Obsidian 前會修復常見 Markdown/Mermaid/LaTeX 問題，包含裸 Mermaid block、未關閉 fence、node label quote、body frontmatter 與 `\rightarrow` 這類 carriage-return 轉義錯誤，並在 metadata 留下 `quality_checker` 紀錄。
-- **Knowledge dashboard**：`index.md` 會自動更新，支援自然排序與 Obsidian callouts。
+- **Knowledge dashboard**：`index.md` 會自動更新，支援自然排序與 Obsidian callouts；最上方有「🆕 最近新增」區塊列出最新文件（依 `date_created` 新→舊，數量由 `recent_count` 控制），下方字母清單照舊。
 - **Daydream 白日夢補做**：夜間深睡（1–5am 排程）被忙碌跳過時，`DaydreamPump` 會在白天系統閒置時補做欠下的認知——最低優先、一次一小口、可被使用者工作隨時插隊（複用 facet-backfill 的讓步契約）。工作階梯由高到低：①消化未鞏固的 insight 積壓（`run_consolidation` 一次一條，可續做）②補做漏掉的每日洞察 ③真的沒有欠工作時，閒著也自發產生一條輕量反思。嚴格 idle-only、限白天（夜晚仍屬深睡）、每日有額度上限、不背 SLA——忙了一整天就整天跳過，當晚深睡照常清完積壓。所有旋鈕都在 `Scripture/Scripture.md` 熱載入（與 `dreaming_from/to` 並排）：`daydream` / `daydream_spontaneous` 開關，`daydream_*_budget` 設每日額度。
 
 ### 1. 必要條件

@@ -24,6 +24,7 @@ highlight_spans: true
 highlight_max: 5
 use_thoughtful_splitter: true
 thoughtful_use_llm: true
+recent_count: 15
 ---
 
 # 📜 Scripture (Settings)
@@ -54,6 +55,9 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 - **argument_map_mermaid**: If `true`, argument maps (Toulmin structure) additionally get a deterministic Mermaid graph below the Markdown. Pure structure-to-graph, no extra LLM call.
 - **highlight_spans**: If `true`, each Part note gets its key sentences wrapped in `== ==` highlights. The spans ride along on the existing Part Digest call (no extra LLM round); a deterministic pass marks only verbatim matches, never touching the original wording.
 - **highlight_max**: Maximum number of `== ==` highlights per Part note (default 5). Hard cap even if the model proposes more.
+
+### 🎀 Knowledge Dashboard (index.md)
+- **recent_count**: `index.md` 最上方「🆕 最近新增」區塊要列出的最新文件數（日期新→舊，依 `date_created`、無則檔案 mtime）。下方字母排序清單不受影響。設 `0` 可關閉這個區塊。預設 15。
 
 ### 🔪 Chunking (how documents are split into Parts)
 - **use_thoughtful_splitter**: If `true`, split documents structure-aware — cut at chapter/heading boundaries, pack short sections up to the size budget, and recursively sub-split sections that are too long. If `false`, fall back to mechanical character-count chunks. (Takes effect on the next pipeline build / daemon restart.)

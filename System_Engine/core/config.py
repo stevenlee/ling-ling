@@ -344,6 +344,8 @@ class DynamicSettings:
         # Splitter selection (moved here per "config in Scripture, not .env"):
         ("use_thoughtful_splitter", "USE_THOUGHTFUL_SPLITTER",      bool),
         ("thoughtful_use_llm",      "THOUGHTFUL_USE_LLM_FOR_INGEST", bool),
+        # index.md "🆕 最近新增" — how many newest docs to surface at the top:
+        ("recent_count",       "RECENT_COUNT",       int),
     )
 
     def __init__(self):
@@ -383,6 +385,10 @@ class DynamicSettings:
         # LLM round-trip); a deterministic pass applies the markers afterwards.
         self.HIGHLIGHT_ENABLED = True
         self.HIGHLIGHT_MAX = 5
+        # index.md surfaces the N most-recently-added docs in a "🆕 最近新增"
+        # block at the top (newest first); the alphabetical list stays below.
+        # 0 disables the block.
+        self.RECENT_COUNT = 15
         # Splitter selection: env value is the default (deployment), but
         # Scripture (use_thoughtful_splitter / thoughtful_use_llm) can override
         # at runtime — see _BINDINGS above.
