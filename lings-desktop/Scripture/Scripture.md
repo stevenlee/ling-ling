@@ -24,7 +24,6 @@ highlight_spans: true
 highlight_max: 5
 use_thoughtful_splitter: true
 thoughtful_use_llm: true
-merge_part_calls: false
 ---
 
 # 📜 Scripture (Settings)
@@ -59,7 +58,6 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 ### 🔪 Chunking (how documents are split into Parts)
 - **use_thoughtful_splitter**: If `true`, split documents structure-aware — cut at chapter/heading boundaries, pack short sections up to the size budget, and recursively sub-split sections that are too long. If `false`, fall back to mechanical character-count chunks. (Takes effect on the next pipeline build / daemon restart.)
 - **thoughtful_use_llm**: If `true`, allow the splitter's LLM topic-shift refinement. *Currently a no-op placeholder (the real refinement lands in a later phase); structural chapter-splitting works regardless.*
-- **merge_part_calls**: If `true`, each Part is distilled in ONE LLM call (note + digest together) instead of two — roughly 2× faster on long documents. Falls back to a separate digest call if the merged output is unparseable. Default `false` until the merged note/digest quality is A/B-validated on your corpus; flip on when you've confirmed Part quality holds.
 
 ---
 *Note: Lower `digest_limit` improves accuracy for complex texts but creates more parts.*

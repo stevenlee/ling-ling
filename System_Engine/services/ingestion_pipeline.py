@@ -410,7 +410,6 @@ class IngestionPipeline:
                     context_hint=context_hint,
                     persona=persona,
                     forced_template=template,
-                    part_number=part_info["current"] if part_info else None,
                 )
                 if not llm_result:
                     raise ValueError("LLM generation failed.")
@@ -641,10 +640,7 @@ class IngestionPipeline:
 
             part_content = result.get("content", "")
             total_output_chars += len(part_content)
-            # A2: prefer the digest folded into the entity-page call (one LLM
-            # round); fall back to a dedicated call if it was off, missing, or
-            # unparseable — so correctness never depends on the merge.
-            digest = result.get("_merged_digest") or self.llm.generate_part_digest(
+            digest = self.llm.generate_part_digest(
                 base_title, i + 1, total, chunk, part_content, pending_concepts,
             )
             part_digests.append(digest)

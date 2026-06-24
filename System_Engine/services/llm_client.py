@@ -659,7 +659,6 @@ class LLMClient:
         context_hint: str | None = None,
         persona: str | None = None,
         forced_template: str | None = None,
-        part_number: int | None = None,
     ) -> dict | None:
         instruction_type = "Convert this material into a structured Wiki entity page."
         system_prompt, cap_resolution = self._build_system_prompt(
@@ -668,11 +667,6 @@ class LLMClient:
             forced_template=forced_template,
         )
         labels = _LABELS_BY_SUFFIX.get(self._localized_suffix(), _DEFAULT_LABELS)
-        # A2: when ingesting a Part, optionally fold the digest into this one call
-        # (note first, then a delimited JSON digest). Off by default; gated by
-        # settings.MERGE_PART_CALLS. Image inputs never merge.
-        _DIGEST_DELIM = "===PART-DIGEST-JSON==="
-        merge_digest = part_number is not None and image_path is None and settings.MERGE_PART_CALLS
 
         try:
             if image_path:
@@ -698,17 +692,6 @@ class LLMClient:
                 # user-turn reminder (unlike synthesis), and the directive in
                 # the system prompt can be outweighed by an English template.
                 user_text += f"\n\n（請以 {self._get_lang_hint()} 輸出整篇,包含所有章節標題。）"
-                if merge_digest:
-                    user_text += (
-                        f"\n\n---\nAFTER the complete note above, output a line containing EXACTLY "
-                        f"`{_DIGEST_DELIM}` then ONE JSON object (no code fence) describing the note:\n"
-                        '{"part": ' + str(part_number) + ', "title": "short title", '
-                        '"thesis": "the central claim", "key_points": ["3-6 concrete points"], '
-                        '"evidence": ["2-5 source-grounded details"], "terms": ["key terms"], '
-                        '"open_questions": ["ambiguities"], "handoff": "what the synthesis must remember", '
-                        '"highlights": ["up to 5 spans copied VERBATIM from the note"]}\n'
-                        "Write the FULL note first; never shorten it to make room for the JSON."
-                    )
                 response = self._complete_text(
                     system_prompt,
                     user_text,
@@ -721,38 +704,10 @@ class LLMClient:
                         },
                     },
                 )
-            note_response = response
-            merged_digest = None
-            if merge_digest:
-                note_response, _, digest_tail = response.partition(_DIGEST_DELIM)
-                merged_digest = self._parse_merged_digest(digest_tail, part_number)
-            result = self._hybrid_parse(note_response)
-            if result is not None and merge_digest:
-                result["_merged_digest"] = merged_digest  # None → caller falls back
-            return result
+            return self._hybrid_parse(response)
         except Exception as e:
             logging.error(f"LLM Error in generate_entity_page: {e}")
             return None
-
-    def _parse_merged_digest(self, tail: str, part_number: int) -> dict | None:
-        """Parse the JSON digest emitted after the note (A2). Returns None on any
-        problem so the caller falls back to a separate generate_part_digest."""
-        import json
-        raw = (tail or "").strip()
-        if not raw:
-            return None
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw).strip()
-        start, end = raw.find("{"), raw.rfind("}")
-        if start == -1 or end <= start:
-            return None
-        try:
-            parsed = json.loads(raw[start:end + 1])
-        except (json.JSONDecodeError, ValueError):
-            return None
-        if not isinstance(parsed, dict):
-            return None
-        return self._apply_part_digest_defaults(parsed, part_number)
 
     def _build_multimodal_user_msg(self, image_path: Path, filename: str | None, labels: dict) -> Any:
         mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"

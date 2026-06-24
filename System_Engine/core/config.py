@@ -344,8 +344,6 @@ class DynamicSettings:
         # Splitter selection (moved here per "config in Scripture, not .env"):
         ("use_thoughtful_splitter", "USE_THOUGHTFUL_SPLITTER",      bool),
         ("thoughtful_use_llm",      "THOUGHTFUL_USE_LLM_FOR_INGEST", bool),
-        # A2: one merged LLM call per Part (note + digest) instead of two.
-        ("merge_part_calls",        "MERGE_PART_CALLS",            bool),
     )
 
     def __init__(self):
@@ -390,9 +388,6 @@ class DynamicSettings:
         # at runtime — see _BINDINGS above.
         self.USE_THOUGHTFUL_SPLITTER = USE_THOUGHTFUL_SPLITTER
         self.THOUGHTFUL_USE_LLM_FOR_INGEST = THOUGHTFUL_USE_LLM_FOR_INGEST
-        # A2: merge the per-Part entity-page + digest into one LLM call. Default
-        # OFF until the merged note/digest quality is A/B-validated on a real doc.
-        self.MERGE_PART_CALLS = False
 
     def reload(self):
         if not SCRIPTURE_FILE.exists():
