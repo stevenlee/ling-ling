@@ -18,6 +18,10 @@ Ling-Ling 是一個 file-based agent。你用 Obsidian 管理資料，Ling-Ling 
 
 - **Scripture-driven settings**：`Scripture/Scripture.md` 是可熱載入的行為設定，控制 persona、輸出語言、temperature、context window、RAG top-k 以及預設輸出模板 (`use_template`) 等參數。
 - **Long-document ingestion pipeline**：長文進入 `Consolidate/` 後，`IngestionPipeline` 會切分文字、生成 Part notes、產生 structured digests、輸出 Stitched Article 與 Synthesis。
+- **結構感知切分（ThoughtfulSplitter）**：開啟 `use_thoughtful_splitter` 後，依章節／標題邊界切 Parts、把短段落打包到大小預算、過長段落再遞迴細切；切之前先跑 `source_prep` 前處理（剝除 Gutenberg 授權／目錄、把純文字章節線索升格成 markdown 標題）。
+- **可續跑的 Part 蒸餾（B1 resume）**：每個 Part note 的 frontmatter 會持久化 `pending_concepts` 與結構化 digest，所以幾百個 Parts 的長文中途被打斷後，重跑會略過已完成的 Part、不重複呼叫 LLM。
+- **重點標注 + 學習輔助**：`highlight_spans` 讓每個 Part note 把關鍵句包進 `== ==`（無額外 LLM call、只標逐字命中、非破壞性）；`visual_router` 為 Synthesis／Insight 自動挑最合適的視覺化（比較表／流程圖／心智圖…）。
+- **書評／報導發布track**：`@ling-review` 把筆記的 Synthesis 寫成報導者／書評人口吻的助學習稿，`@ling-blog` 再把核可稿轉成 Quartz 內容送進 kafu 數位花園（build/push 留在 kafu 端手動）。
 - **Source-grounded Parts**：每個 Part 會記錄原文 char/line range，Stitched Article 也會顯示 `Original range`，方便從分析結果回到原始段落。
 - **Stitched Article**：`Title (Stitched).md` 保留各 Part 的主要正文，適合完整閱讀與校對。
 - **Synthesis Note**：`Title (Synthesis).md` 使用 Part digests 進行總合成，並附上 Part Digest Appendix。
@@ -144,6 +148,11 @@ Confidence: medium
 - `@ling-assess`：自我體檢——彙整品質訊號成健康記分卡（唯讀，無副作用）。
 - `@ling-resynthesize [[標題]]`：把既有文件的原始檔重新投入 `Consolidate/`，重跑 synthesis（sidecar 圖片一併還原）。
 
+### 發布track（書評／報導 → kafu 數位花園）
+
+- `@ling-review [[標題]]`：把一篇已有 Synthesis 的筆記，用 **報導者／書評人** 口吻寫成助學習的書評／報導，產出到 `fromLingLing/`（不回寫 `pages/`）。genre 可用 `as book|explainer|paper|patent` 指定；省略時標題含專利號→`patent`，否則→`book`。
+- `@ling-blog`：把 `lings-desktop/Blog/` 裡核可的 review 轉成 Quartz 內容、送進 kafu repo 的 `content/`（純本機搬運，不 build、不 push）。上線在 kafu 端手動 `make publish`。
+
 ## TUI cockpit（終端機操作台）
 
 除了 Obsidian，還可以用一個**終端機 TUI** 直接下命令、看狀態。它是一個**獨立的伴生程式**：
@@ -198,6 +207,8 @@ lings-desktop/
 
 逐項變更紀錄見 [CHANGELOG.md](CHANGELOG.md)。主要里程碑（新到舊）：
 
+- **Parts 蒸餾翻修**（2026-06）：結構感知切分（ThoughtfulSplitter + `source_prep` 前處理）讓 Parts 沿章節邊界切；B1 resume 把 `pending_concepts`/digest 持久化進 frontmatter，長文中斷後可續跑。（曾試「每 Part 合併成一次 LLM call」的加速法，A/B 實測只有 1.03×——生成是 token-bound 不是 call-bound——已移除。）
+- **書評／報導發布track**（2026-06）：`@ling-review` 把 Synthesis 寫成助學習的書評／報導（book/explainer/paper/patent 四種 genre + `identifier_guard` 校正），`@ling-blog` 把核可稿轉成 Quartz 內容送進 kafu 數位花園（build/push 留在 kafu 端）。
 - **Daydream 白日夢補做**（2026-06）：夜間做夢窗口被忙碌跳過的工作改由白天閒置時段低優先補做（consolidation 積壓 → 漏掉的每日洞察 → 自發反思），複用 facet-backfill 的「一次一小口、可被插隊、衍生不追蹤、每日額度」讓步契約。
 - **全模組稽核與硬化**（2026-06）：多代理程式碼稽核 + 逐項驗證修正——資料完整性、reasoning-channel JSON 防禦、watcher 並發、trace 索引。
 - **Cortex 長期記憶（Phase 1–4）**：insight 品質訊號 → 夜間鞏固成原子主張 → 雙強度衰減 + 行為訊號 → 保守 falsified 主張帳本。
