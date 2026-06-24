@@ -18,9 +18,10 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "5000"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "500"))
 
 # ─── Thoughtful Splitter (P4 wiring) ──────────────────────────────────
-# Feature flags are env-only because they're deployment-time decisions; the
-# tuning knobs (sizes, overlap) live in Scripture so creators can re-tune at
-# runtime. See DesignDoc/ThoughtfulSplitter_implementation_plan.md §9.1.
+# These env values are the deployment-time DEFAULTS. `use_thoughtful_splitter`
+# and `thoughtful_use_llm` are also bound in DynamicSettings, so Scripture.md
+# overrides them at runtime (config-in-Scripture convention). The remaining
+# flags below stay env-only. See DesignDoc/ThoughtfulSplitter_implementation_plan.md §9.1.
 
 USE_THOUGHTFUL_SPLITTER         = os.getenv("USE_THOUGHTFUL_SPLITTER", "false").lower() == "true"
 THOUGHTFUL_USE_LLM_FOR_INGEST   = os.getenv("THOUGHTFUL_USE_LLM_FOR_INGEST", "true").lower() == "true"
@@ -340,6 +341,9 @@ class DynamicSettings:
         # Inline key-point highlighting on part notes (== == spans):
         ("highlight_spans",    "HIGHLIGHT_ENABLED",  bool),
         ("highlight_max",      "HIGHLIGHT_MAX",      int),
+        # Splitter selection (moved here per "config in Scripture, not .env"):
+        ("use_thoughtful_splitter", "USE_THOUGHTFUL_SPLITTER",      bool),
+        ("thoughtful_use_llm",      "THOUGHTFUL_USE_LLM_FOR_INGEST", bool),
     )
 
     def __init__(self):
@@ -379,6 +383,11 @@ class DynamicSettings:
         # LLM round-trip); a deterministic pass applies the markers afterwards.
         self.HIGHLIGHT_ENABLED = True
         self.HIGHLIGHT_MAX = 5
+        # Splitter selection: env value is the default (deployment), but
+        # Scripture (use_thoughtful_splitter / thoughtful_use_llm) can override
+        # at runtime — see _BINDINGS above.
+        self.USE_THOUGHTFUL_SPLITTER = USE_THOUGHTFUL_SPLITTER
+        self.THOUGHTFUL_USE_LLM_FOR_INGEST = THOUGHTFUL_USE_LLM_FOR_INGEST
 
     def reload(self):
         if not SCRIPTURE_FILE.exists():

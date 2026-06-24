@@ -22,6 +22,8 @@ visual_router: true
 argument_map_mermaid: true
 highlight_spans: true
 highlight_max: 5
+use_thoughtful_splitter: true
+thoughtful_use_llm: true
 ---
 
 # 📜 Scripture (Settings)
@@ -52,6 +54,10 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 - **argument_map_mermaid**: If `true`, argument maps (Toulmin structure) additionally get a deterministic Mermaid graph below the Markdown. Pure structure-to-graph, no extra LLM call.
 - **highlight_spans**: If `true`, each Part note gets its key sentences wrapped in `== ==` highlights. The spans ride along on the existing Part Digest call (no extra LLM round); a deterministic pass marks only verbatim matches, never touching the original wording.
 - **highlight_max**: Maximum number of `== ==` highlights per Part note (default 5). Hard cap even if the model proposes more.
+
+### 🔪 Chunking (how documents are split into Parts)
+- **use_thoughtful_splitter**: If `true`, split documents structure-aware — cut at chapter/heading boundaries, pack short sections up to the size budget, and recursively sub-split sections that are too long. If `false`, fall back to mechanical character-count chunks. (Takes effect on the next pipeline build / daemon restart.)
+- **thoughtful_use_llm**: If `true`, allow the splitter's LLM topic-shift refinement. *Currently a no-op placeholder (the real refinement lands in a later phase); structural chapter-splitting works regardless.*
 
 ---
 *Note: Lower `digest_limit` improves accuracy for complex texts but creates more parts.*

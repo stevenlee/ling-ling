@@ -72,15 +72,15 @@ class IngestionPipeline:
     def __init__(self, llm_client, rag_manager):
         self.llm = llm_client
         self.rag = rag_manager
-        # Splitter selection is deployment-time (env flag), not runtime.
+        # Splitter selection is Scripture-overridable (settings.*), not just env.
         # ThoughtfulSplitter's `split_text_with_spans` returns dicts with
         # extra `section_path` / `boundary_type` fields; TextSplitter's
         # returns the lean `{text, start, end}` shape. Both work with the
         # downstream `chunk_spans[i].get(...)` reads below.
-        if USE_THOUGHTFUL_SPLITTER:
+        if settings.USE_THOUGHTFUL_SPLITTER:
             from services.thoughtful_splitter import ThoughtfulSplitter
             self.splitter = ThoughtfulSplitter(
-                default_use_llm=THOUGHTFUL_USE_LLM_FOR_INGEST,
+                default_use_llm=settings.THOUGHTFUL_USE_LLM_FOR_INGEST,
                 default_emit_summary=THOUGHTFUL_EMIT_SUMMARY,
                 llm=self.llm,  # Phase 4 topic-shift detector reaches the LLM through this
             )
@@ -101,6 +101,17 @@ class IngestionPipeline:
     # ── Public entry points ──────────────────────────────────────────
 
     def ingest_markdown(self, content: str, source_filepath: Path):
+        # Source pre-passes (in-memory, never edits the source file):
+        #   0c strip_boilerplate — drop Gutenberg license/TOC.
+        #   0b normalize_structure — promote plain-text chapter cues to markdown
+        #      headings, but only for docs that lack markdown structure.
+        from services.source_prep import strip_boilerplate, normalize_structure
+        content, _stripped = strip_boilerplate(content)
+        content, _normed = normalize_structure(content)
+        if _stripped or _normed:
+            logging.info(
+                f"Source prep on {source_filepath.name}: strip={_stripped} normalize={_normed}"
+            )
         meta = parse_markdown_metadata(content)
         doc_config = self._resolve_routing(meta, content, source_filepath)
 
