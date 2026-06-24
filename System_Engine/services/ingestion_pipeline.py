@@ -9,6 +9,7 @@ Originally extracted from ClippingWatcher.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from datetime import datetime
@@ -590,7 +591,7 @@ class IngestionPipeline:
             # + persisted resume state), skip the LLM work and rebuild its state
             # from frontmatter, keeping the pending_concepts chain intact.
             part_path = PAGES_DIR / base_title / f"{base_title} (Part {i + 1}).md"
-            resumed = self._resume_part(part_path)
+            resumed = self._resume_part(part_path, chunk)
             if resumed is not None:
                 ui.set_status(f"Resuming: Part {i + 1}/{total} already distilled")
                 if not master_tags and resumed["tags"]:
@@ -647,6 +648,7 @@ class IngestionPipeline:
             self._append_part_digest_to_note(
                 result, digest, section_path=part_info.get("section_path"),
                 part_content=part_content, pending_concepts=pending_concepts,
+                chunk=chunk,
             )
             self._index_digest_facets(
                 result.get("_page_path"), result.get("_title"), digest,
@@ -963,12 +965,26 @@ class IngestionPipeline:
         return out
 
     @staticmethod
-    def _resume_part(part_path: Path) -> dict | None:
+    def _chunk_fingerprint(chunk: str) -> str:
+        """Short content hash of a raw chunk — the resume validity key. Exact
+        match by design: any difference in the chunk text (e.g. a chunking-config
+        change that shifts Part boundaries) flips the hash, so resume re-distills
+        rather than reusing a note whose text no longer matches this Part."""
+        return hashlib.sha256((chunk or "").encode("utf-8")).hexdigest()[:16]
+
+    @classmethod
+    def _resume_part(cls, part_path: Path, chunk: str | None = None) -> dict | None:
         """For B1 resume: if a part note is already complete — it has the digest
         appendix AND the persisted resume state (`part_digest` in frontmatter) —
         return its reconstructed state so `_process_parts` can skip it. Returns
         None when missing, or finalized by a pre-B1 build (no resume state) so it
-        gets re-distilled rather than silently dropped."""
+        gets re-distilled rather than silently dropped.
+
+        Guarded by `part_chunk_hash`: when the note carries a fingerprint and the
+        current chunk's fingerprint differs (the source was re-chunked under a
+        different config), the note is stale → return None so it re-distills.
+        Notes written before fingerprinting existed carry no hash and resume as
+        before (no forced mass re-distillation of the existing corpus)."""
         if not part_path.exists():
             return None
         try:
@@ -980,6 +996,9 @@ class IngestionPipeline:
         meta = parse_markdown_metadata(text)
         if "part_digest" not in meta:
             return None
+        stored_hash = meta.get("part_chunk_hash")
+        if stored_hash and chunk is not None and stored_hash != cls._chunk_fingerprint(chunk):
+            return None  # chunk text changed (re-chunked) → note is stale
         return {
             "tags": meta.get("tags") or [],
             "pending_concepts": meta.get("pending_concepts", "") or "",
@@ -989,6 +1008,7 @@ class IngestionPipeline:
     def _append_part_digest_to_note(
         self, ingest_result: dict, digest, section_path: list | None = None,
         part_content: str | None = None, pending_concepts: str = "",
+        chunk: str | None = None,
     ) -> None:
         page_path_value = ingest_result.get("_page_path") if isinstance(ingest_result, dict) else None
         if not page_path_value:
@@ -1035,6 +1055,8 @@ class IngestionPipeline:
         meta["pending_concepts"] = pending_concepts or ""
         if isinstance(digest, dict):
             meta["part_digest"] = digest
+        if chunk is not None:
+            meta["part_chunk_hash"] = self._chunk_fingerprint(chunk)
         updated = dump_markdown_with_metadata(meta, body_only)
         page_path.write_text(updated, encoding="utf-8")
 
