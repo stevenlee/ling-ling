@@ -34,6 +34,7 @@ from core.config import (
 from core.parser import (
     dump_markdown_with_metadata,
     parse_markdown_metadata,
+    strip_body_frontmatter,
     run_markdown_quality_checks,
 )
 from core.ui import ui
@@ -585,6 +586,23 @@ class IngestionPipeline:
         total = len(chunks)
 
         for i, chunk in enumerate(chunks):
+            # B1 resume: if this part's note is already complete (digest appendix
+            # + persisted resume state), skip the LLM work and rebuild its state
+            # from frontmatter, keeping the pending_concepts chain intact.
+            part_path = PAGES_DIR / base_title / f"{base_title} (Part {i + 1}).md"
+            resumed = self._resume_part(part_path)
+            if resumed is not None:
+                ui.set_status(f"Resuming: Part {i + 1}/{total} already distilled")
+                if not master_tags and resumed["tags"]:
+                    master_tags = resumed["tags"]
+                pending_concepts = resumed["pending_concepts"]
+                if resumed["part_digest"]:
+                    part_digests.append(resumed["part_digest"])
+                    nav = digest_value_to_text(resumed["part_digest"].get("thesis")) or ""
+                    navigation_items.append(f"- [[{base_title} (Part {i + 1})]]: {nav[:140]}")
+                part_paths.append(part_path)
+                continue
+
             ui.set_status(f"Distilling Part {i + 1} of {total}...")
 
             context_hint = f"Part {i + 1}/{total}."
@@ -628,7 +646,7 @@ class IngestionPipeline:
             part_digests.append(digest)
             self._append_part_digest_to_note(
                 result, digest, section_path=part_info.get("section_path"),
-                part_content=part_content,
+                part_content=part_content, pending_concepts=pending_concepts,
             )
             self._index_digest_facets(
                 result.get("_page_path"), result.get("_title"), digest,
@@ -944,9 +962,33 @@ class IngestionPipeline:
         out.append("")
         return out
 
+    @staticmethod
+    def _resume_part(part_path: Path) -> dict | None:
+        """For B1 resume: if a part note is already complete — it has the digest
+        appendix AND the persisted resume state (`part_digest` in frontmatter) —
+        return its reconstructed state so `_process_parts` can skip it. Returns
+        None when missing, or finalized by a pre-B1 build (no resume state) so it
+        gets re-distilled rather than silently dropped."""
+        if not part_path.exists():
+            return None
+        try:
+            text = part_path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        if _PART_DIGEST_HEADER not in text or "part_digest:" not in text:
+            return None
+        meta = parse_markdown_metadata(text)
+        if "part_digest" not in meta:
+            return None
+        return {
+            "tags": meta.get("tags") or [],
+            "pending_concepts": meta.get("pending_concepts", "") or "",
+            "part_digest": meta.get("part_digest"),
+        }
+
     def _append_part_digest_to_note(
         self, ingest_result: dict, digest, section_path: list | None = None,
-        part_content: str | None = None,
+        part_content: str | None = None, pending_concepts: str = "",
     ) -> None:
         page_path_value = ingest_result.get("_page_path") if isinstance(ingest_result, dict) else None
         if not page_path_value:
@@ -982,11 +1024,18 @@ class IngestionPipeline:
                 content, digest.get("highlights"), settings.HIGHLIGHT_MAX,
             )
 
-        if not appendix and not artifact_section and not highlighted:
-            return
-
         tail = f"{artifact_section}{appendix}".strip()
-        updated = f"{content}\n\n{tail}\n" if tail else f"{content}\n"
+        body_full = f"{content}\n\n{tail}\n" if tail else f"{content}\n"
+
+        # B1 resume state: persist the carry-forward pending_concepts and the
+        # structured digest into the note's frontmatter, so an interrupted run
+        # can resume from disk (skip-existing) without re-calling the LLM.
+        meta = parse_markdown_metadata(body_full)
+        body_only, _ = strip_body_frontmatter(body_full)
+        meta["pending_concepts"] = pending_concepts or ""
+        if isinstance(digest, dict):
+            meta["part_digest"] = digest
+        updated = dump_markdown_with_metadata(meta, body_only)
         page_path.write_text(updated, encoding="utf-8")
 
         title = ingest_result.get("_title") or page_path.stem

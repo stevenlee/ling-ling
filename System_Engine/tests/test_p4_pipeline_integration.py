@@ -211,9 +211,11 @@ class TestEndToEndIngestion:
 
     def test_flag_off_long_doc_smoke(self, tmp_path, monkeypatch):
         """Legacy splitter: ingestion works end-to-end without crash."""
-        # Redirect paths to tmp so we don't write to the real vault.
-        self._redirect_paths(tmp_path, monkeypatch)
+        # Build the pipeline FIRST (it reloads core.config, which would wipe the
+        # path monkeypatches), THEN redirect so the patches survive — otherwise
+        # the test leaks part notes into the real vault.
         pipeline, llm, rag = self._make_pipeline(flag_on=False)
+        self._redirect_paths(tmp_path, monkeypatch)
 
         text = (CORPUS_DIR / "long_essay_with_code.md").read_text(encoding="utf-8")
         # Force long-doc path by making chunk_size small.
@@ -233,8 +235,8 @@ class TestEndToEndIngestion:
     def test_flag_on_long_doc_passes_section_path_to_rag(self, tmp_path, monkeypatch):
         """ThoughtfulSplitter: each part's add_document call carries
         section_path matching what the splitter produced."""
-        self._redirect_paths(tmp_path, monkeypatch)
         pipeline, llm, rag = self._make_pipeline(flag_on=True)
+        self._redirect_paths(tmp_path, monkeypatch)
         # Small sizes so the doc actually splits into multiple parts.
         from services.thoughtful_splitter import ThoughtfulSplitter
         pipeline.splitter = ThoughtfulSplitter(
@@ -261,8 +263,8 @@ class TestEndToEndIngestion:
     def test_flag_on_long_doc_writes_section_path_to_yaml(self, tmp_path, monkeypatch):
         """ThoughtfulSplitter: the written part-note YAML frontmatter
         contains `section_path:` field."""
-        self._redirect_paths(tmp_path, monkeypatch)
         pipeline, llm, rag = self._make_pipeline(flag_on=True)
+        self._redirect_paths(tmp_path, monkeypatch)
         from services.thoughtful_splitter import ThoughtfulSplitter
         pipeline.splitter = ThoughtfulSplitter(
             target_size=1000, max_size=1800, min_size=200, snap_window=400, overlap_chars=0,
