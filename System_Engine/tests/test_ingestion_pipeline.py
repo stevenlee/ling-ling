@@ -174,6 +174,28 @@ class TestExtractStitchableBody:
         assert "### H1" in body
         assert "#### H2" in body
 
+    def test_preserves_learning_artifacts_after_navigation(self, pipeline):
+        # Artifacts sit *after* navigation in a real part note; they must survive
+        # the navigation cut while nav + digest are still stripped.
+        content = (
+            "---\ntitle: X (Part 1)\n---\n\n"
+            "# Main\n\nBody text here.\n\n"
+            "---\n## 🔗 知識導航\n*   📄 [[Original]]\n\n"
+            "## 🖼️ 學習輔助（comparison_table）\n\n| a | b |\n| - | - |\n\n"
+            "## 🖼️ 學習輔助（mindmap）\n\n```mermaid\nmindmap\n  root((X))\n```\n\n"
+            "## 🧩 Part Digest Appendix\n\ndigest stuff\n"
+        )
+        body = pipeline._extract_stitchable_body(content)
+        assert "🔗 知識導航" not in body
+        assert "[[Original]]" not in body
+        assert "Part Digest Appendix" not in body
+        assert "digest stuff" not in body
+        assert "Body text here." in body
+        # Both artifacts carried forward, demoted ## → ####
+        assert "#### 🖼️ 學習輔助（comparison_table）" in body
+        assert "#### 🖼️ 學習輔助（mindmap）" in body
+        assert "mindmap" in body
+
     def test_accepts_path(self, pipeline, tmp_path):
         p = tmp_path / "part.md"
         p.write_text("---\ntitle: X\n---\n\n# Main\n\nBody.\n", encoding="utf-8")

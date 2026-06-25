@@ -1154,7 +1154,7 @@ class IngestionPipeline:
             "input_chars": input_chars,
             "output_chars": output_chars,
             "parts_count": len(readable_parts),
-            "stitch_pipeline": "part-note-stitch-v1",
+            "stitch_pipeline": "part-note-stitch-v2",
             "quality_checker": "deterministic-markdown-v1",
         }
 
@@ -1212,7 +1212,10 @@ class IngestionPipeline:
         return "\n".join(lines) + "\n\n"
 
     def _extract_stitchable_body(self, content_or_path) -> str:
-        """Strip frontmatter, navigation, and digest appendix from a part note."""
+        """Strip frontmatter, navigation, and digest appendix from a part note,
+        but keep the per-part learning artifacts (comparison_table / mindmap /
+        flowchart). Those sit *after* the navigation section, so the navigation
+        cut below would otherwise drop them — we carry them forward explicitly."""
         if isinstance(content_or_path, Path):
             content = content_or_path.read_text(encoding="utf-8")
         else:
@@ -1220,10 +1223,21 @@ class IngestionPipeline:
 
         content = _FRONTMATTER_RE.sub("", content, count=1).strip()
 
-        cut_markers = ("\n## 🔗 知識導航", "\n" + _PART_DIGEST_HEADER)
+        # Carry the learning-artifact block forward (it lives between the
+        # navigation section and the digest appendix).
+        artifacts = ""
+        a = content.find("\n" + _ARTIFACT_HEADER)
+        if a != -1:
+            end = content.find("\n" + _PART_DIGEST_HEADER, a)
+            artifacts = content[a + 1 : (end if end != -1 else None)].strip()
+
+        cut_markers = ("\n## 🔗 知識導航", "\n" + _PART_DIGEST_HEADER, "\n" + _ARTIFACT_HEADER)
         positions = [pos for marker in cut_markers if (pos := content.find(marker)) != -1]
         if positions:
             content = content[: min(positions)].rstrip()
+
+        if artifacts:
+            content = f"{content}\n\n{artifacts}"
 
         content = self._demote_headings(content, levels=2)
         content, _ = run_markdown_quality_checks(content)
