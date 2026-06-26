@@ -24,16 +24,38 @@ ARTIFACT_TYPES = {
     "quadrant": "物件落在兩個軸 / 取捨空間",
     "concept_map": "概念之間的網狀關係（非序列）",
     "argument_map": "論證性內容（主張 + 根據 + 反駁）",
+    "sequence_diagram": "實體之間的對話、交涉、訊息傳遞或劇情發展順序",
+    "state_diagram": "事物或心理狀態的轉變與觸發條件",
+    "user_journey": "主角或使用者在不同階段的心境起伏與體驗分數",
+    "gantt_chart": "具有持續時間的歷史事件或專案排程重疊關係",
+    "pie_chart": "整體中的比例、成分分配或資源佔比",
+    "sankey_diagram": "資金流向、資源分配、能量轉換等「流量」關係",
+    "xy_chart": "數值在時間序列或類別上的分佈與趨勢",
+    "block_diagram": "系統高階架構、硬體拓樸或立體方塊關係",
+    "c4_diagram": "軟體系統的 C4 架構 (Context / Container)",
+    "class_diagram": "物件導向程式設計的類別、屬性與繼承關係",
+    "er_diagram": "資料庫的實體關聯表（如：一對多、主外鍵）",
     "none": "沒有強視覺結構的散文",
 }
 
 # Mermaid header per diagram kind.
 _MERMAID_KIND = {
-    "flowchart": "flowchart TD",
+    "flowchart": "flowchart TD 或 flowchart LR",
     "mindmap": "mindmap",
     "timeline": "timeline",
     "quadrant": "quadrantChart",
-    "concept_map": "graph LR",
+    "concept_map": "graph TD 或 graph LR",
+    "sequence_diagram": "sequenceDiagram",
+    "state_diagram": "stateDiagram-v2",
+    "user_journey": "journey",
+    "gantt_chart": "gantt",
+    "pie_chart": "pie title",
+    "sankey_diagram": "sankey-beta",
+    "xy_chart": "xychart-beta",
+    "block_diagram": "block-beta",
+    "c4_diagram": "C4Context",
+    "class_diagram": "classDiagram",
+    "er_diagram": "erDiagram",
 }
 
 # Common to every kind. Kind-specific quoting rules are added separately —
@@ -70,20 +92,33 @@ _MERMAID_HINTS = {
     "timeline": "timeline 語法：第一行 `timeline`,接 `title 標題`,然後每段寫 `時期 : 事件 : 事件`。",
     "quadrant": "quadrantChart 語法：第一行 `quadrantChart`,設 `x-axis`、`y-axis`、四個 `quadrant-1..4`,"
                 "再以 `\"點名\": [x, y]`（0~1）放點。",
-    "concept_map": "用 `graph LR`,節點間用帶標籤的邊表達關係,如 `A[\"概念\"] -->|\"關係\"| B[\"概念\"]`。",
-    "flowchart": "用 `flowchart TD`,箭頭 `-->` 表流程/因果,需要分組時用 `subgraph \"群組\" ... end`。",
+    "concept_map": "節點間用帶標籤的邊表達關係,如 `A[\"概念\"] -->|\"關係\"| B[\"概念\"]`。請根據內容結構決定方向：並行分支多或文字長時強烈建議使用 LR 以收斂左右寬度。",
+    "flowchart": "箭頭 `-->` 表流程/因果,需要分組時用 `subgraph \"群組\" ... end`。請根據內容結構決定方向：並行分支多或文字長時強烈建議使用 LR 以收斂左右寬度。",
+    "sequence_diagram": "sequenceDiagram 語法：第一行 `sequenceDiagram`,參與者用 `participant A`，訊息用 `A->>B: 訊息`，可搭配 `Note over A,B: 說明`。",
+    "state_diagram": "stateDiagram-v2 語法：第一行 `stateDiagram-v2` (若需要左右排版可於第二行加 `direction LR`),起點與終點用 `[*]`,轉移用 `-->`,如 `State1 --> State2 : 觸發條件`。",
+    "user_journey": "journey 語法：第一行 `journey`,標題 `title ...`,區段 `section ...`,步驟寫法為 `任務名稱: 分數: 角色`,例如 `逛商品: 5: User`（分數1~5）。",
+    "gantt_chart": "gantt 語法：第一行 `gantt`,接 `title ...` 與 `dateFormat YYYY-MM-DD`，區段用 `section 名稱`，任務為 `任務名 :狀態, ID, 開始日, 結束日`。",
+    "pie_chart": "pie 語法：第一行 `pie title 標題`,每行寫 `\"類別\" : 數值`（數值必須是純數字）。",
+    "sankey_diagram": "sankey-beta 語法：第一行 `sankey-beta`,每行寫 `來源節點, 目標節點, 數值`，如 `A, B, 10`。不要用雙引號包住節點名稱。",
+    "xy_chart": "xychart-beta 語法：第一行 `xychart-beta`，接著 `title \"標題\"`，定義 `x-axis [...]` 和 `y-axis \"標籤\" 區間`，最後加 `bar [...]` 或 `line [...]`。",
+    "block_diagram": "block-beta 語法：第一行 `block-beta`，可用 `columns 數量` 定義排版，接著寫節點名稱。不要用雙引號包住節點。",
+    "c4_diagram": "C4Context 語法：使用 `Person(alias, \"Label\")`、`System(alias, \"Label\")` 與 `Rel(from, to, \"Label\")` 等巨集指令。",
+    "class_diagram": "classDiagram 語法：第一行 `classDiagram`，使用 `class 類別名 { ... }` 或是 `類別A <|-- 類別B` 來表示繼承。",
+    "er_diagram": "erDiagram 語法：第一行 `erDiagram`，實體關聯用 `實體1 ||--o{ 實體2 : 關係標籤` 等語法。",
 }
 
-_CLASSIFY_SYSTEM = (
-    "你是學習產物分類器。讀使用者提供的內容,判斷哪些學習輔助產物最能幫助讀者理解或記住,"
-    "並依適合度排序(最適合在前),最多回兩種。\n"
-    "選項（type 只能用下列之一）：\n"
-    + "\n".join(f"- {k}：{v}" for k, v in ARTIFACT_TYPES.items())
-    + "\n\n回 JSON：{\"ranked\": [{\"type\": \"<上列之一>\", \"confidence\": <0-1>, "
-    "\"reason\": \"<一句話為什麼>\"}, ...]}（依適合度排序,1~2 項）\n"
-    "重要：內容若沒有清楚的結構,ranked 只放一項 type=\"none\"——寧可不產圖,也不要硬湊誤導的圖。"
-    "兩種產物要呈現不同的認知切面(例如流程 vs 階層),不要選兩個本質相同的。"
-)
+def _build_classify_system(limit: int, exclude_types: set[str] | None = None) -> str:
+    allowed_types = {k: v for k, v in ARTIFACT_TYPES.items() if not exclude_types or k not in exclude_types}
+    return (
+        "你是學習產物分類器。讀使用者提供的內容,判斷哪些學習輔助產物最能幫助讀者理解或記住,"
+        f"並依適合度排序(最適合在前),最多回{limit}種。\n"
+        "選項（type 只能用下列之一）：\n"
+        + "\n".join(f"- {k}：{v}" for k, v in allowed_types.items())
+        + "\n\n回 JSON：{\"ranked\": [{\"type\": \"<上列之一>\", \"confidence\": <0-1>, "
+        "\"reason\": \"<一句話為什麼>\"}, ...]}（依適合度排序,1~" + str(limit) + " 項）\n"
+        "重要：內容若沒有清楚的結構,ranked 只放一項 type=\"none\"——寧可不產圖,也不要硬湊誤導的圖。"
+        "多種產物要呈現不同的認知切面(例如流程 vs 階層),不要選本質相同的。"
+    )
 
 _MERMAID_BLOCK_RE = re.compile(r"```mermaid.*?```", re.DOTALL)
 
@@ -105,7 +140,7 @@ def _coerce_choice(raw) -> dict | None:
     }
 
 
-def classify_structures(llm, content: str, *, limit: int = 2) -> list[dict]:
+def classify_structures(llm, content: str, *, limit: int = 2, exclude_types: set[str] | None = None) -> list[dict]:
     """Return a ranked list (1..limit) of {type, confidence, reason}.
 
     Accepts both the ranked shape `{"ranked": [...]}` and the legacy single
@@ -114,7 +149,7 @@ def classify_structures(llm, content: str, *, limit: int = 2) -> list[dict]:
     fail-opens to `[none]`."""
     parsed = llm._complete_json(
         kind="object",
-        system_prompt=_CLASSIFY_SYSTEM,
+        system_prompt=_build_classify_system(limit, exclude_types),
         user_msg=content[:6000],
         temperature=0.0,
         trace_context={"stage": "artifact_classify", "metadata": {}},
@@ -227,14 +262,14 @@ def build_artifact(llm, content: str, *, forced_type: str | None = None) -> dict
     return {"type": t, "reason": chosen.get("reason", ""), "artifact": artifact}
 
 
-def build_artifacts(llm, content: str, *, limit: int = 2) -> list[dict]:
+def build_artifacts(llm, content: str, *, limit: int = 2, exclude_types: set[str] | None = None) -> list[dict]:
     """Classify into a ranked top-`limit` → render each → keep the ones that
     produced a real artifact. Returns a list of {type, reason, artifact} (may
     be empty). Used by the auto-attach path to surface complementary views."""
     if not content or not content.strip():
         return []
     results: list[dict] = []
-    for chosen in classify_structures(llm, content, limit=limit):
+    for chosen in classify_structures(llm, content, limit=limit, exclude_types=exclude_types):
         t = chosen["type"]
         if t == "none":
             continue
@@ -244,8 +279,8 @@ def build_artifacts(llm, content: str, *, limit: int = 2) -> list[dict]:
     return results
 
 
-def maybe_artifact_section(llm, content: str) -> str:
-    """One or more '## 🖼️ 學習輔助（type）' sections for `content` (the top-2
+def maybe_artifact_section(llm, content: str, *, limit: int = 2, exclude_types: set[str] | None = None) -> str:
+    """One or more '## 🖼️ 學習輔助（type）' sections for `content` (the top-`limit`
     complementary views), or '' when disabled / unstructured / all renders fail.
     Gated by Scripture's `visual_router` — this is the AUTO-attach to
     synthesis/part/insight output (the on-demand @ling-visualize is never gated).
@@ -256,7 +291,7 @@ def maybe_artifact_section(llm, content: str) -> str:
     if not settings.VISUAL_ROUTER_ENABLED:
         return ""
     try:
-        results = build_artifacts(llm, content)
+        results = build_artifacts(llm, content, limit=limit, exclude_types=exclude_types)
     except Exception as e:
         logging.warning(f"learning_artifacts: auto-attach failed: {e}")
         return ""

@@ -27,8 +27,10 @@ class VisualizeAgent(BaseAgent):
         titles = [t.split("|")[0].strip() for t in _WIKILINK_RE.findall(directive)]
         forced = None
         m = _AS_TYPE_RE.search(_CMD_TOKEN_RE.sub("", directive))
-        if m and m.group(1).lower() in ARTIFACT_TYPES:
-            forced = m.group(1).lower()
+        if m:
+            raw_forced = m.group(1).lower()
+            if raw_forced in ARTIFACT_TYPES or raw_forced == "all":
+                forced = raw_forced
 
         if not titles:
             ui.error("🖼️ @ling-visualize：請用 [[筆記名]] 指定要視覺化的對象")
@@ -49,14 +51,52 @@ class VisualizeAgent(BaseAgent):
             )[1]
 
         ui.set_status(f"🖼️ 視覺化：{title[:40]}")
-        result = build_artifact(self.llm, text, forced_type=forced)
-        body = self._render(title, source, result)
+        
+        if forced == "all":
+            body = self._render_all(title, source, text)
+            artifact_type_meta = "all"
+        else:
+            result = build_artifact(self.llm, text, forced_type=forced)
+            body = self._render(title, source, result)
+            artifact_type_meta = result["type"]
+
         _, full_markdown = self._write_report(
             f"Visualize: {title}", body, "visualize",
-            {"target": title, "artifact_type": result["type"]},
+            {"target": title, "artifact_type": artifact_type_meta},
         )
-        ui.success(f"🖼️ 完成：{title} → {result['type']} → fromLingLing/")
+        ui.success(f"🖼️ 完成：{title} → {artifact_type_meta} → fromLingLing/")
         return full_markdown
+
+    def _render_all(self, title: str, source: str, text: str) -> str:
+        L = [
+            f"# 🖼️ 學習輔助（全部測試）：{title}",
+            "",
+            "此報告嘗試套用系統支援的所有圖表類型。若結構不合適導致無法產生，則會標示為「不適用」。",
+            "",
+        ]
+        for t, desc in ARTIFACT_TYPES.items():
+            if t == "none":
+                continue
+            
+            result = build_artifact(self.llm, text, forced_type=t)
+            
+            L.append(f"## {t}")
+            L.append(f"> 類型說明：{desc}")
+            L.append("")
+            
+            if not result.get("artifact"):
+                L.append("**Not Applicable (不適用)**")
+                if t == "argument_map":
+                    L.append("（這篇內容沒有可辨識的論證結構）")
+                else:
+                    L.append("（產生時驗證失敗，或缺乏此圖表所需的資料結構）")
+            else:
+                L.append(result["artifact"])
+            L.append("")
+            L.append("---")
+            L.append("")
+        
+        return "\n".join(L)
 
     def _render(self, title: str, source: str, result: dict) -> str:
         t = result["type"]

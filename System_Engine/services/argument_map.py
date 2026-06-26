@@ -73,7 +73,7 @@ def _argument_mermaid(data: dict) -> str:
     """Deterministic Mermaid graph from the Toulmin fields — no LLM, so it can't
     drift or hallucinate. Grounds → claim (solid); warrants/rebuttals → claim
     (dashed, labelled). Optional companion to the Markdown layout."""
-    lines = ["```mermaid", "graph TD", f'  C["主張：{_mm(data["claim"])}"]']
+    lines = ["```mermaid", "graph LR", f'  C["主張：{_mm(data["claim"])}"]']
     for i, g in enumerate(data.get("grounds", [])):
         lines.append(f'  G{i}["根據：{_mm(g)}"] --> C')
     for i, w in enumerate(data.get("warrants", [])):

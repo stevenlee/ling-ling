@@ -708,7 +708,9 @@ class IngestionPipeline:
         # Phase 6 auto-attach: a learning artifact for the summary (gated by
         # Scripture's `visual_router`; "" and zero LLM calls when off → byte-identical).
         from services.learning_artifacts import maybe_artifact_section
-        artifact_section = maybe_artifact_section(self.llm, synthesis_text)
+        artifact_section = maybe_artifact_section(
+            self.llm, synthesis_text, limit=3, exclude_types={"flowchart", "concept_map"}
+        )
 
         final_content = (
             f"# ✨ {base_title} (Synthesis)\n"
@@ -1024,7 +1026,9 @@ class IngestionPipeline:
         artifact_section = ""
         if part_content:
             from services.learning_artifacts import maybe_artifact_section
-            artifact_section = maybe_artifact_section(self.llm, part_content)
+            artifact_section = maybe_artifact_section(
+                self.llm, part_content, limit=3, exclude_types={"flowchart", "concept_map"}
+            )
 
         content = page_path.read_text(encoding="utf-8").rstrip()
         # Strip any previously-appended auto sections (whichever comes first) so

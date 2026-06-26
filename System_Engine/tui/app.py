@@ -121,6 +121,7 @@ class LingLingTUI(App):
     #compose-box { width: 70%; height: auto; max-height: 90%; padding: 1 2; border: thick $primary; background: $surface; }
     #compose-buttons { height: auto; padding-top: 1; }
     .dim { color: $text-muted; }
+    #telemetry { height: 1; padding: 0 1; background: $surface; }
     """
 
     BINDINGS = [
@@ -142,6 +143,7 @@ class LingLingTUI(App):
                     yield Static(id="activity")
                 with VerticalScroll(id="results-box"):
                     yield Static(id="results")
+        yield Static(id="telemetry")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -151,8 +153,10 @@ class LingLingTUI(App):
         self.query_one("#results-box", VerticalScroll).border_title = "最新產出 fromLingLing/"
         self.refresh_status()
         self.refresh_activity()
+        self.refresh_telemetry()
         self.set_interval(2.0, self.refresh_status)
         self.set_interval(4.0, self.refresh_activity)
+        self.set_interval(3.0, self.refresh_telemetry)
 
     # ── live panels ──────────────────────────────────────────────────
 
@@ -160,6 +164,19 @@ class LingLingTUI(App):
     def _fmt_ts(run: dict) -> str:
         ts = (run.get("ended_at") or run.get("started_at") or "")
         return ts[5:19].replace("T", " ")
+
+    def refresh_telemetry(self) -> None:
+        try:
+            from tui.telemetry import get_telemetry_string
+            from tui.trace_reader import current_run, status_summary
+            c_run = current_run()
+            c_run_id = c_run.get("run_id") if c_run else None
+            status = status_summary()
+            provider = status.get("provider", "unknown")
+            t_str = get_telemetry_string(c_run_id, provider)
+            self.query_one("#telemetry", Static).update(t_str)
+        except Exception as e:
+            self.query_one("#telemetry", Static).update(f"Telemetry error: {e}")
 
     def refresh_status(self) -> None:
         s = trace_reader.status_summary()

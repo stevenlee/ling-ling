@@ -3,3 +3,4 @@
 # Textual pulls in Rich (already a core dep). The TUI is a separate process and
 # never imports the daemon's RAG/LLM stack, so this stays out of the core deps.
 textual>=0.60
+psutil>=5.0.0

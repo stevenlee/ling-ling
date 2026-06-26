@@ -36,6 +36,7 @@
 ### 可用的 `as <type>`
 | type               | 適合的內容             |
 | ------------------ | ----------------- |
+| `all`              | (輸出所有 11 種圖表)        |
 | `comparison_table` | 比較多個對象的多個維度       |
 | `flowchart`        | 流程、因果序列、步驟        |
 | `mindmap`          | 一個主題的階層分解         |
@@ -43,6 +44,17 @@
 | `quadrant`         | 物件落在兩個軸 / 取捨      |
 | `concept_map`      | 概念間的網狀關係          |
 | `argument_map`     | 論證(主張+根據+隱含前提+反駁) |
+| `sequence_diagram` | 實體間的對話、訊息傳遞或劇情順序 |
+| `state_diagram`    | 狀態轉變與觸發條件         |
+| `user_journey`     | 主角在不同階段的心境與體驗分數  |
+| `gantt_chart`      | 歷史事件或專案排程的重疊關係    |
+| `pie_chart`        | 整體中的比例、成分分配       |
+| `sankey_diagram`   | 資金流向、資源分配、能量轉換等流量關係 |
+| `xy_chart`         | 數值在時間序列或類別上的分佈與趨勢 |
+| `block_diagram`    | 系統高階架構、硬體拓樸或立體方塊關係 |
+| `c4_diagram`       | 軟體系統的 C4 架構 (Context / Container) |
+| `class_diagram`    | 物件導向的類別、屬性與繼承關係 |
+| `er_diagram`       | 資料庫的實體關聯表 (一對多、主外鍵) |
 
 ### 小提醒
 - 不指定 type 就讓系統自動選——它也可能判定「沒有強結構」而不畫圖。
