@@ -72,41 +72,64 @@ class ResearchPipeline:
 
     def search_patents(self, keyword: str, limit: int = 30) -> list[dict]:
         """
-        Search for patents using the EuropePMC REST API.
-        EuropePMC indexes a wide variety of patents (US, EP, WO, etc.) and provides a stable, free API.
+        Search for patents using FreePatentsOnline (FPO) scraping.
+        FPO provides snippets directly in the search results page without API keys.
         """
         try:
             import urllib.parse
             import requests
+            from bs4 import BeautifulSoup
+            import re, html
             
-            query = f'(SRC:PAT) AND ("{keyword}")'
-            url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={urllib.parse.quote(query)}&format=json&resultType=core&pageSize={limit}"
+            url = f"https://www.freepatentsonline.com/result.html?sort=relevance&srch=top&query_txt={urllib.parse.quote(keyword)}&submit=&patents_us=on"
+            headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"}
             
-            headers = {"User-Agent": "LingLingResearchBot/1.0 (mailto:admin@example.com)"}
-            response = requests.get(url, headers=headers, timeout=20)
-            data = response.json()
+            response = None
+            import time
+            for attempt in range(3):
+                try:
+                    response = requests.get(url, headers=headers, timeout=20)
+                    response.raise_for_status()
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        raise e
+                    time.sleep(2)
+            
+            # FPO HTML is slightly malformed, lxml parses it robustly
+            soup = BeautifulSoup(response.text, "lxml")
+            tables = soup.find_all("table", class_="listing_table")
             
             results = []
-            for r in data.get("resultList", {}).get("result", []):
-                p_id = r.get("id", "")
-                title = r.get("title", "")
-                abstract = r.get("abstractText", "No abstract provided.")
-                
-                # Clean up abstract if it has HTML tags
-                import re, html
-                title = html.unescape(re.sub(r'<[^>]+>', '', title))
-                abstract = html.unescape(re.sub(r'<[^>]+>', '', abstract))
-                
-                results.append({
-                    "id": p_id,
-                    "title": title,
-                    "summary": abstract,
-                    "url": f"https://europepmc.org/article/PAT/{p_id}",
-                    "source": "EuropePMC Patents"
-                })
+            if tables:
+                rows = tables[0].find_all("tr")
+                # Skip header row and limit results
+                for row in rows[1:limit+1]:
+                    tds = row.find_all("td")
+                    if len(tds) >= 3:
+                        p_id = tds[1].text.strip()
+                        title_node = tds[2].find("a")
+                        title = title_node.text.strip() if title_node else "Unknown Title"
+                        link = "https://www.freepatentsonline.com" + title_node["href"] if title_node else ""
+                        
+                        br = tds[2].find("br")
+                        abstract = ""
+                        if br and br.next_sibling:
+                            abstract = br.next_sibling.text.strip()
+                        
+                        title = html.unescape(re.sub(r'<[^>]+>', '', title))
+                        abstract = html.unescape(re.sub(r'<[^>]+>', '', abstract))
+                        
+                        results.append({
+                            "id": p_id,
+                            "title": title,
+                            "summary": abstract or "No abstract provided.",
+                            "url": link,
+                            "source": "FreePatentsOnline"
+                        })
             return results
         except Exception as e:
-            logging.error(f"EuropePMC Patent search failed for '{keyword}': {e}")
+            logging.error(f"FPO Patent search failed for '{keyword}': {e}")
             return []
 
 
