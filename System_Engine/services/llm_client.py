@@ -1812,3 +1812,70 @@ class LLMClient:
             logging.warning(f"generate_persona_and_template LLM call failed: {e}")
             return {}
 
+
+    def generate_research_keywords(self, content: str, instruction: str) -> list[str]:
+        prompt = f"""
+請根據以下內容與使用者的指示，生成 3 到 5 個適合用於學術與專利搜尋引擎（如 arXiv, Wikipedia, EuropePMC）的英文搜尋關鍵字。
+**重要：關鍵字必須簡短（1 到 3 個單字為佳），並包含廣泛的上位概念（例如 "Artificial intelligence", "Machine learning", "Language model"），以便能在專利資料庫中找到結果。請勿使用過長或過於具體的長句。**
+直接以 JSON 陣列格式輸出，例如 ["keyword1", "keyword2"]，不要有任何其他文字。
+
+[User Instruction]
+{instruction}
+
+[Content]
+{content}
+"""
+        try:
+            res = self._complete_text(
+                system_prompt="You are a research assistant. Output only a JSON array of strings.",
+                user_msg=prompt,
+                temperature=0.3,
+            )
+            import json, re
+            match = re.search(r'\[.*\]', res, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group(0))
+                if isinstance(parsed, list):
+                    keywords = [str(x).strip() for x in parsed if isinstance(x, str) and str(x).strip()]
+                    if keywords:
+                        return keywords
+            return ["General Topic"]
+        except Exception as e:
+            logging.error(f"Failed to generate keywords: {e}")
+            return ["General Topic"]
+
+    def generate_elite_digest(self, arxiv_wiki_results: list[dict], source_name: str) -> str:
+        # Convert results to a string
+        import json
+        data_str = json.dumps(arxiv_wiki_results, ensure_ascii=False, indent=2)
+        prompt = f"""
+請根據以下來自 {source_name} 的搜尋結果，寫一份「學術與概念的精華摘要（Elite Digest）」。
+請使用繁體中文，內容需結構化、易讀，並摘錄出最重要的概念。
+非常重要：你必須在摘要的最下方，明確列出 3 到 5 篇最具代表性的論文或維基百科條目（標題與對應的 url 連結）。
+
+[Search Results]
+{data_str}
+"""
+        try:
+            return self._complete_text(system_prompt="You are a knowledgeable research assistant.", user_msg=prompt, temperature=0.5)
+        except Exception as e:
+            logging.error(f"Failed to generate elite digest: {e}")
+            return "無法生成摘要。"
+
+    def generate_patent_table(self, patent_results: list[dict]) -> str:
+        # Convert results to a string
+        import json
+        data_str = json.dumps(patent_results, ensure_ascii=False, indent=2)
+        prompt = f"""
+請根據以下專利搜尋結果，生成一個 Markdown 表格。
+表格欄位必須包含：「專利編號」、「關聯性」、「一句話說明」、「翻譯好的摘要」、「全文連結」。
+請使用繁體中文，且「全文連結」請轉成 Markdown 格式的超連結。
+
+[Patent Results]
+{data_str}
+"""
+        try:
+            return self._complete_text(system_prompt="You are a knowledgeable research assistant.", user_msg=prompt, temperature=0.3)
+        except Exception as e:
+            logging.error(f"Failed to generate patent table: {e}")
+            return "無法生成專利表格。"

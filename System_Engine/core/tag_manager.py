@@ -41,7 +41,16 @@ class TagManager:
             match = _FRONTMATTER_RE.search(content)
             data = yaml.safe_load(match.group(1)) if match else yaml.safe_load(content)
             if isinstance(data, dict):
-                self._map = {self.normalize(k): v for k, v in data.items()}
+                self._map = {}
+                for k, v in data.items():
+                    norm_k = self.normalize(str(k))
+                    if not norm_k:
+                        continue
+                    if isinstance(v, list):
+                        if v:
+                            self._map[norm_k] = str(v[0])
+                    elif v is not None:
+                        self._map[norm_k] = str(v)
         except Exception as e:
             logging.error(f"TagManager: failed to parse map from {self.mapping_file.name}: {e}")
 

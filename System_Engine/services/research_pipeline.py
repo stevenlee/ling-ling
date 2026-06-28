@@ -17,9 +17,10 @@ class ResearchPipeline:
 
     def search_arxiv(self, keyword: str, limit: int = 3) -> list[dict]:
         try:
-            url = f"http://export.arxiv.org/api/query?search_query=all:{urllib.parse.quote(keyword)}&start=0&max_results={limit}"
-            headers = {"User-Agent": "LingLingResearchBot/1.0"}
-            response = requests.get(url, headers=headers, timeout=10)
+            url = f"http://export.arxiv.org/api/query?search_query=all:%22{urllib.parse.quote(keyword)}%22&start=0&max_results={limit}"
+            headers = {"User-Agent": "LingLingResearchBot/1.0 (mailto:admin@example.com)"}
+            response = requests.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
             root = ET.fromstring(response.text)
             ns = {"atom": "http://www.w3.org/2005/Atom"}
             results = []
@@ -40,16 +41,20 @@ class ResearchPipeline:
     def search_wikipedia(self, keyword: str, limit: int = 3) -> list[dict]:
         try:
             search_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(keyword)}&utf8=&format=json&srlimit={limit}"
-            headers = {"User-Agent": "LingLingResearchBot/1.0"}
-            response = requests.get(search_url, headers=headers, timeout=10).json()
-            search_results = response.get("query", {}).get("search", [])
+            headers = {"User-Agent": "LingLingResearchBot/1.0 (mailto:admin@example.com)"}
+            response = requests.get(search_url, headers=headers, timeout=20)
+            response.raise_for_status()
+            data = response.json()
+            search_results = data.get("query", {}).get("search", [])
             
             results = []
             for item in search_results:
                 title = item["title"]
                 page_url = f"https://en.wikipedia.org/w/api.php?format=json&action=query&prop=extracts&exintro&explaintext&redirects=1&titles={urllib.parse.quote(title)}"
-                page_resp = requests.get(page_url, headers=headers, timeout=10).json()
-                pages = page_resp.get("query", {}).get("pages", {})
+                page_resp = requests.get(page_url, headers=headers, timeout=20)
+                page_resp.raise_for_status()
+                page_data = page_resp.json()
+                pages = page_data.get("query", {}).get("pages", {})
                 extract = ""
                 for page_id, page_info in pages.items():
                     extract = page_info.get("extract", "")
@@ -130,6 +135,8 @@ class ResearchPipeline:
         patent_table_md = ""
         if patent_results:
             patent_table_md = self.llm.generate_patent_table(patent_results)
+        else:
+            patent_table_md = "> 找不到相關的專利資料。可能是關鍵字過於限縮或沒有符合的專利。"
         
         # 4. Construct Final Markdown Block
         return (
