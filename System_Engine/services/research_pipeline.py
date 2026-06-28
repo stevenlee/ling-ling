@@ -153,11 +153,11 @@ class ResearchPipeline:
         # 3. Generate Markdown Blocks
         elite_digest_md = ""
         if arxiv_wiki_results:
-            elite_digest_md = self.llm.generate_elite_digest(arxiv_wiki_results, "arXiv & Wikipedia")
+            elite_digest_md = self.llm.generate_elite_digest(arxiv_wiki_results, "arXiv & Wikipedia", topic=instruction)
         
         patent_table_md = ""
         if patent_results:
-            patent_table_md = self.llm.generate_patent_table(patent_results)
+            patent_table_md = self.llm.generate_patent_table(patent_results, topic=instruction)
         else:
             patent_table_md = "> 找不到相關的專利資料。可能是關鍵字過於限縮或沒有符合的專利。"
         
@@ -166,7 +166,6 @@ class ResearchPipeline:
             f"\n\n---\n"
             f"## 🤖 Ling-Ling Research Digest\n"
             f"**Generated for:** `{instruction or 'General topic'}`\n\n"
-            f"### 📚 Academic & Concept Elite Digest\n"
             f"{elite_digest_md}\n\n"
             f"### 💡 USPTO Patent Scan\n"
             f"{patent_table_md}\n"

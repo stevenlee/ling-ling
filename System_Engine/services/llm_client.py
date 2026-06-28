@@ -1849,7 +1849,7 @@ class LLMClient:
         import json
         data_str = json.dumps(arxiv_wiki_results, ensure_ascii=False, indent=2)
         prompt = f"""
-請根據以下來自 {source_name} 的搜尋結果，為使用者精選出 3 到 5 篇最重要的文獻，寫一份「學術與概念的精華摘要（Elite Digest）」。
+請針對主題「{topic}」，根據以下來自 {source_name} 的搜尋結果，為使用者精選出 3 到 5 篇最重要的文獻，寫一份「學術與概念的精華摘要（Elite Digest）」。
 請使用繁體中文，並請嚴格遵守以下格式：
 
 ### 📚 Academic & Concept Elite Digest
@@ -1870,12 +1870,12 @@ class LLMClient:
             logging.error(f"Failed to generate elite digest: {e}")
             return "無法生成摘要。"
 
-    def generate_patent_table(self, patent_results: list[dict]) -> str:
+    def generate_patent_table(self, patent_results: list[dict], topic: str = "") -> str:
         # Convert results to a string
         import json
         data_str = json.dumps(patent_results, ensure_ascii=False, indent=2)
         prompt = f"""
-請根據以下專利搜尋結果，生成一個 Markdown 表格。
+請針對主題「{topic}」，根據以下專利搜尋結果，生成一個 Markdown 表格。
 表格欄位必須包含：「專利編號」、「關聯性」、「主旨」、「摘要」、「全文連結」。
 請使用繁體中文，且「全文連結」請轉成 Markdown 格式的超連結。
 
