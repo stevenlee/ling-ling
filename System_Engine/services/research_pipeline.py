@@ -146,6 +146,7 @@ class ResearchPipeline:
         patent_results = []
         
         for kw in keywords:
+            ui.info(f"🔎 正在搜尋關鍵字: {kw}")
             arxiv_wiki_results.extend(self.search_arxiv(kw, limit=2))
             arxiv_wiki_results.extend(self.search_wikipedia(kw, limit=2))
             patent_results.extend(self.search_patents(kw, limit=10))
