@@ -56,7 +56,7 @@ class ReviewAgent(BaseAgent):
             return self._write_report(
                 "Review",
                 "（未指定對象。範例：`@ling-review [[某本書]]` 或 `@ling-review [[某論文]] as paper`）",
-                "review",
+                "rev",
             )[1]
 
         title = titles[0]
@@ -64,11 +64,11 @@ class ReviewAgent(BaseAgent):
         if not syn_text:
             ui.error(f"📝 找不到 Synthesis：{title}")
             return self._write_report(
-                f"Review: {title}",
+                title,
                 (f"# 📝 {title}\n\n找不到這篇的 Synthesis"
                  f"（pages/{title}/{title} (Synthesis).md）。\n"
                  "請先讓它走完 ingestion 產生 Synthesis，再來 review。"),
-                "review",
+                "rev",
             )[1]
 
         genre = self._pick_genre(directive, title)
@@ -83,7 +83,7 @@ class ReviewAgent(BaseAgent):
             wiki_context=self._synthesis_body(syn_text),
             forced_template=template,
             persona="reviewer",
-            operation="review",
+            operation="rev",
             temperature=0.5,
         ) or ""
 
@@ -99,7 +99,7 @@ class ReviewAgent(BaseAgent):
             ui.info(f"📝 識別碼校正 {len(fixes)} 處 → {canon}")
 
         _, full_markdown = self._write_report(
-            f"Review: {title}", body, "review",
+            title, body, "rev",
             {"target": title, "genre": genre, "template": template,
              "identifier_fixes": len(fixes)},
         )

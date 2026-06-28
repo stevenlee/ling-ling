@@ -106,8 +106,8 @@ class PlannerAgent(BaseAgent):
             ],
             "capability_resolution": self._resolve_plan_capabilities(spec, capabilities),
         }
-        title = f"Plan: {spec.description or spec.id}"
-        self._write_report(title, report, "planner_plan", meta)
+        title = f"{spec.description or spec.id}"
+        self._write_report(title, report, "ins-plan", meta)
         ui.success(
             f"🎐 Planner 完成：{spec.id}（{len(spec.steps)} 個步驟）"
             f" → 用 `@ling-do {spec.id}` 執行"
@@ -283,7 +283,7 @@ class PlannerAgent(BaseAgent):
 
     def _error_report(self, message: str) -> str:
         body = f"# 💧 Planner Error\n\n{message}\n"
-        self._write_report("Planner Error", body, "planner_plan",
+        self._write_report("Error", body, "ins-plan",
                             {"error": True})
         ui.error(f"🎐 Planner 失敗：{message[:120]}")
         return body

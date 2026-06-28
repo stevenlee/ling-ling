@@ -143,7 +143,7 @@ class LinterAgent(BaseAgent):
 ## 🫧 修復後健康快照
 {health_text}
 """
-        self._write_report("資料庫修復", report_body, "report_repair_db")
+        self._write_report("DB Repair", report_body, "sys")
         return report_body
 
     def execute(self, task_context: dict) -> str:
@@ -216,5 +216,5 @@ class LinterAgent(BaseAgent):
 
 {f'### 🛠️ 自動修復紀錄' + chr(10) + repair_summary if repair_summary else ''}
 """
-        self._write_report("巡邏報告", report_body, "report_patrol")
+        self._write_report("Patrol", report_body, "sys")
         return report_body

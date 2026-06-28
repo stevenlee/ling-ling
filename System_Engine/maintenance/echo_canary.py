@@ -109,7 +109,7 @@ def _write_report(report_dir: Path, r: CanaryResult) -> Path | None:
     try:
         report_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d")
-        path = report_dir / f"[canary] echo-chamber {stamp}.md"
+        path = report_dir / f"✅sys-canary-echo-{stamp}.md"
         s = r.stats
         def fmt(v): return "—" if v is None else f"{v:.4f}"
         lines = [

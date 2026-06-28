@@ -63,7 +63,7 @@ class TagPatrolAgent(BaseAgent):
         
         if not grouped_issues:
             content = "🎉 太棒了！目前全庫標籤都符合規範，沒有發現問題。\n"
-            self._write_report("標籤巡邏報告", content, "report_tags")
+            self._write_report("Tags", content, "sys")
             return content
 
         rows = ["> [!TIP]\n> **✂️✨ 標籤修復指令**：請在下方勾選 `- [x]` 並將此檔案拖入 `toLingLing/` 資料夾即可執行批量修復。\n"]
@@ -79,7 +79,7 @@ class TagPatrolAgent(BaseAgent):
             rows.append(f"- [ ] {reason}: `{bad}` -> `{good}` (影響: {affected_links}) | PATHS: `{paths_str}`")
             
         content = "\n".join(rows)
-        self._write_report("標籤巡邏報告", content, "report_tags")
+        self._write_report("Tags", content, "sys")
         return content
 
 if __name__ == "__main__":

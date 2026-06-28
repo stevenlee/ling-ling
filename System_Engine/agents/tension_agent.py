@@ -28,7 +28,7 @@ class TensionAgent(BaseAgent):
             "falsified": len(report.falsified),
         }
         _, full_markdown = self._write_report(
-            "Cortex Tensions", body, "cortex_tensions", counts
+            "Tensions", report.format_markdown(), "ctx-tension", counts
         )
         flagged = sum(counts.values())
         ui.success(f"💬 張力掃描完成：{flagged} 處（{report.total_pages} 頁）→ fromLingLing/")

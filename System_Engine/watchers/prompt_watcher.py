@@ -301,14 +301,14 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                     elif intent_key == "kb_reset": res = manager.reset_kb()
                     else: res = manager.unzip_kb(target_entities[0] if target_entities else None)
                     
-                    output_path = FROM_LLM_DIR / f"✅admin-rpt-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+                    output_path = FROM_LLM_DIR / f"✅sys-admin-{datetime.now().strftime('%Y%m%d-%H%M')}.md"
                     output_path.write_text(f"---\ntitle: \"管理報告\"\ntype: report_admin\n---\n\n{res}", encoding='utf-8')
 
                 # Brain ops — run a cognition/maintenance pass directly (no agent),
                 # reusing the busy lock the worker already holds.
                 elif intent_key in _BRAIN_OPS:
                     res = self._run_brain_op(intent_key, target_entities)
-                    output_path = FROM_LLM_DIR / f"✅admin-rpt-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+                    output_path = FROM_LLM_DIR / f"✅sys-admin-{datetime.now().strftime('%Y%m%d-%H%M')}.md"
                     output_path.write_text(
                         f"---\ntitle: \"{intent_key} 報告\"\ntype: report_admin\n---\n\n{res}",
                         encoding='utf-8',
@@ -331,7 +331,9 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                     
                     res = rp.run_research(instruction, content)
                     
-                    output_path = FROM_LLM_DIR / f"💌re-{filepath.stem}.md"
+                    short_topic = filepath.stem[6:] if filepath.stem.startswith("@ling-") else filepath.stem
+                    timestamp = datetime.now().strftime('%Y%m%d-%H%M')
+                    output_path = FROM_LLM_DIR / f"💌re-{short_topic}-{timestamp}.md"
                     output_path.write_text(
                         f"---\ntitle: \"re: {filepath.stem}\"\ntype: research\n---\n\n{res}",
                         encoding='utf-8'
@@ -400,7 +402,9 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                     trace_ids = self.llm.current_trace_ids() if hasattr(self.llm, "current_trace_ids") else []
                     run_id = self.llm.current_run_id() if hasattr(self.llm, "current_run_id") else None
                     
-                    output_path = FROM_LLM_DIR / f"💌re-{filepath.stem}.md"
+                    short_topic = filepath.stem[6:] if filepath.stem.startswith("@ling-") else filepath.stem
+                    timestamp = datetime.now().strftime('%Y%m%d-%H%M')
+                    output_path = FROM_LLM_DIR / f"💌re-{short_topic}-{timestamp}.md"
                     
                     if forced_template:
                         # Template path: the model emits its own YAML frontmatter

@@ -35,9 +35,9 @@ class VisualizeAgent(BaseAgent):
         if not titles:
             ui.error("🖼️ @ling-visualize：請用 [[筆記名]] 指定要視覺化的對象")
             return self._write_report(
-                "Visualize",
+                "Error",
                 "（未指定對象。範例：`@ling-visualize [[某篇筆記]]` 或 `@ling-visualize [[X]] as timeline`）",
-                "visualize",
+                "vis",
             )[1]
 
         title = titles[0]
@@ -45,9 +45,9 @@ class VisualizeAgent(BaseAgent):
         if not text:
             ui.error(f"🖼️ 找不到筆記：{title}")
             return self._write_report(
-                f"Visualize: {title}",
+                title,
                 f"# 🖼️ {title}\n\n找不到這篇筆記的內容（pages/ 或 Notes/）。",
-                "visualize",
+                "vis",
             )[1]
 
         ui.set_status(f"🖼️ 視覺化：{title[:40]}")
@@ -61,7 +61,7 @@ class VisualizeAgent(BaseAgent):
             artifact_type_meta = result["type"]
 
         _, full_markdown = self._write_report(
-            f"Visualize: {title}", body, "visualize",
+            title, body, "vis",
             {"target": title, "artifact_type": artifact_type_meta},
         )
         ui.success(f"🖼️ 完成：{title} → {artifact_type_meta} → fromLingLing/")

@@ -145,7 +145,7 @@ def _write_full_report(
     try:
         report_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d")
-        path = report_dir / f"[report] routing health {stamp}.md"
+        path = report_dir / f"✅sys-routing-{stamp}.md"
 
         lines = [
             f"# 🧭 路由健康報告（近 {window_days} 天）",

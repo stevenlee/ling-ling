@@ -138,8 +138,8 @@ class ExecutorAgent(BaseAgent):
             },
             "initial_context_keys": sorted(initial_context.keys()),
         }
-        title = f"Execution: {spec.description or spec.id}"
-        self._write_report(title, report, "executor_run", meta)
+        title = f"{spec.description or spec.id}"
+        self._write_report(title, report, "cmd", meta)
 
         if result.status == "succeeded":
             ui.success(
@@ -336,7 +336,7 @@ class ExecutorAgent(BaseAgent):
 
     def _error_report(self, message: str) -> str:
         body = f"# 💧 Executor Error\n\n{message}\n"
-        self._write_report("Executor Error", body, "executor_run",
+        self._write_report("Error", body, "cmd",
                             {"error": True})
         ui.error(f"⚙️ Executor failed: {message.splitlines()[0][:120]}")
         return body

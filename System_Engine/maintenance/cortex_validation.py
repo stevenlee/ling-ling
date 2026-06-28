@@ -236,7 +236,7 @@ def _write_report(report_dir: Path, report: ValidationReport, pages) -> Path | N
     try:
         report_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = report_dir / f"[report] cortex validation {stamp}.md"
+        path = report_dir / f"✅sys-ctx-valid-{stamp}.md"
         icon = {"GREEN": "🌸", "YELLOW": "🌼", "RED": "🥀"}[report.verdict]
         lines = [f"# {icon} Cortex 驗證報告 — {report.verdict}", ""]
         if report.red_flags:

@@ -125,7 +125,7 @@ def repair_tags_interactively(report_file_override: Path | None = None):
         report_lines.append(f"- [{item['reason']}] `{item['bad']}` → `{item['good']}` (影響 {item['count']} 個檔案)")
     
     report_content = "\n".join(report_lines)
-    report_filename = f"tag-bulk-repair-report-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+    report_filename = f"✅sys-tag-bulk-{datetime.now().strftime('%Y%m%d-%H%M')}.md"
     report_path = FROM_LLM_DIR / report_filename
     report_path.write_text(report_content, encoding='utf-8')
     logging.info(f"TagRepair: Detailed report written to {report_path.name}")

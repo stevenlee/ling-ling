@@ -256,7 +256,7 @@ def _write_regression_alert(
     try:
         report_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d")
-        path = report_dir / f"[alert] retrieval regression {stamp}.md"
+        path = report_dir / f"🚨sys-alert-retrieval-{stamp}.md"
         failed_rows = [row for row in result.rows if not row["passed"]]
         lines = [
             "# 🔔 檢索品質退步告警",

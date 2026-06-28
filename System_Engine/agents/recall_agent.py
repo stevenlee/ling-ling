@@ -51,9 +51,9 @@ class RecallAgent(BaseAgent):
         if not query:
             ui.error("📓 @ling-recall：請在指令後寫下要回想的主題或問題")
             return self._write_report(
-                "Cortex Recall",
-                "（未提供查詢主題。範例：`@ling-recall 我對 AI agent 協作相信什麼？`）",
-                "cortex_recall",
+                "Error",
+                "（未指定回想主題。範例：`@ling-recall [[某主題]]`）",
+                "ctx-recall",
             )[1]
 
         ui.set_status(f"📓 回想：{query[:40]}")
@@ -63,9 +63,9 @@ class RecallAgent(BaseAgent):
         ]
         if not pages:
             return self._write_report(
-                f"Cortex Recall: {query[:50]}",
-                f"# 📓 Cortex 回想：{query}\n\nCortex 目前是空的，還沒累積任何主張。",
-                "cortex_recall", {"query": query, "claims_returned": 0},
+                query,
+                f"# 📓 Cortex Recall\n\n對「{query}」沒有足夠的記憶。",
+                "ctx-recall", {"query": query, "claims_returned": 0},
             )[1]
 
         # Whole corpus when it fits; hybrid pre-filter only when it doesn't.
@@ -88,7 +88,7 @@ class RecallAgent(BaseAgent):
 
         body = self._render(query, answer, numbered)
         _, full_markdown = self._write_report(
-            f"Cortex Recall: {query[:50]}", body, "cortex_recall",
+            query, body, "ctx-recall",
             {"query": query, "candidates": len(candidates)},
         )
         ui.success(f"📓 回想完成：掃過 {len(candidates)} 條信念 → fromLingLing/")

@@ -719,7 +719,7 @@ class CounterAgent(BaseAgent):
 
     def _error_report(self, message):
         report = f"# 💧 LingLens Error\n\n{message}\n"
-        self._write_report("LingLens Error", report, "lens_report")
+        self._write_report("Error", report, "lens")
         return report
 
     # ── Helpers ────────────────────────────────────────────────────────

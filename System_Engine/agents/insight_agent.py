@@ -182,7 +182,7 @@ class InsightAgent(BaseAgent):
         report_content += self._maybe_artifact(report_content)
 
         _, full_markdown = self._write_report(
-            f"洞察分析-{config['name']}", report_content, "report_insight", meta
+            f"{config['name']}", report_content, "ins", meta
         )
         self._mirror_to_insights(
             full_markdown,
@@ -264,7 +264,7 @@ class InsightAgent(BaseAgent):
 
         final_markdown += self._maybe_artifact(cross_synthesis)
 
-        _, full_markdown = self._write_report("全方位洞察報告", final_markdown, "report_insight_full", meta)
+        _, full_markdown = self._write_report("full", final_markdown, "ins", meta)
         self._mirror_to_insights(
             full_markdown,
             requested_cmd="full-insight",
@@ -433,8 +433,7 @@ class InsightAgent(BaseAgent):
                     if spec else {}
                 ),
             }
-            title_prefix = "Insight Planner Execute" if execution_result else "Insight Planner Preview"
-            title = f"{title_prefix}: {spec.description or spec.id}"
+            title = f"{spec.description or spec.id}"
         else:
             body = self._render_planner_preview_error(
                 result=result,
@@ -450,12 +449,12 @@ class InsightAgent(BaseAgent):
                 "target_titles": target_titles,
                 "error": True,
             }
-            title = "Insight Planner Preview Error"
+            title = "Error"
 
         report_type = (
-            "report_insight_planner_execute"
+            "ins-plan-exe"
             if meta.get("planner_mode") == "execute"
-            else "report_insight_planner_preview"
+            else "ins-plan-pre"
         )
         _, full_markdown = self._write_report(
             title,
@@ -465,7 +464,7 @@ class InsightAgent(BaseAgent):
         )
         requested_cmd = (
             "insight-plan-execute"
-            if report_type == "report_insight_planner_execute"
+            if report_type == "ins-plan-exe"
             else "insight-plan-preview"
         )
         self._mirror_to_insights(

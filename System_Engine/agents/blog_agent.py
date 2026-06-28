@@ -55,7 +55,7 @@ class BlogAgent(BaseAgent):
             written = publish_blog(blog_dir, content_dir, date.today().isoformat())
         except Exception as e:  # pragma: no cover - surfaced to the user as a report
             ui.error(f"🪷 轉換失敗：{e}")
-            return self._write_report("Blog", f"# 🪷 發布到 kafu\n\n轉換失敗：`{e}`", "blog")[1]
+            return self._write_report("Error", f"# 🪷 發布到 kafu\n\n轉換失敗：`{e}`", "blog")[1]
 
         listing = "\n".join(f"- `{p.name}`" for p in written)
         body = (

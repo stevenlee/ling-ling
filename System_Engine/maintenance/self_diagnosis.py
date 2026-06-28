@@ -205,7 +205,7 @@ def _write_report(report_dir: Path, result: DiagnosisResult) -> Path | None:
     try:
         report_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d")
-        path = report_dir / f"[report] 系統診斷 {stamp}.md"
+        path = report_dir / f"✅sys-diag-{stamp}.md"
         lines = [
             "# 🔬 系統診斷（M2）",
             "",

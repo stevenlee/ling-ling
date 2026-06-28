@@ -133,7 +133,7 @@ def _write_full_report(
     try:
         report_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d")
-        path = report_dir / f"[report] template audit {stamp}.md"
+        path = report_dir / f"✅sys-template-audit-{stamp}.md"
 
         lines = [
             "# 🧱 Template 版本稽核",

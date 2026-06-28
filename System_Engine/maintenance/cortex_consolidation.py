@@ -614,7 +614,7 @@ def _write_report(report_dir: Path, result: ConsolidationResult) -> Path | None:
     try:
         report_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d")
-        path = report_dir / f"[report] cortex consolidation {stamp}.md"
+        path = report_dir / f"✅sys-ctx-consol-{stamp}.md"
         lines = [
             "# 📓 Cortex 鞏固報告",
             "",

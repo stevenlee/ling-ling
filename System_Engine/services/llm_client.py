@@ -1849,9 +1849,17 @@ class LLMClient:
         import json
         data_str = json.dumps(arxiv_wiki_results, ensure_ascii=False, indent=2)
         prompt = f"""
-請根據以下來自 {source_name} 的搜尋結果，寫一份「學術與概念的精華摘要（Elite Digest）」。
-請使用繁體中文，內容需結構化、易讀，並摘錄出最重要的概念。
-非常重要：你必須在摘要的最下方，明確列出 3 到 5 篇最具代表性的論文或維基百科條目（標題與對應的 url 連結）。
+請根據以下來自 {source_name} 的搜尋結果，為使用者精選出 3 到 5 篇最重要的文獻，寫一份「學術與概念的精華摘要（Elite Digest）」。
+請使用繁體中文，並請嚴格遵守以下格式：
+
+### 📚 Academic & Concept Elite Digest
+以下是為您精選的 [數量] 篇關於 [主題] 的重要研究與文獻摘要：
+
+* **[文獻標題]**
+    * **摘要**：[請提供翻譯好、結構化的中文摘要，並說明其核心概念與重要洞察]
+    * **來源**：[[文獻的 URL 連結]](文獻的 URL 連結)
+
+... (依此類推列出精選文獻)
 
 [Search Results]
 {data_str}

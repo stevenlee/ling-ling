@@ -211,7 +211,7 @@ class BaseAgent:
 
         full_markdown = dump_markdown_with_metadata(metadata, body)
         safe_title = re.sub(r'[\\/*?:"<>|]', "-", title)
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M")
         filename = f"✅{report_type}-{safe_title}-{timestamp}.md"
         output_path = FROM_LLM_DIR / filename
         output_path.write_text(full_markdown, encoding="utf-8")

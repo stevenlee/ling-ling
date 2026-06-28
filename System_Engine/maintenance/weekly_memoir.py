@@ -200,7 +200,7 @@ def _write_report(
     try:
         report_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d")
-        path = report_dir / f"[memoir] 本週記事 {stamp}.md"
+        path = report_dir / f"✅sys-memoir-{stamp}.md"
 
         lines = [
             f"# 📖 本週記事（近 {window_days} 天）",

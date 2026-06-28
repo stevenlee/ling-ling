@@ -57,7 +57,7 @@ class ImproveAgent(BaseAgent):
         else:
             body, title = self._list(), "Improve-總覽"
 
-        _, full_markdown = self._write_report(title, body, "report_improve")
+        _, full_markdown = self._write_report(title, body, "ins-improve")
         return full_markdown
 
     # ── subcommands ──────────────────────────────────────────────────

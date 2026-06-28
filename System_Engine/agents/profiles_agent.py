@@ -41,7 +41,7 @@ class ProfilesAgent(BaseAgent):
         else:
             body, title = self._render_list(pm), "Profiles-總覽"
 
-        path, full_markdown = self._write_report(title, body, "report_profiles")
+        path, full_markdown = self._write_report(title, body, "sys")
         ui.success(f"Profiles 報告完成：{path.name}")
         return full_markdown
 

@@ -408,7 +408,7 @@ def _write_report(report_dir: Path, result: SelfAssessmentResult, window_days: i
     try:
         report_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d")
-        path = report_dir / f"[report] 系統自評 {stamp}.md"
+        path = report_dir / f"✅sys-eval-{stamp}.md"
         lines = [
             f"# 🌿 系統自評（近 {window_days} 天）",
             "",
