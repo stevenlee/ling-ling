@@ -1844,7 +1844,7 @@ class LLMClient:
             logging.error(f"Failed to generate keywords: {e}")
             return ["General Topic"]
 
-    def generate_elite_digest(self, arxiv_wiki_results: list[dict], source_name: str) -> str:
+    def generate_elite_digest(self, arxiv_wiki_results: list[dict], source_name: str, topic: str = "") -> str:
         # Convert results to a string
         import json
         data_str = json.dumps(arxiv_wiki_results, ensure_ascii=False, indent=2)
