@@ -1876,7 +1876,7 @@ class LLMClient:
         data_str = json.dumps(patent_results, ensure_ascii=False, indent=2)
         prompt = f"""
 請根據以下專利搜尋結果，生成一個 Markdown 表格。
-表格欄位必須包含：「專利編號」、「關聯性」、「一句話說明」、「翻譯好的摘要」、「全文連結」。
+表格欄位必須包含：「專利編號」、「關聯性」、「主旨」、「摘要」、「全文連結」。
 請使用繁體中文，且「全文連結」請轉成 Markdown 格式的超連結。
 
 [Patent Results]
