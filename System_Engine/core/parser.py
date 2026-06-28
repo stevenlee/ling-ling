@@ -191,7 +191,10 @@ _MERMAID_EXISTING_ID_RE = re.compile(
 )
 _MERMAID_ID_SLUG_RE = re.compile(r'[^\w一-鿿]')
 
-LATEX_CR_COMMAND_RE = re.compile(r'\r(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b')
+LATEX_CR_COMMAND_RE = re.compile(r'\\r(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b')
+
+# Finds `${\displaystyle ... $` blocks for unclosed brace repair
+UNCLOSED_LATEX_DISPLAY_RE = re.compile(r'\$\{\\displaystyle(.*?)(?<!\\)\$', re.DOTALL)
 
 # Other JSON-escape collisions affecting LaTeX commands. When LLMs emit
 # LaTeX inside a JSON string, they often forget to escape the backslash;
@@ -319,6 +322,50 @@ def repair_latex_carriage_returns(text: str) -> tuple[str, list[dict]]:
         last_end = match.end()
     if not fixes:
         return text, []
+    parts.append(text[last_end:])
+    return "".join(parts), fixes
+
+
+def repair_unclosed_latex_display(text: str) -> tuple[str, list[dict]]:
+    """Repair missing closing brace in `${\\displaystyle ... $` math blocks.
+    
+    LLMs sometimes output `${\\displaystyle X$` instead of `${\\displaystyle X}$`.
+    This pass counts braces between `${` and the next `$` and inserts a closing 
+    brace if one is missing.
+    """
+    if not text or "${\\displaystyle" not in text:
+        return text, []
+        
+    fixes: list[dict] = []
+    parts: list[str] = []
+    last_end = 0
+    
+    for match in UNCLOSED_LATEX_DISPLAY_RE.finditer(text):
+        content = match.group(1)
+        full_math = "${\\displaystyle" + content
+        if full_math.count('{') > full_math.count('}'):
+            diff = full_math.count('{') - full_math.count('}')
+            before = match.group(0)
+            after = full_math + ("}" * diff) + "$"
+            
+            parts.append(text[last_end:match.start()])
+            parts.append(after)
+            
+            line_no = text.count("\n", 0, match.start()) + 1
+            fixes.append(_make_fix(
+                "repaired_unclosed_latex_display",
+                line=line_no,
+                before=before,
+                after=after
+            ))
+            last_end = match.end()
+        else:
+            parts.append(text[last_end:match.end()])
+            last_end = match.end()
+            
+    if not fixes:
+        return text, []
+        
     parts.append(text[last_end:])
     return "".join(parts), fixes
 
@@ -1441,6 +1488,7 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
     pipeline.extend([
         repair_latex_carriage_returns,
         repair_latex_escape_collisions,
+        repair_unclosed_latex_display,
         repair_mermaid_fences,
         repair_mermaid_subgraph_keyword,
         repair_mermaid_quoted_node_ids,

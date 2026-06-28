@@ -206,7 +206,39 @@ class MaintenanceScheduler(threading.Thread):
                     msg = f"{msg} ｜ 提案：{imp.message}"
             return MaintenanceResult(result.status, msg)
 
+        def tag_optimizer() -> MaintenanceResult:
+            from services.tag_optimizer import TagOptimizer
+            from core.config import PAGES_DIR, NOTES_DIR
+            from core.parser import parse_markdown_metadata
+            
+            optimizer = TagOptimizer(self.llm)
+            
+            processed = 0
+            for directory in [PAGES_DIR, NOTES_DIR]:
+                if directory.exists():
+                    for filepath in directory.rglob("*.md"):
+                        try:
+                            content = filepath.read_text(encoding="utf-8")
+                        except Exception:
+                            continue
+                        fm = parse_markdown_metadata(content) or {}
+                        tags = fm.get("tags")
+                        if not tags:
+                            success = optimizer.generate_and_optimize(filepath)
+                            if success:
+                                processed += 1
+                                
+            return MaintenanceResult("succeeded", f"Auto-tagged {processed} unprocessed notes.")
+
         return [
+            MaintenanceTask(
+                name="tag_optimizer_hourly",
+                action=tag_optimizer,
+                interval_seconds=3600,
+                idle_required=True,
+                intent="maintenance.tag_optimizer",
+                agent="TagOptimizer",
+            ),
             MaintenanceTask(
                 name="insight_daily",
                 action=daily_insight,

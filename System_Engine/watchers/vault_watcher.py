@@ -177,6 +177,14 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                 
             content = filepath.read_text(encoding='utf-8')
             
+            # --- Research Pipeline Triggers ---
+            research_match = re.search(r"@ling-research\s*(.*)", content)
+            if research_match:
+                from services.research_pipeline import ResearchPipeline
+                rp = ResearchPipeline(self.llm)
+                rp.process_research(filepath, content, research_match)
+                return  # Skip regular sync while research is pending
+            
             # 使用統一解析器提取標籤
             meta = parse_markdown_metadata(content)
             original_tags = meta.get('tags', [])
@@ -186,7 +194,8 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             from core.config import TAG_MAP_FILE
             tm = TagManager(TAG_MAP_FILE)
             
-            new_tags = set(original_tags)
+            new_tags = set()
+            aliases_to_add = []
             tags_to_translate = []
             
             for tag in original_tags:
@@ -194,8 +203,11 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                     eq = tm.get_equivalent(tag)
                     if eq:
                         new_tags.add(tm.normalize(eq))
+                        aliases_to_add.append(tag)
                     else:
                         tags_to_translate.append(tag)
+                else:
+                    new_tags.add(tm.normalize(tag))
             
             # 學習新標籤 (如果本機對照表沒有)
             if tags_to_translate and self.llm:
@@ -203,14 +215,15 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                 for src, target in learned_map.items():
                     tm.add_mapping(src, target)
                     new_tags.add(tm.normalize(target))
+                    aliases_to_add.append(src)
             
             final_tags = sorted(list(new_tags))
             
-            # 回寫 Obsidian (如果標籤有增加)
-            if final_tags != original_tags:
+            # 回寫 Obsidian (如果標籤有改變)
+            if final_tags != original_tags or aliases_to_add:
                 try:
-                    self._update_file_tags(filepath, final_tags)
-                    logging.info(f"Vault: Enriched tags for {title}: {original_tags} -> {final_tags}")
+                    self._update_file_tags(filepath, final_tags, add_aliases=aliases_to_add)
+                    logging.info(f"Vault: Enriched tags for {title}: {original_tags} -> {final_tags} (aliases: {aliases_to_add})")
                 except Exception as e:
                     logging.error(f"Vault: Failed to write back enriched tags for {title}: {e}")
             
@@ -286,9 +299,9 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
         finally:
             global_busy_state.set_busy(False)
 
-    def _update_file_tags(self, filepath: Path, tags: list[str]):
+    def _update_file_tags(self, filepath: Path, tags: list[str], add_aliases: list[str] = None):
         from core.vault_utils import update_file_tags
-        update_file_tags(filepath, tags)
+        update_file_tags(filepath, tags, add_aliases=add_aliases)
 
     def _should_watch(self, filepath: Path) -> bool:
         from core.config import SCRIPTURE_FILE

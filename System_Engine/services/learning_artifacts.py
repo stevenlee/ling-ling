@@ -63,10 +63,11 @@ _MERMAID_KIND = {
 # based and a quoted node (`"概念"`) is a parse error that kills the diagram.
 _MERMAID_RULES_COMMON = (
     "只輸出一個 ```mermaid 區塊,不要任何說明文字。label 裡不要放 LaTeX/數學($...$、\\mathcal 等)。"
+    "【重要】全面使用純英文 ID：所有節點或變數名稱必須使用純英文(例如 Goal, Baseline)，絕對不可使用中文，以防編碼解析失敗。"
 )
 _MERMAID_RULES_QUOTED = (
-    "每個 node label 用雙引號包住（如 `A[\"概念（細節）\"]`）；subgraph 名稱也用雙引號；"
-    "不要在 label 裡用未跳脫的特殊字元。"
+    "每個 node label 用雙引號包住（如 `Baseline[\"基準模型\"]`）；subgraph 名稱也用雙引號；不要在 label 裡用未跳脫的特殊字元；"
+    "集中管理連線邏輯：先在上方宣告所有節點（含 subgraph 的內部節點），最後在最下方統一撰寫所有節點間的連線關係 (`-->`)，將定義與連線分開。"
 )
 _MERMAID_RULES_MINDMAP = (
     "絕對不要用雙引號包節點文字（mindmap 用了引號會整張圖解析失敗）；"
@@ -95,7 +96,7 @@ _MERMAID_HINTS = {
     "concept_map": "節點間用帶標籤的邊表達關係,如 `A[\"概念\"] -->|\"關係\"| B[\"概念\"]`。請根據內容結構決定方向：並行分支多或文字長時強烈建議使用 LR 以收斂左右寬度。",
     "flowchart": "箭頭 `-->` 表流程/因果,需要分組時用 `subgraph \"群組\" ... end`。請根據內容結構決定方向：並行分支多或文字長時強烈建議使用 LR 以收斂左右寬度。",
     "sequence_diagram": "sequenceDiagram 語法：第一行 `sequenceDiagram`,參與者用 `participant A`，訊息用 `A->>B: 訊息`，可搭配 `Note over A,B: 說明`。",
-    "state_diagram": "stateDiagram-v2 語法：第一行 `stateDiagram-v2` (若需要左右排版可於第二行加 `direction LR`),起點與終點用 `[*]`,轉移用 `-->`,如 `State1 --> State2 : 觸發條件`。",
+    "state_diagram": "stateDiagram-v2 語法：第一行 `stateDiagram-v2` (若需要左右排版可加 `direction LR`)。起點與終點用 `[*]`。轉移如 `A --> B : 條件`。【重要優化】1. 引入狀態 ID：為所有節點定義純英文 ID (如 `state \"中文\" as CHMM_Model`)，確保跨層級連接穩定。2. 符號視覺優化：將文字敘述的 gamma, xi, theta, delta 等改為實際符號 γ, ξ, θ, Δ，將 10^-4 寫作 10⁻⁴。3. 結構封裝：明確定義複合狀態內的起始與結束關聯 `[*]`，避免游離節點。",
     "user_journey": "journey 語法：第一行 `journey`,標題 `title ...`,區段 `section ...`,步驟寫法為 `任務名稱: 分數: 角色`,例如 `逛商品: 5: User`（分數1~5）。",
     "gantt_chart": "gantt 語法：第一行 `gantt`,接 `title ...` 與 `dateFormat YYYY-MM-DD`，區段用 `section 名稱`，任務為 `任務名 :狀態, ID, 開始日, 結束日`。",
     "pie_chart": "pie 語法：第一行 `pie title 標題`,每行寫 `\"類別\" : 數值`（數值必須是純數字）。",

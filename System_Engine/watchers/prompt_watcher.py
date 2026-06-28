@@ -65,6 +65,7 @@ INTENT_ROUTES = [
     (["zip"],                                ["zip"],         "kb_zip"),
     (["unzip"],                              ["unzip"],       "kb_unzip"),
     (["reset"],                              ["reset"],       "kb_reset"),
+    (["research"],                           ["research"],    "research"),
 ]
 
 # Intents dispatched directly to a maintenance/cognition function (no agent).
@@ -316,6 +317,25 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                 elif intent_key == "repair_tags":
                     from maintenance.repair_tags import repair_tags_interactively
                     repair_tags_interactively(filepath)
+
+                elif intent_key == "research":
+                    from services.research_pipeline import ResearchPipeline
+                    rp = ResearchPipeline(self.llm)
+                    
+                    loaded_sources = self._load_linked_sources(target_entities)
+                    instruction = lower_query.replace(f"{COMMAND_PREFIX}research", "").strip()
+                    if not instruction:
+                        instruction = "General topic"
+                        
+                    content = "\n\n".join(loaded_sources) if loaded_sources else query_content
+                    
+                    res = rp.run_research(instruction, content)
+                    
+                    output_path = FROM_LLM_DIR / f"💌re-{filepath.stem}.md"
+                    output_path.write_text(
+                        f"---\ntitle: \"re: {filepath.stem}\"\ntype: research\n---\n\n{res}",
+                        encoding='utf-8'
+                    )
 
                 elif intent_key:
                     agent = self.registry.get_agent(intent_key)

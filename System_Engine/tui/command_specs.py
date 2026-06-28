@@ -62,6 +62,8 @@ COMMANDS: tuple[CommandSpec, ...] = (
         Field("planner", "planner 預覽", "flag"),
         Field("execute", "執行計畫", "flag"),
     )),
+    CommandSpec("research", "research", "自動研究 (Agentic RAG)", "Brain",
+                "執行學術精兵搜索與專利大範圍掃描", fields=(_TARGETS, _BODY)),
     # ── Cortex queries ──
     CommandSpec("review", "review", "書評／報導 (發布稿)", "Cortex",
                 "把一篇 Synthesis 寫成助學習的書評/報導；genre 省略時：標題有專利號→patent，否則 book",

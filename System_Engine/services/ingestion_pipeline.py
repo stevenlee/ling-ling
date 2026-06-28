@@ -732,7 +732,8 @@ class IngestionPipeline:
 
         final_meta = {
             "title": f"{base_title} (Synthesis)",
-            "tags": (master_tags or []) + ["synthesis", "completed"],
+            "type": "synthesis",
+            "tags": master_tags or [],
             "status": "#PerfectPitch",
             "engine_build": BUILD_DATE,
             "date_completed": datetime.now().strftime("%Y-%m-%d"),
@@ -1150,7 +1151,7 @@ class IngestionPipeline:
         metadata = {
             "title": f"{base_title} (Stitched)",
             "type": "stitched_article",
-            "tags": sorted(set((tags or []) + ["stitched", "longform"])),
+            "tags": sorted(set(tags or [])),
             "status": "#FaithfulStitch",
             "engine_build": BUILD_DATE,
             "date_completed": datetime.now().strftime("%Y-%m-%d"),

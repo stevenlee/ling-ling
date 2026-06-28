@@ -4,6 +4,10 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
+try:
+    from yaml import CSafeLoader as SafeLoader
+except ImportError:
+    from yaml import SafeLoader
 
 from core.config import (
     INDEX_FILE,
@@ -60,17 +64,29 @@ def _read_metadata(f_path: Path) -> dict:
     """Return {title, tags, date} for a markdown file; tolerant of bad YAML."""
     mtime = datetime.fromtimestamp(f_path.stat().st_mtime).strftime("%Y-%m-%d")
     meta = {"title": f_path.stem, "tags": [], "date": mtime}
+    
+    fm_str = ""
     try:
-        content = f_path.read_text(encoding="utf-8")
+        with open(f_path, 'r', encoding='utf-8') as f:
+            first_line = f.readline()
+            if not first_line.startswith("---"):
+                return meta
+            
+            yaml_lines = []
+            for line in f:
+                if line.startswith("---"):
+                    break
+                yaml_lines.append(line)
+            fm_str = "".join(yaml_lines)
     except Exception as e:
         logging.debug(f"Wiki index: failed to read {f_path.name}: {e}")
         return meta
 
-    fm = _FRONTMATTER_RE.search(content)
-    if not fm:
+    if not fm_str.strip():
         return meta
+
     try:
-        data = yaml.safe_load(fm.group(1))
+        data = yaml.load(fm_str, Loader=SafeLoader)
     except Exception as e:
         logging.debug(f"Wiki index: failed to parse YAML of {f_path.name}: {e}")
         return meta
@@ -452,14 +468,18 @@ def ensure_wiki_indexes():
     update_wiki_index(sync_reading_index=True)
 
 
-def update_file_tags(filepath: Path, tags: list[str]):
-    """Replace the `tags:` field of `filepath`'s YAML frontmatter."""
+def update_file_tags(filepath: Path, tags: list[str], add_aliases: list[str] = None):
+    """Replace the `tags:` field of `filepath`'s YAML frontmatter, and optionally append to `aliases:`."""
     content = filepath.read_text(encoding="utf-8")
     fm = _FRONTMATTER_NL_RE.search(content)
 
     if not fm:
         tag_str = ", ".join(tags)
-        filepath.write_text(f"---\ntags: [{tag_str}]\n---\n\n" + content, encoding="utf-8")
+        fm_content = f"tags: [{tag_str}]\n"
+        if add_aliases:
+            aliases_str = ", ".join(add_aliases)
+            fm_content += f"aliases: [{aliases_str}]\n"
+        filepath.write_text(f"---\n{fm_content}---\n\n" + content, encoding="utf-8")
         return
 
     try:
@@ -470,6 +490,15 @@ def update_file_tags(filepath: Path, tags: list[str]):
     if not isinstance(data, dict):
         data = {}
     data["tags"] = tags
+
+    if add_aliases:
+        existing_aliases = data.get("aliases", [])
+        if isinstance(existing_aliases, str):
+            existing_aliases = [existing_aliases]
+        for a in add_aliases:
+            if a not in existing_aliases:
+                existing_aliases.append(a)
+        data["aliases"] = existing_aliases
 
     new_fm = yaml.safe_dump(data, allow_unicode=True, sort_keys=False).strip()
     body = content[fm.end():]

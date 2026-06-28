@@ -1596,6 +1596,24 @@ class LLMClient:
             logging.warning(f"extract_claims failed: {e}")
             return []
 
+    def generate_structured(self, prompt: str, schema: dict) -> dict:
+        import json
+        system_prompt = "You are a helpful assistant. Output strictly valid JSON that matches the provided schema."
+        user_msg = f"{prompt}\n\nSchema:\n{json.dumps(schema, ensure_ascii=False)}"
+        try:
+            parsed = self._complete_json(
+                kind="object",
+                system_prompt=system_prompt,
+                user_msg=user_msg,
+                temperature=0.2,
+                max_tokens=1000,
+                trace_context={"stage": "generate_structured"}
+            )
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception as e:
+            logging.warning(f"generate_structured failed: {e}")
+            return {}
+
     def _assess_falsifiability_once(self, claim: str) -> dict:
         system_prompt = (
             "You are assessing the falsifiability (empirical content) of a claim.\n"

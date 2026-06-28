@@ -41,7 +41,7 @@ class TagManager:
             match = _FRONTMATTER_RE.search(content)
             data = yaml.safe_load(match.group(1)) if match else yaml.safe_load(content)
             if isinstance(data, dict):
-                self._map = data
+                self._map = {self.normalize(k): v for k, v in data.items()}
         except Exception as e:
             logging.error(f"TagManager: failed to parse map from {self.mapping_file.name}: {e}")
 
@@ -88,7 +88,31 @@ class TagManager:
                 self.save()
                 logging.info(f"TagManager: learned mapping: {s_norm} -> {t_norm}")
 
+    def get_all_tags(self) -> set[str]:
+        tags = set()
+        for k, v in self._map.items():
+            tags.add(k)
+            tags.add(v)
+        return tags
+
     @staticmethod
     def is_bilingual_needed(tag: str) -> bool:
         """True if the tag contains CJK characters and likely needs translation."""
         return bool(_CJK_RE.search(tag))
+
+    @staticmethod
+    def move_cjk_to_aliases(tags: list[str], current_aliases: list[str]) -> tuple[list[str], list[str]]:
+        """Filters CJK tags out of the tags list and appends them to current_aliases."""
+        if not tags:
+            return [], current_aliases or []
+            
+        new_tags = []
+        aliases_set = set(current_aliases or [])
+        
+        for t in tags:
+            if TagManager.is_bilingual_needed(t):
+                aliases_set.add(t)
+            else:
+                new_tags.append(t)
+                
+        return new_tags, sorted(list(aliases_set))
