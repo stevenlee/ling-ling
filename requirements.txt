@@ -11,3 +11,5 @@ rank_bm25
 #   pip install -r requirements-reranker.txt   # then set RERANKER_ENABLED=true
 # Kept out of the core install so the base doesn't pull torch. Validated to
 # take the golden-query bench 0.867 → 0.933 (see requirements-reranker.txt).
+beautifulsoup4
+lxml
