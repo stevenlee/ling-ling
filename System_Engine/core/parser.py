@@ -688,6 +688,67 @@ def repair_mermaid_quoted_node_ids(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+# ─── Mermaid: over-quoted node repair ─────────────────────────────────
+
+# `"Id["label"]"` — the LLM wrapped a whole `id["label"]` node in an extra pair
+# of outer quotes (often only on a connection endpoint: `--> "Id["label"]"`).
+# `repair_mermaid_quoted_node_ids` misses it (there's no `"` between id and the
+# shape opener), so the outer quotes survive and break the line. Strip them back
+# to a bare `id["label"]`. Handles the `[]`, `()` and `{}` shapes.
+_MERMAID_OVERQUOTED_NODE_RE = re.compile(
+    r'"([A-Za-z_]\w*)([\[\(\{])"([^"\n]*)"([\]\)\}])"'
+)
+_MERMAID_SHAPE_CLOSERS = {"[": "]", "(": ")", "{": "}"}
+
+
+def repair_mermaid_overquoted_node(text: str) -> tuple[str, list[dict]]:
+    """Strip an extra outer quote pair wrapping a whole ``id["label"]`` node.
+
+    Only rewrites when the shape brackets match (``[`` with ``]`` etc.), so a
+    coincidental quote run is left alone. Idempotent — once the outer quotes are
+    gone the pattern no longer matches.
+    """
+    if not text or '"' not in text:
+        return text, []
+
+    def _repl(m: re.Match) -> str:
+        opener, closer = m.group(2), m.group(4)
+        if _MERMAID_SHAPE_CLOSERS[opener] != closer:
+            return m.group(0)
+        return f'{m.group(1)}{opener}"{m.group(3)}"{closer}'
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+            out.append(line)
+            continue
+        if in_mermaid and stripped == "```":
+            in_mermaid = False
+            out.append(line)
+            continue
+
+        if in_mermaid and '"' in line:
+            new_line = _MERMAID_OVERQUOTED_NODE_RE.sub(_repl, line)
+            if new_line != line:
+                fixes.append(_make_fix(
+                    "stripped_mermaid_overquoted_node",
+                    line=idx + 1,
+                    before=line,
+                    after=new_line,
+                ))
+            out.append(new_line)
+        else:
+            out.append(line)
+
+    return "\n".join(out), fixes
+
+
 # ─── Mermaid: double-quote repair ─────────────────────────────────────
 
 # `[""label""]` or `(""label"")` — LLM emitted two layers of quotes inside
@@ -1812,6 +1873,7 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
         repair_mermaid_fences,
         repair_mermaid_subgraph_keyword,
         repair_mermaid_quoted_node_ids,
+        repair_mermaid_overquoted_node,
         repair_mermaid_double_quotes,
         repair_mermaid_quoted_endpoint_labels,
         repair_mermaid_label_quotes,

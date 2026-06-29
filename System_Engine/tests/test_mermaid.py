@@ -577,6 +577,57 @@ class TestQuotedIdConsistency:
         assert fixes == []
 
 
+# ── Over-quoted node repair ────────────────────────────────────────
+
+class TestOverquotedNode:
+    """`--> "Id["label"]"` wraps a whole node in an extra outer quote pair;
+    strip it back to a bare `Id["label"]`."""
+
+    def _q(self, body):
+        from core.parser import repair_mermaid_overquoted_node
+        return repair_mermaid_overquoted_node(f"```mermaid\n{body}\n```")
+
+    def test_strips_outer_quotes_on_endpoint(self):
+        result, fixes = self._q('graph TD\n    Start["開始"] --> "Step1["繪製單位圓"]"')
+        assert 'Start["開始"] --> Step1["繪製單位圓"]' in result
+        assert '"Step1[' not in result
+        assert any(f["type"] == "stripped_mermaid_overquoted_node" for f in fixes)
+
+    def test_strips_multiple_on_chain(self):
+        body = (
+            'graph TD\n'
+            '    Step1 --> "Step2["切線"]"\n'
+            '    Step2 --> "Result["得到根"]"'
+        )
+        result, _ = self._q(body)
+        assert 'Step1 --> Step2["切線"]' in result
+        assert 'Step2 --> Result["得到根"]' in result
+
+    def test_rounded_shape(self):
+        result, _ = self._q('graph TD\n    A --> "B("圓角")"')
+        assert 'A --> B("圓角")' in result
+
+    def test_mismatched_brackets_left_alone(self):
+        # `"B["x"}"` has mismatched [ and } — don't rewrite a coincidence.
+        body = 'graph TD\n    A --> "B["x"}"'
+        result, fixes = self._q(body)
+        assert fixes == []
+
+    def test_well_formed_node_untouched(self):
+        body = 'graph TD\n    A["開始"] --> B["結束"]'
+        result, fixes = self._q(body)
+        assert result == f'```mermaid\n{body}\n```'
+        assert fixes == []
+
+    def test_idempotent(self):
+        from core.parser import repair_mermaid_overquoted_node
+        body = 'graph TD\n    Start["開始"] --> "Step1["繪製"]"'
+        once, _ = self._q(body)
+        twice, fixes = repair_mermaid_overquoted_node(once)
+        assert once == twice
+        assert fixes == []
+
+
 # ── Mindmap bracket neutralization ─────────────────────────────────
 
 class TestMindmapBrackets:
