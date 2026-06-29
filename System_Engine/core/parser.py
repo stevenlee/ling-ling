@@ -222,7 +222,11 @@ _CLASSDIAGRAM_BODY_OPEN_RE = re.compile(
     r'^(\s*)class\s+([A-Za-z_]\w*)\s*(\["[^"\n]*"\]|\[[^\]\n]*\])?\s*\{(.*)$'
 )
 
-LATEX_CR_COMMAND_RE = re.compile(r'\\r(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b')
+# A LaTeX `\r…` command (\rightarrow, \rangle, …) emitted in under-escaped JSON
+# decodes to a carriage-return CONTROL char + the suffix, not a literal `\r`.
+# Match the CR char (\x0d) so the corruption is actually repaired; the suffix
+# list keeps real CRLF line endings (CR not followed by these) untouched.
+LATEX_CR_COMMAND_RE = re.compile("\r" + r"(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b")
 
 # Finds `${\displaystyle ... $` blocks for unclosed brace repair
 UNCLOSED_LATEX_DISPLAY_RE = re.compile(r'\$\{\\displaystyle(.*?)(?<!\\)\$', re.DOTALL)
