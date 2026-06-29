@@ -250,7 +250,15 @@ def _validate_mermaid(block: str, kind: str) -> bool:
     if len(lines) < 2:                                              # header + ≥1 content line
         return False
     expected = _MERMAID_KIND[kind].split()[0].lower()              # flowchart/mindmap/timeline/quadrantchart/graph
-    return lines[0].strip().lower().startswith(expected)
+    if not lines[0].strip().lower().startswith(expected):
+        return False
+    # An ontology with no relationship edges is just a disconnected node dump
+    # (degenerate — the whole point is the typed relations). Require ≥1 edge.
+    if kind == "ontology" and not any(
+        tok in inner for tok in ("<|--", "*--", "o--", "-->", "..>", "..|>", "<..", "--|>", "--*", "--o")
+    ):
+        return False
+    return True
 
 
 def _render_for_type(llm, content: str, t: str) -> str:
