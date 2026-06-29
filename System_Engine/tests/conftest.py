@@ -35,6 +35,22 @@ def update_snapshots(request):
     return bool(request.config.getoption("--update-snapshots"))
 
 
+@pytest.fixture(autouse=True)
+def _no_leak_daemon_status(monkeypatch):
+    """Stop tests from leaking busy state into the live daemon_status.json.
+
+    Tests that exercise an agent's .execute() hit the real `ui` singleton,
+    whose set_status() mirrors {busy, message} to disk for the TUI. Without
+    this, e.g. the visualize test persists 'busy: true · 視覺化：Some Doc' and
+    the TUI shows that stale message indefinitely (the daemon only overwrites
+    it when it does its own work)."""
+    try:
+        import core.ui as cui
+        monkeypatch.setattr(cui.ui, "_persist_status", lambda *a, **k: None, raising=False)
+    except Exception:
+        pass
+
+
 def pytest_collection_modifyitems(config, items):
     if config.getoption("--run-live-llm"):
         return
