@@ -209,7 +209,7 @@ def test_maybe_section_none_attaches_nothing(monkeypatch):
 def test_maybe_section_emits_two_when_two_render(monkeypatch):
     import services.learning_artifacts as la
     monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", True)
-    monkeypatch.setattr(la, "build_artifacts", lambda llm, content: [
+    monkeypatch.setattr(la, "build_artifacts", lambda llm, content, **_: [
         {"type": "flowchart", "reason": "", "artifact": "```mermaid\nflowchart TD\nA-->B\n```"},
         {"type": "mindmap", "reason": "", "artifact": "```mermaid\nmindmap\n  root((X))\n```"},
     ])
