@@ -577,6 +577,56 @@ class TestQuotedIdConsistency:
         assert fixes == []
 
 
+# ── Mindmap bracket neutralization ─────────────────────────────────
+
+class TestMindmapBrackets:
+    """Half-width brackets in mindmap node text are read as shape syntax and
+    break the diagram; they're converted to full-width, while a legitimate
+    leading shape wrapper (root circle, rounded node) is preserved."""
+
+    def _q(self, body):
+        from core.parser import repair_mermaid_mindmap_brackets
+        return repair_mermaid_mindmap_brackets(f"```mermaid\n{body}\n```")
+
+    def test_neutralizes_embedded_parens(self):
+        result, fixes = self._q('mindmap\n  root((主題))\n    證明 sqrt(2) 為無理數')
+        assert '證明 sqrt（2） 為無理數' in result
+        assert any(f["type"] == "neutralized_mindmap_brackets" for f in fixes)
+
+    def test_preserves_root_circle_shape(self):
+        result, _ = self._q('mindmap\n  root((主題))\n    平凡節點')
+        assert 'root((主題))' in result
+
+    def test_preserves_full_wrapping_rounded_shape(self):
+        # A node whose entire label is wrapped is a valid shape — keep it.
+        result, _ = self._q('mindmap\n  root((主題))\n    (純說明)')
+        assert '(純說明)' in result
+
+    def test_neutralizes_square_and_brace(self):
+        result, _ = self._q('mindmap\n  root((R))\n    區間 [a,b] 與集合 {x}')
+        assert '區間 ［a,b］ 與集合 ｛x｝' in result
+
+    def test_no_brackets_untouched(self):
+        body = 'mindmap\n  root((主題))\n    x^2 = 2 的長度'
+        result, fixes = self._q(body)
+        assert 'x^2 = 2 的長度' in result
+        assert fixes == []
+
+    def test_ignores_non_mindmap_fence(self):
+        body = 'graph TD\n    A["f(x)"]'
+        result, fixes = self._q(body)
+        assert fixes == []
+        assert 'f(x)' in result
+
+    def test_idempotent(self):
+        from core.parser import repair_mermaid_mindmap_brackets
+        body = 'mindmap\n  root((主題))\n    證明 sqrt(2) 為無理數'
+        once, _ = self._q(body)
+        twice, fixes = repair_mermaid_mindmap_brackets(once)
+        assert once == twice
+        assert fixes == []
+
+
 # ── classDiagram structural repair ─────────────────────────────────
 
 class TestClassDiagramRepair:

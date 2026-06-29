@@ -1000,6 +1000,90 @@ def repair_mermaid_mindmap_labels(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+# ─── Mermaid: mindmap bracket neutralization ──────────────────────────
+
+_MINDMAP_HALF_TO_FULL = {
+    "(": "（", ")": "）", "[": "［", "]": "］", "{": "｛", "}": "｝",
+}
+# Mindmap node shapes, longest/double markers first so `((` isn't shadowed by
+# `(`. A shape wraps the WHOLE label; brackets there are syntax, not text.
+_MINDMAP_SHAPE_PAIRS = (
+    ("((", "))"), ("))", "(("), ("{{", "}}"),
+    ("[", "]"), ("(", ")"), (")", "("), ("{", "}"),
+)
+
+
+def _neutralize_brackets(s: str) -> str:
+    return "".join(_MINDMAP_HALF_TO_FULL.get(c, c) for c in s)
+
+
+def _fix_mindmap_brackets(content: str) -> str:
+    """Convert half-width brackets in a mindmap node's *text* to full-width.
+
+    Mermaid mindmap reads ``()``/``[]``/``{}`` as node-shape delimiters, so a
+    label like ``證明 sqrt(2) 為無理數`` is misparsed (the ``(2)`` looks like a
+    rounded shape) and breaks the diagram. A leading shape wrapper that spans
+    the whole label (``root((主題))``, ``(說明)``) is legitimate and preserved —
+    only its *interior* brackets are neutralized.
+    """
+    if not any(c in content for c in "()[]{}"):
+        return content
+    head, rest = re.match(r'^([\w\-]*)(.*)$', content, re.UNICODE).groups()
+    for open_, close_ in _MINDMAP_SHAPE_PAIRS:
+        if (rest.startswith(open_) and rest.endswith(close_)
+                and len(rest) >= len(open_) + len(close_)):
+            inner = rest[len(open_):len(rest) - len(close_)]
+            return f"{head}{open_}{_neutralize_brackets(inner)}{close_}"
+    return f"{head}{_neutralize_brackets(rest)}"
+
+
+def repair_mermaid_mindmap_brackets(text: str) -> tuple[str, list[dict]]:
+    """Neutralize stray half-width brackets in ``mindmap`` node text.
+
+    Scoped to ``mindmap`` fences only (other kinds use brackets as real shape
+    syntax). Idempotent — once a label's brackets are full-width, the quick
+    bracket check finds nothing left to convert.
+    """
+    if not text or "mindmap" not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+    is_mindmap = False
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+            is_mindmap = _peek_mermaid_kind(lines, idx).startswith("mindmap")
+            out.append(line)
+            continue
+        if in_mermaid and stripped == "```":
+            in_mermaid = False
+            is_mindmap = False
+            out.append(line)
+            continue
+
+        if in_mermaid and is_mindmap and line.strip() and any(c in line for c in "()[]{}"):
+            indent = line[:len(line) - len(line.lstrip())]
+            new_content = _fix_mindmap_brackets(line.strip())
+            new_line = f"{indent}{new_content}"
+            if new_line != line:
+                fixes.append(_make_fix(
+                    "neutralized_mindmap_brackets",
+                    line=idx + 1,
+                    before=line,
+                    after=new_line,
+                ))
+            out.append(new_line)
+        else:
+            out.append(line)
+
+    return "\n".join(out), fixes
+
+
 # ─── Mermaid: quadrantChart point quoting ─────────────────────────────
 
 
@@ -1732,6 +1816,7 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
         repair_mermaid_quoted_endpoint_labels,
         repair_mermaid_label_quotes,
         repair_mermaid_mindmap_labels,
+        repair_mermaid_mindmap_brackets,
         repair_mermaid_quadrant_points,
         repair_mermaid_classdiagram,
         repair_mermaid_latex_labels,
