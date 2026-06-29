@@ -85,7 +85,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
             "quadrant", "concept_map", "argument_map", "sequence_diagram", 
             "state_diagram", "user_journey", "gantt_chart", "pie_chart",
             "sankey_diagram", "xy_chart", "block_diagram", "c4_diagram", 
-            "class_diagram", "er_diagram")),
+            "class_diagram", "er_diagram", "ontology")),
     )),
     CommandSpec("lens", "lens", "概念透鏡 (掃描實例)", "Cortex", fields=(
         Field("targets", "目標 [[筆記]]", "links", required=True),

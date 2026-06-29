@@ -23,6 +23,7 @@ ARTIFACT_TYPES = {
     "timeline": "時序、階段或歷史演進",
     "quadrant": "物件落在兩個軸 / 取捨空間",
     "concept_map": "概念之間的網狀關係（非序列）",
+    "ontology": "領域知識的本體論：類別階層 (is-a)、組成 (part-of)、物件屬性與個體 (instance-of) 等型別化的語意關係",
     "argument_map": "論證性內容（主張 + 根據 + 反駁）",
     "sequence_diagram": "實體之間的對話、交涉、訊息傳遞或劇情發展順序",
     "state_diagram": "事物或心理狀態的轉變與觸發條件",
@@ -56,6 +57,7 @@ _MERMAID_KIND = {
     "c4_diagram": "C4Context",
     "class_diagram": "classDiagram",
     "er_diagram": "erDiagram",
+    "ontology": "classDiagram",
 }
 
 # Common to every kind. Kind-specific quoting rules are added separately —
@@ -106,6 +108,17 @@ _MERMAID_HINTS = {
     "c4_diagram": "C4Context 語法：使用 `Person(alias, \"Label\")`、`System(alias, \"Label\")` 與 `Rel(from, to, \"Label\")` 等巨集指令。",
     "class_diagram": "classDiagram 語法：第一行 `classDiagram`，使用 `class 類別名 { ... }` 或是 `類別A <|-- 類別B` 來表示繼承。",
     "er_diagram": "erDiagram 語法：第一行 `erDiagram`，實體關聯用 `實體1 ||--o{ 實體2 : 關係標籤` 等語法。",
+    "ontology": (
+        "ontology（本體論）語法：用 classDiagram 的符號表達領域本體，第一行寫 `classDiagram`。"
+        "節點 ID 一律純英文，概念名稱放在標籤裡，如 `class Animal[\"動物\"]`。"
+        "請務必依語意選用「不同」的箭頭區分四種關係，切勿全部用同一種線："
+        "① is-a／子類別 (subClassOf)：用空心三角繼承箭頭 `Superclass <|-- Subclass`（例：`Animal <|-- Dog`），這是唯一用來表達分類階層的符號；"
+        "② part-of／組成：用組合菱形 `Whole *-- Part : part-of`；"
+        "③ 物件屬性／一般語意關係 (object property)：用帶標籤的實線關聯 `ClassA --> ClassB : 關係名稱`，必要時加基數如 `ClassA \"1\" --> \"*\" ClassB : owns`；"
+        "④ 個體／實例 (instance-of)：個體用 stereotype 標註 `class Fido { <<個體>> }`，再用虛線依賴 `Fido ..> Dog : instance-of` 連到其類別。"
+        "資料屬性 (data property) 寫在 class 內部，如 `Animal : +name string`。"
+        "目標是讓階層、組成、屬性、個體在圖上一眼可辨，而非畫成扁平的概念網。"
+    ),
 }
 
 def _build_classify_system(limit: int, exclude_types: set[str] | None = None) -> str:
