@@ -382,8 +382,17 @@ class TestQuotedEndpointLabels:
         assert any(f["type"] == "bracketed_mermaid_quoted_endpoint" for f in fixes)
 
     def test_brackets_cjk_with_space(self):
+        # All-CJK labels slug to empty → synthetic ASCII ids (English-only id
+        # policy); the CJK text is preserved in the bracketed label.
         result, _ = self._q('graph TD\n    "步驟 一" --> "步驟 二"')
-        assert '步驟一["步驟 一"] --> 步驟二["步驟 二"]' in result
+        assert 'node["步驟 一"] --> node_1["步驟 二"]' in result
+
+    def test_cjk_label_synthesizes_ascii_id(self):
+        # A long punctuated CJK endpoint must not become a giant CJK id.
+        result, _ = self._q('graph TD\n    A --- "包含: 戴德金理論, 海內-波萊爾定理"')
+        assert 'A --- node["包含: 戴德金理論, 海內-波萊爾定理"]' in result
+        # No CJK leaked into an id position (the only CJK is inside the label).
+        assert '--- 包含' not in result
 
     def test_single_token_left_for_strip_pass(self):
         # Hybrid: a legal bare id is NOT bracketed here (the strip pass unquotes it).
@@ -468,3 +477,101 @@ class TestSubgraphRepair:
         text = '    "Node A("Label A")" --> "Node B (Label B)"'
         res, fixes = repair_mermaid_label_quotes(text)
         assert res == text
+
+    def test_repairs_space_split_keyword(self):
+        result, fixes = self._repair('graph TD\n  sub graph "Group A"\n  end')
+        assert '  subgraph "Group A"' in result
+        assert any(f["type"] == "repaired_mermaid_subgraph_keyword" for f in fixes)
+
+    def test_repairs_doubled_keyword(self):
+        result, fixes = self._repair('graph TD\n  subsubgraph "Group A"\n  end')
+        assert '  subgraph "Group A"' in result
+        assert any(f["type"] == "repaired_mermaid_subgraph_keyword" for f in fixes)
+
+    def test_repairs_triple_doubled_keyword(self):
+        result, _ = self._repair('graph TD\n  subsubsubgraph "G"\n  end')
+        assert '  subgraph "G"' in result
+
+    def test_valid_keyword_not_touched_by_ascii_rule(self):
+        result, fixes = self._repair('graph TD\n  subgraph SG["Group A"]\n  end')
+        assert '  subgraph SG["Group A"]' in result
+        assert not fixes
+
+
+# ── Quoted-id cross-reference consistency ──────────────────────────
+
+class TestQuotedIdConsistency:
+    """A quoted node id used in a declaration, its edges, and its `style` line
+    must resolve to ONE synthesized id — otherwise the diagram grows duplicate
+    / dangling nodes and the `style` binding silently misses."""
+
+    def _q(self, body):
+        from core.parser import repair_mermaid_quoted_endpoint_labels
+        return repair_mermaid_quoted_endpoint_labels(f"```mermaid\n{body}\n```")
+
+    def test_declaration_and_edge_share_one_id(self):
+        body = (
+            'graph TD\n'
+            '    "First Edition (1908)"["第一版"]\n'
+            '    "First Edition (1908)" --> Basic_Math'
+        )
+        result, _ = self._q(body)
+        # The declaration loses its quotes and the edge reuses the bare id.
+        assert 'FirstEdition1908["第一版"]' in result
+        assert 'FirstEdition1908 --> Basic_Math' in result
+        # No leftover quoted id anywhere.
+        assert '"First Edition (1908)"' not in result
+
+    def test_style_target_rewritten_to_same_id(self):
+        body = (
+            'graph TD\n'
+            '    "First Edition (1908)"["第一版"]\n'
+            '    style "First Edition (1908)" fill:#f9f,stroke:#333'
+        )
+        result, _ = self._q(body)
+        assert 'style FirstEdition1908 fill:#f9f,stroke:#333' in result
+        assert '"First Edition (1908)"' not in result
+
+    def test_class_target_rewritten(self):
+        result, _ = self._q('graph TD\n    class "Plan work" highlighted')
+        assert 'class Planwork highlighted' in result
+
+    def test_bare_style_target_untouched(self):
+        body = 'graph TD\n    A --> B\n    style A fill:#f9f'
+        result, fixes = self._q(body)
+        assert 'style A fill:#f9f' in result
+        assert fixes == []
+
+    def test_full_diagram_round_trip(self):
+        # The real-world failure: subgraph declaration + edges + style all
+        # referencing the same quoted ids must collapse to one node each.
+        body = (
+            'graph TD\n'
+            '    subgraph "教材演進歷程"\n'
+            '        "First Edition (1908)"["第一版 (1908)"]\n'
+            '        "Second Edition (1914)"["第二版 (1914)"]\n'
+            '    end\n'
+            '    "First Edition (1908)" --> "Second Edition (1914)"\n'
+            '    style "First Edition (1908)" fill:#f9f,stroke:#333\n'
+            '    style "Second Edition (1914)" fill:#bbf,stroke:#333'
+        )
+        result, _ = self._q(body)
+        assert 'FirstEdition1908["第一版 (1908)"]' in result
+        assert 'SecondEdition1914["第二版 (1914)"]' in result
+        assert 'FirstEdition1908 --> SecondEdition1914' in result
+        assert 'style FirstEdition1908 fill:#f9f,stroke:#333' in result
+        assert 'style SecondEdition1914 fill:#bbf,stroke:#333' in result
+        assert '"First Edition (1908)"' not in result
+
+    def test_idempotent(self):
+        from core.parser import repair_mermaid_quoted_endpoint_labels
+        body = (
+            'graph TD\n'
+            '    "First Edition (1908)"["第一版"]\n'
+            '    "First Edition (1908)" --> Basic_Math\n'
+            '    style "First Edition (1908)" fill:#f9f'
+        )
+        once, _ = self._q(body)
+        twice, fixes = repair_mermaid_quoted_endpoint_labels(once)
+        assert once == twice
+        assert fixes == []

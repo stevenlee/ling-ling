@@ -177,6 +177,17 @@ _MERMAID_CONN_END_QUOTED_LABEL_RE = re.compile(
 # left to the strip pass — `"A1" --> "B1"` → `A1 --> B1`, which renders
 # identically and keeps the id stable for bare-id cross-references elsewhere.
 _MERMAID_BARE_ID_RE = re.compile(r'^[\w\-一-鿿]+$')
+# A quoted node *declaration* whose id text can't be a bare id, e.g.
+# `"First Edition (1908)"["第一版"]`. The quoted string is the node id (a label
+# follows in the shape); it must map to the SAME synthesized id the node's edges
+# and `style`/`class` lines use, or the declaration and the edges render as two
+# different nodes. Anchored at line start; lookahead requires a shape opener.
+_MERMAID_QUOTED_DECL_RE = re.compile(r'^(\s*)"([^"\n]+)"(?=[\[\(\{>])')
+# `style "X" ...` / `class "X" ...` / `click "X" ...` — the quoted token is a
+# node id reference, so it must resolve to the same synthesized id as the node.
+_MERMAID_QUOTED_STYLE_TARGET_RE = re.compile(
+    r'^(\s*)(style|class|click)\s+"([^"\n]+)"'
+)
 # quadrantChart data point: `<name>: [x, y]`. Mermaid requires the point name in
 # double quotes; the LLM routinely drops them (esp. for CJK/space names), which
 # fails the whole chart. Lookahead skips lines whose name is already quoted or a
@@ -189,7 +200,12 @@ _MERMAID_QUADRANT_POINT_RE = re.compile(
 _MERMAID_EXISTING_ID_RE = re.compile(
     r'(?:^\s*|' + _MERMAID_CONN_ARROW_PAT + r'\s*)([\w\-一-鿿]+)(?=\s|[\[\(\{>]|$)'
 )
-_MERMAID_ID_SLUG_RE = re.compile(r'[^\w一-鿿]')
+# Synthesized ids are forced to pure ASCII (the generation prompt mandates
+# English-only ids). A label with no usable ASCII — e.g. an all-CJK endpoint —
+# slugs to empty and falls back to a synthetic `node`/`node_1` id; the CJK text
+# survives in the bracketed label. `\w` would keep CJK/accented chars, so we
+# restrict to the ASCII id alphabet explicitly.
+_MERMAID_ID_SLUG_RE = re.compile(r'[^A-Za-z0-9_]')
 
 LATEX_CR_COMMAND_RE = re.compile(r'\\r(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b')
 
@@ -544,6 +560,14 @@ _SUBGRAPH_BROKEN_RE = re.compile(
     r'^(\s*)sub([^\x00-\x7F]+)\s+(.*)',
     re.IGNORECASE,
 )
+# ASCII malformations of the keyword: `sub graph "t"` (split by space) or
+# `subsubgraph "t"` / `subsubsubgraph "t"` (the prefix doubled). The inner
+# group requires at least one space or extra `sub`, so a valid `subgraph`
+# (just `sub`+`graph`, nothing between) never matches.
+_SUBGRAPH_ASCII_MALFORMED_RE = re.compile(
+    r'^(\s*)sub(?:\s+|sub)+graph\b(.*)$',
+    re.IGNORECASE,
+)
 
 
 def repair_mermaid_subgraph_keyword(text: str) -> tuple[str, list[dict]]:
@@ -552,8 +576,12 @@ def repair_mermaid_subgraph_keyword(text: str) -> tuple[str, list[dict]]:
     LLMs sometimes replace the ``graph`` part of ``subgraph`` with CJK or
     other text when generating bilingual diagrams:
     ``sub定的 "title"`` → ``subgraph "title"``.
+
+    Also normalizes ASCII manglings of the keyword — ``sub graph "title"``
+    (split by a space) and ``subsubgraph "title"`` (prefix doubled) — both
+    back to ``subgraph "title"``.
     """
-    if not text or "sub" not in text:
+    if not text or "sub" not in text.lower():
         return text, []
 
     lines = text.splitlines()
@@ -576,15 +604,17 @@ def repair_mermaid_subgraph_keyword(text: str) -> tuple[str, list[dict]]:
             m = _SUBGRAPH_BROKEN_RE.match(line)
             if m:
                 new_line = f"{m.group(1)}subgraph {m.group(3)}"
+            else:
+                a = _SUBGRAPH_ASCII_MALFORMED_RE.match(line)
+                new_line = f"{a.group(1)}subgraph{a.group(2)}" if a else line
+            if new_line != line:
                 fixes.append(_make_fix(
                     "repaired_mermaid_subgraph_keyword",
                     line=idx + 1,
                     before=line,
                     after=new_line,
                 ))
-                out.append(new_line)
-            else:
-                out.append(line)
+            out.append(new_line)
         else:
             out.append(line)
 
@@ -700,9 +730,10 @@ def _synthesize_node_id(label: str, label_to_id: dict[str, str], used_ids: set[s
     """Map a connection-label to a stable, unique node id within one fence.
 
     Same label → same id (so ``"Mid" --> "End"`` and ``"Start" --> "Mid"``
-    share one node). The id is a slug of the label so it reads sensibly and
-    naturally dedups; on a slug collision with a *different* label or an
-    author's existing id, a counter suffix is appended.
+    share one node). The id is an ASCII-only slug of the label so it reads
+    sensibly and naturally dedups; an all-CJK label slugs to empty and falls
+    back to ``node`` (CJK survives in the label). On a slug collision with a
+    *different* label or an author's existing id, a counter suffix is appended.
     """
     if label in label_to_id:
         return label_to_id[label]
@@ -718,18 +749,27 @@ def _synthesize_node_id(label: str, label_to_id: dict[str, str], used_ids: set[s
 
 
 def repair_mermaid_quoted_endpoint_labels(text: str) -> tuple[str, list[dict]]:
-    r"""Bracket bare quoted connection endpoints that carry a *label*.
+    r"""Canonicalize quoted node ids that carry a *label* across a whole fence.
 
-    An endpoint like ``"Plan work" --> "Ship it"`` is invalid mermaid: a
-    quoted string with spaces/punctuation cannot stand in for a node. The
-    LLM means it as display text, so we promote it to ``id["Plan work"]``
-    with a synthesized, deduped id. Single-token endpoints (``"A1"``) are a
-    legal bare id and are left for ``repair_mermaid_label_quotes`` to merely
-    unquote — that keeps the id stable for any bare-id cross-references.
+    A quoted string with spaces/punctuation can't stand in for a node id, yet
+    the LLM uses it as one in three places that must all agree:
 
-    Edge labels (``A -- "edge" --> B``) are untouched: the anchors require
-    the quoted text to be adjacent to the arrow at the line's start/end.
-    Idempotent — once rewritten to ``id["label"]`` neither anchor matches.
+    * edge endpoints — ``"Plan work" --> "Ship it"``
+    * node declarations — ``"First Edition (1908)"["第一版"]``
+    * style/class/click targets — ``style "First Edition (1908)" fill:#f9f``
+
+    Each is promoted to a synthesized, deduped id, keyed by the quoted text so
+    *the same string always resolves to the same id* fence-wide — otherwise the
+    declaration, its edges and its style line drift into separate nodes (which
+    is exactly how duplicate/dangling nodes and dead `style` lines arise). When
+    a declaration already gives the id a label, later endpoints reuse the bare
+    id rather than re-emitting a competing label.
+
+    Single-token endpoints (``"A1"``) are a legal bare id and are left for
+    ``repair_mermaid_label_quotes`` to merely unquote, keeping the id stable for
+    bare-id cross-references. Edge labels (``A -- "edge" --> B``) are untouched:
+    the anchors require the quoted text adjacent to the arrow at the line's
+    start/end. Idempotent — once rewritten, none of the anchors match again.
     """
     if not text:
         return text, []
@@ -740,13 +780,31 @@ def repair_mermaid_quoted_endpoint_labels(text: str) -> tuple[str, list[dict]]:
     in_mermaid = False
     label_to_id: dict[str, str] = {}
     used_ids: set[str] = set()
+    labeled_ids: set[str] = set()
 
     def rewrite(line: str, idx: int) -> str:
+        def repl_decl(m: re.Match) -> str:
+            label = m.group(2)
+            if _MERMAID_BARE_ID_RE.match(label):
+                return m.group(0)
+            nid = _synthesize_node_id(label, label_to_id, used_ids)
+            labeled_ids.add(nid)
+            return f'{m.group(1)}{nid}'
+
+        def repl_style(m: re.Match) -> str:
+            target = m.group(3)
+            if _MERMAID_BARE_ID_RE.match(target):
+                return m.group(0)
+            nid = _synthesize_node_id(target, label_to_id, used_ids)
+            return f'{m.group(1)}{m.group(2)} {nid}'
+
         def repl_start(m: re.Match) -> str:
             label = m.group(2)
             if _MERMAID_BARE_ID_RE.match(label):
                 return m.group(0)
             nid = _synthesize_node_id(label, label_to_id, used_ids)
+            if nid in labeled_ids:
+                return f'{m.group(1)}{nid} {m.group(3)}'
             return f'{m.group(1)}{nid}["{label}"] {m.group(3)}'
 
         def repl_end(m: re.Match) -> str:
@@ -754,9 +812,13 @@ def repair_mermaid_quoted_endpoint_labels(text: str) -> tuple[str, list[dict]]:
             if _MERMAID_BARE_ID_RE.match(label):
                 return m.group(0)
             nid = _synthesize_node_id(label, label_to_id, used_ids)
+            if nid in labeled_ids:
+                return f'{m.group(1)} {nid}{m.group(3)}'
             return f'{m.group(1)} {nid}["{label}"]{m.group(3)}'
 
-        new = _MERMAID_CONN_START_QUOTED_LABEL_RE.sub(repl_start, line)
+        new = _MERMAID_QUOTED_DECL_RE.sub(repl_decl, line)
+        new = _MERMAID_QUOTED_STYLE_TARGET_RE.sub(repl_style, new)
+        new = _MERMAID_CONN_START_QUOTED_LABEL_RE.sub(repl_start, new)
         new = _MERMAID_CONN_END_QUOTED_LABEL_RE.sub(repl_end, new)
         if new != line:
             fixes.append(_make_fix(
@@ -774,6 +836,7 @@ def repair_mermaid_quoted_endpoint_labels(text: str) -> tuple[str, list[dict]]:
         if not in_mermaid and stripped == "```mermaid":
             in_mermaid = True
             label_to_id = {}
+            labeled_ids = set()
             # Seed used_ids with every id already present in this fence so a
             # synthesized id never collides with an author's node.
             used_ids = set()

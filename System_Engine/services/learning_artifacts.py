@@ -70,6 +70,8 @@ _MERMAID_RULES_COMMON = (
 _MERMAID_RULES_QUOTED = (
     "每個 node label 用雙引號包住（如 `Baseline[\"基準模型\"]`）；subgraph 名稱也用雙引號；不要在 label 裡用未跳脫的特殊字元；"
     "集中管理連線邏輯：先在上方宣告所有節點（含 subgraph 的內部節點），最後在最下方統一撰寫所有節點間的連線關係 (`-->`)，將定義與連線分開。"
+    "【ID 一致性】節點 ID 只用純英文短代號（如 `ED1`），ID 本身絕不加引號（中文只放在引號 label 裡）；"
+    "同一個節點在「宣告、連線、style」三處必須用『完全相同』的 ID，否則 Mermaid 會把它們當成不同節點而產生重複/懸空節點，且 style 會綁定失敗。"
 )
 _MERMAID_RULES_MINDMAP = (
     "絕對不要用雙引號包節點文字（mindmap 用了引號會整張圖解析失敗）；"
