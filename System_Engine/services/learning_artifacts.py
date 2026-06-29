@@ -122,10 +122,11 @@ _MERMAID_HINTS = {
 }
 
 _ONTOLOGY_PRIORITY = (
-    "【關係圖優先序】concept_map、class_diagram、ontology 同屬「關係圖」這一種認知切面,至多擇一。"
-    "三者之中**優先選 ontology**：只要概念間的關係能被解讀為從屬(is-a)、組成(part-of)、實例(instance-of)"
-    "或其他可命名的型別化語意,就選 ontology。僅當關係純粹是「鬆散相關、講不出類型」時才退回 concept_map;"
-    "僅當內容明確是程式碼/軟體的類別設計時才用 class_diagram。"
+    "【關係圖優先序】concept_map、class_diagram、ontology 同屬「關係圖」這一種認知切面,至多擇一,"
+    "請依內容本質挑最貼切的一種:關係鬆散、講不出明確類型時用 concept_map;"
+    "內容明確是程式碼/軟體的類別設計時用 class_diagram;"
+    "關係能被型別化(is-a/part-of/instance-of)、且這種階層化的本體結構正是內容重點時用 ontology。"
+    "**僅當 concept_map 與 ontology 兩者適合度難分軒輊時,才傾向選 ontology。**"
 )
 
 
