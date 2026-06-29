@@ -1844,46 +1844,136 @@ class LLMClient:
             logging.error(f"Failed to generate keywords: {e}")
             return ["General Topic"]
 
+    @staticmethod
+    def _parse_json_array(text: str) -> list:
+        """Best-effort extraction of a JSON array from an LLM response."""
+        import json, re
+        match = re.search(r'\[.*\]', text, re.DOTALL)
+        if not match:
+            return []
+        try:
+            parsed = json.loads(match.group(0))
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+
+    @staticmethod
+    def _md_cell(text) -> str:
+        """Sanitise a value for use inside a single Markdown table cell."""
+        s = str(text if text is not None else "").replace("\n", " ").replace("|", "\\|").strip()
+        return s or "—"
+
     def generate_elite_digest(self, arxiv_wiki_results: list[dict], source_name: str, topic: str = "") -> str:
-        # Convert results to a string
+        # The LLM only selects and translates; URLs are rendered from our own data
+        # to avoid the model corrupting links by copying them verbatim.
         import json
-        data_str = json.dumps(arxiv_wiki_results, ensure_ascii=False, indent=2)
-        prompt = f"""
-請針對主題「{topic}」，根據以下來自 {source_name} 的搜尋結果，為使用者精選出 3 到 5 篇最重要的文獻，寫一份「學術與概念的精華摘要（Elite Digest）」。
-請使用繁體中文，並請嚴格遵守以下格式：
+        indexed = [
+            {"idx": i, "title": r.get("title", ""), "summary": r.get("summary", ""), "source": r.get("source", "")}
+            for i, r in enumerate(arxiv_wiki_results)
+        ]
+        data_str = json.dumps(indexed, ensure_ascii=False, indent=2)
+        prompt = f"""請針對主題「{topic}」，從以下來自 {source_name} 的搜尋結果中，精選 3 到 5 篇最重要的文獻。
+對每一筆你選出的文獻，請輸出：
+- idx：原始清單中的索引（整數，務必照抄，不要更動）
+- zh_title：繁體中文標題（可保留必要的英文專有名詞）
+- zh_summary：繁體中文摘要，結構化說明其核心概念與重要洞察
 
-### 📚 Academic & Concept Elite Digest
-以下是為您精選的 [數量] 篇關於 [主題] 的重要研究與文獻摘要：
+請「只」輸出 JSON 陣列，依重要性由高到低排序，不要有任何其他文字或 Markdown 標記：
+[{{"idx": 0, "zh_title": "...", "zh_summary": "..."}}]
 
-* **[文獻標題]**
-    * **摘要**：[請提供翻譯好、結構化的中文摘要，並說明其核心概念與重要洞察]
-    * **來源**：[[文獻的 URL 連結]](文獻的 URL 連結)
-
-... (依此類推列出精選文獻)
-
-[Search Results]
+[搜尋結果]
 {data_str}
 """
         try:
-            return self._complete_text(system_prompt="You are a knowledgeable research assistant.", user_msg=prompt, temperature=0.5)
+            res = self._complete_text(
+                system_prompt="You are a knowledgeable research assistant. Output only a JSON array.",
+                user_msg=prompt,
+                temperature=0.5,
+            )
+            rows = self._parse_json_array(res)
+            return self._render_elite_digest(rows, arxiv_wiki_results, topic)
         except Exception as e:
             logging.error(f"Failed to generate elite digest: {e}")
             return "無法生成摘要。"
 
-    def generate_patent_table(self, patent_results: list[dict], topic: str = "") -> str:
-        # Convert results to a string
-        import json
-        data_str = json.dumps(patent_results, ensure_ascii=False, indent=2)
-        prompt = f"""
-請針對主題「{topic}」，根據以下專利搜尋結果，生成一個 Markdown 表格。
-表格欄位必須包含：「專利編號」、「關聯性」、「主旨」、「摘要」、「全文連結」。
-請使用繁體中文，且「全文連結」請轉成 Markdown 格式的超連結。
+    def _render_elite_digest(self, rows: list[dict], results: list[dict], topic: str) -> str:
+        items = []
+        for r in rows:
+            try:
+                idx = int(r.get("idx"))
+            except (TypeError, ValueError):
+                continue
+            if idx < 0 or idx >= len(results):
+                continue
+            src = results[idx]
+            title = str(r.get("zh_title") or src.get("title", "")).strip()
+            summary = str(r.get("zh_summary", "")).strip()
+            url = src.get("url", "")
+            source_line = f"\n    * **來源**：[{url}]({url})" if url else ""
+            items.append(f"* **{title}**\n    * **摘要**：{summary}{source_line}")
+        if not items:
+            return "無法生成摘要。"
+        header = (
+            f"### 📚 Academic & Concept Elite Digest\n"
+            f"以下是為您精選的 {len(items)} 篇關於「{topic}」的重要研究與文獻摘要：\n\n"
+        )
+        return header + "\n\n".join(items)
 
-[Patent Results]
+    def generate_patent_table(self, patent_results: list[dict], topic: str = "") -> str:
+        # The LLM only filters/ranks/translates; the patent number and URL are
+        # rendered from our own data so the model can never corrupt them.
+        import json
+        indexed = [
+            {"idx": i, "id": p.get("id", ""), "title": p.get("title", ""), "summary": p.get("summary", "")}
+            for i, p in enumerate(patent_results)
+        ]
+        data_str = json.dumps(indexed, ensure_ascii=False, indent=2)
+        prompt = f"""請針對主題「{topic}」，從以下專利清單中篩選出與主題相關的專利，並依關聯性由高到低排序。
+對每一筆你選出的專利，請輸出：
+- idx：原始清單中的索引（整數，務必照抄，不要更動）
+- relevance：關聯性，只能是「高」「中」「低」三者之一
+- zh_subject：用繁體中文寫的「主旨」（一句話點出技術核心）
+- zh_summary：用繁體中文寫的摘要（1~2 句）
+
+請「只」輸出 JSON 陣列，不要有任何其他文字或 Markdown 標記：
+[{{"idx": 0, "relevance": "高", "zh_subject": "...", "zh_summary": "..."}}]
+
+[專利清單]
 {data_str}
 """
         try:
-            return self._complete_text(system_prompt="You are a knowledgeable research assistant.", user_msg=prompt, temperature=0.3)
+            res = self._complete_text(
+                system_prompt="You are a knowledgeable research assistant. Output only a JSON array.",
+                user_msg=prompt,
+                temperature=0.3,
+            )
+            rows = self._parse_json_array(res)
+            return self._render_patent_table(rows, patent_results)
         except Exception as e:
             logging.error(f"Failed to generate patent table: {e}")
             return "無法生成專利表格。"
+
+    def _render_patent_table(self, rows: list[dict], patent_results: list[dict]) -> str:
+        header = (
+            "| 專利編號 | 關聯性 | 主旨 | 摘要 | 全文連結 |\n"
+            "| :--- | :---: | :--- | :--- | :--- |\n"
+        )
+        lines = []
+        for r in rows:
+            try:
+                idx = int(r.get("idx"))
+            except (TypeError, ValueError):
+                continue
+            if idx < 0 or idx >= len(patent_results):
+                continue
+            src = patent_results[idx]
+            pid = self._md_cell(src.get("id", ""))
+            url = src.get("url", "")
+            relevance = self._md_cell(r.get("relevance", ""))
+            subject = self._md_cell(r.get("zh_subject", ""))
+            summary = self._md_cell(r.get("zh_summary", ""))
+            link = f"[連結]({url})" if url else "—"
+            lines.append(f"| {pid} | {relevance} | {subject} | {summary} | {link} |")
+        if not lines:
+            return "> 找不到相關的專利資料。可能是關鍵字過於限縮或沒有符合的專利。"
+        return header + "\n".join(lines)

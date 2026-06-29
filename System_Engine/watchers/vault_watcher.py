@@ -178,7 +178,10 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             content = filepath.read_text(encoding='utf-8')
             
             # --- Research Pipeline Triggers ---
-            research_match = re.search(r"@ling-research\s*(.*)", content)
+            # New markers (@ling-done-research / @ling-failed-research) don't contain
+            # the trigger substring at all; (?!-) additionally protects any legacy
+            # @ling-research-done markers from being re-triggered.
+            research_match = re.search(r"@ling-research(?!-)\s*(.*)", content)
             if research_match:
                 from services.research_pipeline import ResearchPipeline
                 rp = ResearchPipeline(self.llm)

@@ -2,6 +2,7 @@ import threading
 import logging
 import re
 import json
+import time
 import urllib.parse
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -14,6 +15,44 @@ class ResearchPipeline:
     def __init__(self, llm_client):
         self.llm = llm_client
         self._cache = {}
+
+    def _get_with_retry(self, url: str, headers: dict, timeout: int = 20, retries: int = 3):
+        """GET with retry: exponential backoff on HTTP 429, fixed backoff on other transient errors."""
+        last_exc = None
+        for attempt in range(retries):
+            try:
+                resp = requests.get(url, headers=headers, timeout=timeout)
+                resp.raise_for_status()
+                return resp
+            except requests.exceptions.HTTPError as e:
+                last_exc = e
+                status = e.response.status_code if e.response is not None else None
+                if status == 429 and attempt < retries - 1:
+                    time.sleep(2 ** attempt + 2)
+                    continue
+                raise
+            except requests.exceptions.RequestException as e:
+                last_exc = e
+                if attempt < retries - 1:
+                    time.sleep(2)
+                    continue
+                raise
+        if last_exc:
+            raise last_exc
+
+    @staticmethod
+    def _norm(s: str) -> str:
+        return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+    def _dedupe(self, items: list[dict], key) -> list[dict]:
+        seen = set()
+        out = []
+        for it in items:
+            k = self._norm(str(key(it)))
+            if k and k not in seen:
+                seen.add(k)
+                out.append(it)
+        return out
 
     def search_arxiv(self, keyword: str, limit: int = 3) -> list[dict]:
         try:
@@ -42,17 +81,18 @@ class ResearchPipeline:
         try:
             search_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(keyword)}&utf8=&format=json&srlimit={limit}"
             headers = {"User-Agent": "LingLingResearchBot/1.0 (mailto:admin@example.com)"}
-            response = requests.get(search_url, headers=headers, timeout=20)
-            response.raise_for_status()
+
+            response = self._get_with_retry(search_url, headers)
             data = response.json()
             search_results = data.get("query", {}).get("search", [])
-            
+
             results = []
             for item in search_results:
                 title = item["title"]
                 page_url = f"https://en.wikipedia.org/w/api.php?format=json&action=query&prop=extracts&exintro&explaintext&redirects=1&titles={urllib.parse.quote(title)}"
-                page_resp = requests.get(page_url, headers=headers, timeout=20)
-                page_resp.raise_for_status()
+
+                time.sleep(1)  # Be nice to the API
+                page_resp = self._get_with_retry(page_url, headers)
                 page_data = page_resp.json()
                 pages = page_data.get("query", {}).get("pages", {})
                 extract = ""
@@ -76,26 +116,14 @@ class ResearchPipeline:
         FPO provides snippets directly in the search results page without API keys.
         """
         try:
-            import urllib.parse
-            import requests
             from bs4 import BeautifulSoup
-            import re, html
-            
+            import html
+
             url = f"https://www.freepatentsonline.com/result.html?sort=relevance&srch=top&query_txt={urllib.parse.quote(keyword)}&submit=&patents_us=on"
             headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"}
-            
-            response = None
-            import time
-            for attempt in range(3):
-                try:
-                    response = requests.get(url, headers=headers, timeout=20)
-                    response.raise_for_status()
-                    break
-                except Exception as e:
-                    if attempt == 2:
-                        raise e
-                    time.sleep(2)
-            
+
+            response = self._get_with_retry(url, headers)
+
             # FPO HTML is slightly malformed, lxml parses it robustly
             soup = BeautifulSoup(response.text, "lxml")
             tables = soup.find_all("table", class_="listing_table")
@@ -133,13 +161,51 @@ class ResearchPipeline:
             return []
 
 
-    def run_research(self, instruction: str, content: str) -> str:
+    def prepare_and_run(self, instruction: str, base_content: str) -> str:
+        """Unifies context preparation for both vault inline tags and prompt files."""
+        # 1. Extract wikilinks and load content (Do this first before keywords truncate instruction)
+        wiki_matches = re.findall(r"\[\[(.*?)\]\]", instruction)
+        linked_texts = []
+        if wiki_matches:
+            from core.vault_utils import get_note_content
+            for match in wiki_matches:
+                doc_title = match.split('|')[0].strip()
+                linked_content = get_note_content(doc_title)
+                if linked_content:
+                    linked_texts.append(f"## Source: {doc_title}\n\n{linked_content}")
+                    logging.info(f"Using content from linked note: {doc_title}")
+                    
+        # 2. Extract keywords
+        user_keywords = []
+        kw_match = re.search(r"(?:keywords:|kw:)\s*(.*)", instruction, flags=re.IGNORECASE)
+        if kw_match:
+            kw_str = kw_match.group(1)
+            user_keywords = [k.strip() for k in kw_str.split(',') if k.strip()]
+            instruction = instruction[:kw_match.start()].strip()
+            
+        # 3. Combine content
+        final_content = "\n\n".join(linked_texts) if linked_texts else base_content
+            
+        return self.run_research(instruction, final_content, user_keywords=user_keywords)
+
+    def run_research(self, instruction: str, content: str, user_keywords: list[str] = None) -> str:
+        user_keywords = user_keywords or []
+
         from core.ui import ui
         ui.info(f"🔍 Researching: {instruction or 'General topic'}...")
         
         # 1. Generate Keywords
-        keywords = self.llm.generate_research_keywords(content, instruction)
-        logging.info(f"Research Keywords: {keywords}")
+        keywords = user_keywords.copy()
+        
+        if len(keywords) < 5:
+            llm_keywords = self.llm.generate_research_keywords(content, instruction)
+            for kw in llm_keywords:
+                if kw not in keywords:
+                    keywords.append(kw)
+                if len(keywords) >= 5:
+                    break
+                    
+        logging.info(f"Research Keywords (User provided: {len(user_keywords)}): {keywords}")
         
         # 2. Fetch Data
         arxiv_wiki_results = []
@@ -150,7 +216,12 @@ class ResearchPipeline:
             arxiv_wiki_results.extend(self.search_arxiv(kw, limit=2))
             arxiv_wiki_results.extend(self.search_wikipedia(kw, limit=2))
             patent_results.extend(self.search_patents(kw, limit=10))
-        
+
+        # Dedupe across keywords: literature by URL, patents by title
+        # (collapses granted + application variants of the same invention).
+        arxiv_wiki_results = self._dedupe(arxiv_wiki_results, key=lambda r: r.get("url") or r.get("title"))
+        patent_results = self._dedupe(patent_results, key=lambda p: p.get("title"))
+
         # 3. Generate Markdown Blocks
         elite_digest_md = ""
         if arxiv_wiki_results:
@@ -163,12 +234,14 @@ class ResearchPipeline:
             patent_table_md = "> 找不到相關的專利資料。可能是關鍵字過於限縮或沒有符合的專利。"
         
         # 4. Construct Final Markdown Block
+        keywords_str = ", ".join(keywords)
         return (
             f"\n\n---\n"
             f"## 🤖 Ling-Ling Research Digest\n"
-            f"**Generated for:** `{instruction or 'General topic'}`\n\n"
+            f"**Generated for:** {instruction or 'General topic'}\n"
+            f"**Keywords:** {keywords_str}\n\n"
             f"{elite_digest_md}\n\n"
-            f"### 💡 USPTO Patent Scan\n"
+            f"### 💡 專利掃描 (FreePatentsOnline)\n"
             f"{patent_table_md}\n"
         )
 
@@ -176,35 +249,29 @@ class ResearchPipeline:
         instruction = match.group(1).strip() if match.group(1) else ""
         raw_trigger = match.group(0)
         
-        # Check if instruction contains a wikilink like [[Some Document]]
-        wiki_match = re.search(r"\[\[(.*?)\]\]", instruction)
-        if wiki_match:
-            doc_title = wiki_match.group(1).split('|')[0].strip()
-            from core.vault_utils import get_note_content
-            linked_content = get_note_content(doc_title)
-            if linked_content:
-                content = linked_content
-                logging.info(f"Using content from linked note: {doc_title}")
-        
-        def _task():
-            if not global_busy_state.try_set_busy():
-                return
+        try:
+            logging.info(f"ResearchPipeline started for {filepath.name} with instruction: {instruction}")
+            final_block = self.prepare_and_run(instruction, content)
+            
+            # 5. Write back to file
+            # Re-read to ensure we don't overwrite user changes made during API calls
+            current_content = filepath.read_text(encoding="utf-8")
+            new_content = current_content.replace(raw_trigger, f"@ling-done-research {instruction}".strip())
+            new_content += final_block
+            filepath.write_text(new_content, encoding="utf-8")
+            from core.ui import ui
+            ui.success(f"✅ Research completed for {filepath.name}")
+        except Exception as e:
+            logging.exception(f"ResearchPipeline error for {filepath.name}")
+            # Mark the trigger as failed so it is not re-fired on every subsequent
+            # edit. The marker reorders the tokens (@ling-failed-research) so it no
+            # longer contains the "@ling-research" trigger substring at all.
             try:
-                logging.info(f"ResearchPipeline started for {filepath.name} with instruction: {instruction}")
-                final_block = self.run_research(instruction, content)
-                
-                # 5. Write back to file
-                # Re-read to ensure we don't overwrite user changes made during API calls
                 current_content = filepath.read_text(encoding="utf-8")
-                new_content = current_content.replace(raw_trigger, f"@ling-research-done {instruction}".strip())
-                new_content += final_block
+                new_content = current_content.replace(raw_trigger, f"@ling-failed-research {instruction}".strip())
+                new_content += f"\n\n> ⚠️ Ling-Ling 檢索失敗，請稍後再試或調整關鍵字。（{e}）\n"
                 filepath.write_text(new_content, encoding="utf-8")
-                ui.success(f"✅ Research completed for {filepath.name}")
-            except Exception as e:
-                logging.exception(f"ResearchPipeline error for {filepath.name}")
-            finally:
-                global_busy_state.set_busy(False)
-                
-        threading.Thread(target=_task, daemon=True).start()
+            except Exception:
+                logging.exception(f"Failed to write research failure marker for {filepath.name}")
 
 

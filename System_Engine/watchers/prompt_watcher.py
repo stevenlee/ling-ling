@@ -321,15 +321,14 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                 elif intent_key == "research":
                     from services.research_pipeline import ResearchPipeline
                     rp = ResearchPipeline(self.llm)
-                    
-                    loaded_sources = self._load_linked_sources(target_entities)
-                    instruction = lower_query.replace(f"{COMMAND_PREFIX}research", "").strip()
+                    # We use query_content (original case) but strip the command prefix.
+                    # Since query_content could contain the trigger anywhere, we remove it.
+                    # (?!-) so we don't partially strip a @ling-research-done style marker.
+                    instruction = re.sub(f"(?i){COMMAND_PREFIX}research(?!-)", "", query_content).strip()
                     if not instruction:
                         instruction = "General topic"
                         
-                    content = "\n\n".join(loaded_sources) if loaded_sources else query_content
-                    
-                    res = rp.run_research(instruction, content)
+                    res = rp.prepare_and_run(instruction, query_content)
                     
                     short_topic = filepath.stem[6:] if filepath.stem.startswith("@ling-") else filepath.stem
                     timestamp = datetime.now().strftime('%Y%m%d-%H%M')
