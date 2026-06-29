@@ -338,6 +338,7 @@ class DynamicSettings:
         # Phase 6 learning-aid output preferences (user taste, hot-reloadable):
         ("visual_router",      "VISUAL_ROUTER_ENABLED", bool),
         ("argument_map_mermaid", "ARGUMENT_MAP_MERMAID", bool),
+        ("ontology_bias",      "ONTOLOGY_BIAS",      bool),
         # Inline key-point highlighting on part notes (== == spans):
         ("highlight_spans",    "HIGHLIGHT_ENABLED",  bool),
         ("highlight_max",      "HIGHLIGHT_MAX",      int),
@@ -380,6 +381,12 @@ class DynamicSettings:
         # off — opt in via Scripture.md.
         self.VISUAL_ROUTER_ENABLED = False
         self.ARGUMENT_MAP_MERMAID = False
+        # When picking among the "relationship graph" family (concept_map /
+        # class_diagram / ontology), bias the classifier toward ontology so any
+        # type-able relation (is-a / part-of / instance-of) renders as a proper
+        # ontology rather than a flat concept web. Set ontology_bias: false in
+        # Scripture to fall back to neutral classification.
+        self.ONTOLOGY_BIAS = True
         # Inline highlighting: wrap up to N verbatim key spans in == == on each
         # part note. Spans ride along on the existing part-digest call (no extra
         # LLM round-trip); a deterministic pass applies the markers afterwards.

@@ -62,3 +62,4 @@
 - 對象用 `[[WikiLink]]` 指定 `pages/` 或 `Notes/` 裡的筆記。
 - 在 `Scripture/Scripture.md` 把 `visual_router: true` 打開,長文的 `(Synthesis)` 總結頁與**洞察報告**就會**自動**附上學習產物,不必每次手動下指令(改完即時生效,免重啟)。
 - `argument_map` 預設只出結構化 Markdown;想額外要一張確定性的 Mermaid 論證圖,在 Scripture 開 `argument_map_mermaid: true`。
+- 自動選型時偏好 `ontology`：只要關係能型別化 (is-a / part-of / instance-of) 就優先畫成本體論圖,而非鬆散的 `concept_map`。預設開啟,想回到中性分類在 Scripture 設 `ontology_bias: false`(熱載入,免重啟)。

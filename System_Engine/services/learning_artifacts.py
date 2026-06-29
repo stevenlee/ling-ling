@@ -22,8 +22,8 @@ ARTIFACT_TYPES = {
     "mindmap": "一個主題的階層分解",
     "timeline": "時序、階段或歷史演進",
     "quadrant": "物件落在兩個軸 / 取捨空間",
-    "concept_map": "概念之間的網狀關係（非序列）",
-    "ontology": "領域知識的本體論：類別階層 (is-a)、組成 (part-of)、物件屬性與個體 (instance-of) 等型別化的語意關係",
+    "concept_map": "概念之間鬆散、未型別化的網狀關係（只講得出「相關」，講不出是哪一種關係）",
+    "ontology": "領域知識的本體論：關係可被型別化——類別階層 (is-a)、組成 (part-of)、物件屬性與個體 (instance-of) 等具名語意關係",
     "argument_map": "論證性內容（主張 + 根據 + 反駁）",
     "sequence_diagram": "實體之間的對話、交涉、訊息傳遞或劇情發展順序",
     "state_diagram": "事物或心理狀態的轉變與觸發條件",
@@ -34,7 +34,7 @@ ARTIFACT_TYPES = {
     "xy_chart": "數值在時間序列或類別上的分佈與趨勢",
     "block_diagram": "系統高階架構、硬體拓樸或立體方塊關係",
     "c4_diagram": "軟體系統的 C4 架構 (Context / Container)",
-    "class_diagram": "物件導向程式設計的類別、屬性與繼承關係",
+    "class_diagram": "軟體／程式碼的物件導向類別、屬性與繼承（針對程式設計，非知識領域）",
     "er_diagram": "資料庫的實體關聯表（如：一對多、主外鍵）",
     "none": "沒有強視覺結構的散文",
 }
@@ -121,8 +121,22 @@ _MERMAID_HINTS = {
     ),
 }
 
+_ONTOLOGY_PRIORITY = (
+    "【關係圖優先序】concept_map、class_diagram、ontology 同屬「關係圖」這一種認知切面,至多擇一。"
+    "三者之中**優先選 ontology**：只要概念間的關係能被解讀為從屬(is-a)、組成(part-of)、實例(instance-of)"
+    "或其他可命名的型別化語意,就選 ontology。僅當關係純粹是「鬆散相關、講不出類型」時才退回 concept_map;"
+    "僅當內容明確是程式碼/軟體的類別設計時才用 class_diagram。"
+)
+
+
 def _build_classify_system(limit: int, exclude_types: set[str] | None = None) -> str:
     allowed_types = {k: v for k, v in ARTIFACT_TYPES.items() if not exclude_types or k not in exclude_types}
+    try:
+        from core.config import settings
+        ontology_bias = bool(getattr(settings, "ONTOLOGY_BIAS", False)) and "ontology" in allowed_types
+    except Exception:
+        ontology_bias = False
+    priority_clause = _ONTOLOGY_PRIORITY if ontology_bias else ""
     return (
         "你是學習產物分類器。讀使用者提供的內容,判斷哪些學習輔助產物最能幫助讀者理解或記住,"
         f"並依適合度排序(最適合在前),最多回{limit}種。\n"
@@ -132,6 +146,7 @@ def _build_classify_system(limit: int, exclude_types: set[str] | None = None) ->
         "\"reason\": \"<一句話為什麼>\"}, ...]}（依適合度排序,1~" + str(limit) + " 項）\n"
         "重要：內容若沒有清楚的結構,ranked 只放一項 type=\"none\"——寧可不產圖,也不要硬湊誤導的圖。"
         "多種產物要呈現不同的認知切面(例如流程 vs 階層),不要選本質相同的。"
+        + priority_clause
     )
 
 _MERMAID_BLOCK_RE = re.compile(r"```mermaid.*?```", re.DOTALL)
