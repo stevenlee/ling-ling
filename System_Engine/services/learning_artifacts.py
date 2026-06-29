@@ -113,11 +113,14 @@ _MERMAID_HINTS = {
     "ontology": (
         "ontology（本體論）語法：用 classDiagram 的符號表達領域本體，第一行寫 `classDiagram`。"
         "節點 ID 一律純英文，概念名稱放在標籤裡，如 `class Animal[\"動物\"]`。"
+        "【宣告規則】每個類別只在最上方用 `class 類別名[\"標籤\"]` 宣告一次（不可重複宣告同一類別）；"
+        "關係行只准放純類別 ID，絕對不要在關係行裡寫 `[\"標籤\"]`（如 `A *-- B[\"乙\"]` 是錯的，B 的標籤要寫在它自己的 `class B[\"乙\"]` 宣告）。"
         "請務必依語意選用「不同」的箭頭區分四種關係，切勿全部用同一種線："
         "① is-a／子類別 (subClassOf)：用空心三角繼承箭頭 `Superclass <|-- Subclass`（例：`Animal <|-- Dog`），這是唯一用來表達分類階層的符號；"
         "② part-of／組成：用組合菱形 `Whole *-- Part : part-of`；"
         "③ 物件屬性／一般語意關係 (object property)：用帶標籤的實線關聯 `ClassA --> ClassB : 關係名稱`，必要時加基數如 `ClassA \"1\" --> \"*\" ClassB : owns`；"
         "④ 個體／實例 (instance-of)：個體用 stereotype 標註 `class Fido { <<個體>> }`，再用虛線依賴 `Fido ..> Dog : instance-of` 連到其類別。"
+        "大括號 `{}` 只在需要放 stereotype（如 `<<個體>>`）或資料屬性時才加；若沒有內容就完全省略大括號，不要留空的或殘缺的 `{}`。"
         "資料屬性 (data property) 寫在 class 內部，如 `Animal : +name string`。"
         "目標是讓階層、組成、屬性、個體在圖上一眼可辨，而非畫成扁平的概念網。"
     ),

@@ -206,6 +206,21 @@ _MERMAID_EXISTING_ID_RE = re.compile(
 # survives in the bracketed label. `\w` would keep CJK/accented chars, so we
 # restrict to the ASCII id alphabet explicitly.
 _MERMAID_ID_SLUG_RE = re.compile(r'[^A-Za-z0-9_]')
+# classDiagram declaration: `class Id`, optional `["label"]`, optional `{` body
+# opener. Used to dedup repeated declarations and to know which ids already
+# exist before hoisting inline labels.
+_CLASSDIAGRAM_DECL_RE = re.compile(
+    r'^(\s*)class\s+([A-Za-z_]\w*)\s*(\["[^"\n]*"\]|\[[^\]\n]*\])?\s*(\{)?\s*$'
+)
+# An inline `Id["label"]` token. Legal only right after `class`; on a
+# relationship line (`A *-- B["label"]`) it's flowchart syntax that classDiagram
+# rejects, so the label must be hoisted to a real `class Id["label"]` decl.
+_CLASSDIAGRAM_INLINE_LABEL_RE = re.compile(r'(?<![\w"])([A-Za-z_]\w*)\["([^"\n]*)"\]')
+# A class declaration that OPENS a member body: `class Id["label"] {` (possibly
+# closing inline, `class Id { <> }`). Group 4 captures everything after the `{`.
+_CLASSDIAGRAM_BODY_OPEN_RE = re.compile(
+    r'^(\s*)class\s+([A-Za-z_]\w*)\s*(\["[^"\n]*"\]|\[[^\]\n]*\])?\s*\{(.*)$'
+)
 
 LATEX_CR_COMMAND_RE = re.compile(r'\\r(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b')
 
@@ -1040,6 +1055,164 @@ def repair_mermaid_quadrant_points(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+# ─── Mermaid: classDiagram structural repair ──────────────────────────
+
+
+def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str], list[dict]]:
+    """Fix two structural faults inside one ``classDiagram`` fence body.
+
+    1. **Hoist inline labels.** ``A *-- B["label"]`` is invalid: classDiagram
+       relationship endpoints are bare class ids. The label is hoisted to a real
+       ``class B["label"]`` declaration (added once, after the header) and the
+       relationship is rewritten to the bare id.
+    2. **Dedup declarations.** A class declared twice with the *same* line (the
+       LLM repeats ``class X["..."]``) renders as a redundant/duplicate entry;
+       the later exact-duplicate decls are dropped.
+    3. **Strip empty/malformed bodies.** A ``{ ... }`` body that holds no real
+       member or stereotype — ``{}``, ``{ <> }``, ``{ <<>> }`` — is dropped to a
+       bare ``class X["label"]``. A body with a genuine stereotype
+       (``<<instance>>``) or attribute (``+name string``) is kept intact.
+
+    Idempotent: once hoisted, deduped and stripped, no pattern matches again.
+    """
+    fixes: list[dict] = []
+
+    # Pre-scan: ids already given a `class` declaration (any form), and the
+    # indentation to reuse for hoisted declarations.
+    existing_ids: set[str] = set()
+    indent = "    "
+    header_idx = 0
+    for i, ln in enumerate(body):
+        if ln.strip():
+            header_idx = i
+            break
+    for ln in body:
+        m = _CLASSDIAGRAM_DECL_RE.match(ln) or _CLASSDIAGRAM_BODY_OPEN_RE.match(ln)
+        if m:
+            existing_ids.add(m.group(2))
+            indent = m.group(1) or indent
+
+    out: list[str] = []
+    hoisted: list[tuple[str, str]] = []
+    hoisted_ids: set[str] = set()
+    seen_decls: set[str] = set()
+
+    idx = 0
+    while idx < len(body):
+        line = body[idx]
+
+        # A class declaration that opens a `{ ... }` member body — capture the
+        # whole block (it may span lines or close inline) and decide keep/strip.
+        bopen = _CLASSDIAGRAM_BODY_OPEN_RE.match(line)
+        if bopen:
+            start = idx
+            depth = line.count("{") - line.count("}")
+            block = [line]
+            while depth > 0 and idx + 1 < len(body):
+                idx += 1
+                block.append(body[idx])
+                depth += body[idx].count("{") - body[idx].count("}")
+            if depth > 0:
+                # Unclosed body — don't risk swallowing following lines.
+                out.append(line)
+                idx = start + 1
+                continue
+            full = "\n".join(block)
+            inner = full[full.index("{") + 1:full.rindex("}")]
+            if re.sub(r'[{}<>\s]', "", inner) == "":
+                # No real member/stereotype — degrade to a bare declaration.
+                label = bopen.group(3) or ""
+                bare = f'{bopen.group(1)}class {bopen.group(2)}{label}'
+                fixes.append(_make_fix(
+                    "stripped_empty_classdiagram_body",
+                    line=base_line + start,
+                    before=full,
+                    after=bare,
+                ))
+                out.append(bare)
+            else:
+                out.extend(block)
+            idx += 1
+            continue
+
+        decl = _CLASSDIAGRAM_DECL_RE.match(line)
+        if decl:
+            key = line.strip()
+            if key in seen_decls:
+                fixes.append(_make_fix(
+                    "deduped_classdiagram_decl",
+                    line=base_line + idx,
+                    before=line,
+                ))
+                idx += 1
+                continue  # drop the exact-duplicate declaration
+            seen_decls.add(key)
+            out.append(line)
+            idx += 1
+            continue
+
+        # Non-declaration line (relationship / member shorthand): hoist any
+        # inline `Id["label"]` to a class declaration, leaving the bare id.
+        def _hoist(m: re.Match) -> str:
+            cid, label = m.group(1), m.group(2)
+            if cid not in existing_ids and cid not in hoisted_ids:
+                hoisted.append((cid, label))
+                hoisted_ids.add(cid)
+            return cid
+
+        new_line = _CLASSDIAGRAM_INLINE_LABEL_RE.sub(_hoist, line)
+        if new_line != line:
+            fixes.append(_make_fix(
+                "hoisted_classdiagram_inline_label",
+                line=base_line + idx,
+                before=line,
+                after=new_line,
+            ))
+        out.append(new_line)
+        idx += 1
+
+    if hoisted:
+        decls = [f'{indent}class {cid}["{label}"]' for cid, label in hoisted]
+        out[header_idx + 1:header_idx + 1] = decls
+
+    return out, fixes
+
+
+def repair_mermaid_classdiagram(text: str) -> tuple[str, list[dict]]:
+    """Scope ``_repair_classdiagram_body`` to ``classDiagram`` fences only.
+
+    Other diagram kinds are passed through untouched — the inline-label and
+    duplicate-declaration faults are specific to classDiagram (ontology) output.
+    """
+    if not text or "class" not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        if line.strip().lower() == "```mermaid":
+            j = i + 1
+            while j < n and lines[j].strip() != "```":
+                j += 1
+            if _peek_mermaid_kind(lines, i).startswith("classdiagram"):
+                new_body, body_fixes = _repair_classdiagram_body(lines[i + 1:j], i + 2)
+                out.append(line)
+                out.extend(new_body)
+                if j < n:
+                    out.append(lines[j])
+                fixes.extend(body_fixes)
+                i = j + 1
+                continue
+        out.append(line)
+        i += 1
+
+    return "\n".join(out), fixes
+
+
 # ─── Mermaid: LaTeX-in-label degradation ──────────────────────────────
 
 
@@ -1560,6 +1733,7 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
         repair_mermaid_label_quotes,
         repair_mermaid_mindmap_labels,
         repair_mermaid_quadrant_points,
+        repair_mermaid_classdiagram,
         repair_mermaid_latex_labels,
         repair_markdown_tables,
         repair_markdown_bold_spacing,

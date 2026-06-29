@@ -575,3 +575,119 @@ class TestQuotedIdConsistency:
         twice, fixes = repair_mermaid_quoted_endpoint_labels(once)
         assert once == twice
         assert fixes == []
+
+
+# ── classDiagram structural repair ─────────────────────────────────
+
+class TestClassDiagramRepair:
+    """Ontology (classDiagram) faults: inline relationship labels that belong on
+    a `class` declaration, and exact-duplicate declarations."""
+
+    def _q(self, body):
+        from core.parser import repair_mermaid_classdiagram
+        return repair_mermaid_classdiagram(f"```mermaid\n{body}\n```")
+
+    def test_hoists_inline_relationship_label(self):
+        body = (
+            'classDiagram\n'
+            '    class Differentiation["微分"]\n'
+            '    Differentiation *-- MultivariableDiff["多變數微分"] : part-of'
+        )
+        result, fixes = self._q(body)
+        assert 'class MultivariableDiff["多變數微分"]' in result
+        assert 'Differentiation *-- MultivariableDiff : part-of' in result
+        assert 'MultivariableDiff["多變數微分"] : part-of' not in result
+        assert any(f["type"] == "hoisted_classdiagram_inline_label" for f in fixes)
+
+    def test_dedupes_exact_duplicate_declaration(self):
+        body = (
+            'classDiagram\n'
+            '    class Approx["求根之近似法"]\n'
+            '    class NewtonMethod["牛頓法"]\n'
+            '    class Approx["求根之近似法"]'
+        )
+        result, fixes = self._q(body)
+        assert result.count('class Approx["求根之近似法"]') == 1
+        assert any(f["type"] == "deduped_classdiagram_decl" for f in fixes)
+
+    def test_keeps_declaration_with_member_body(self):
+        body = (
+            'classDiagram\n'
+            '    class NewtonMethod["牛頓法"] {\n'
+            '        <<instance>>\n'
+            '    }\n'
+            '    NewtonMethod ..> Approx : instance-of'
+        )
+        result, fixes = self._q(body)
+        assert '<<instance>>' in result
+        assert fixes == []
+
+    def test_strips_inline_malformed_body(self):
+        body = 'classDiagram\n    class NewtonMethod["牛頓法"] { <> }'
+        result, fixes = self._q(body)
+        assert 'class NewtonMethod["牛頓法"]' in result
+        assert '{' not in result.split('classDiagram')[1]
+        assert any(f["type"] == "stripped_empty_classdiagram_body" for f in fixes)
+
+    def test_strips_empty_multiline_body(self):
+        body = (
+            'classDiagram\n'
+            '    class X["甲"] {\n'
+            '    }\n'
+            '    X --> Y : rel'
+        )
+        result, fixes = self._q(body)
+        assert 'class X["甲"]' in result
+        assert 'X --> Y : rel' in result  # following lines not swallowed
+        assert any(f["type"] == "stripped_empty_classdiagram_body" for f in fixes)
+
+    def test_keeps_attribute_body(self):
+        body = (
+            'classDiagram\n'
+            '    class Animal["動物"] {\n'
+            '        +name string\n'
+            '    }'
+        )
+        result, fixes = self._q(body)
+        assert '+name string' in result
+        assert fixes == []
+
+    def test_unclosed_body_not_swallowed(self):
+        body = (
+            'classDiagram\n'
+            '    class X["甲"] {\n'
+            '    X --> Y : rel'
+        )
+        result, _ = self._q(body)
+        assert 'X --> Y : rel' in result
+
+    def test_does_not_hoist_if_class_already_declared(self):
+        body = (
+            'classDiagram\n'
+            '    class B["乙"]\n'
+            '    A *-- B["乙"] : part-of'
+        )
+        result, _ = self._q(body)
+        # The label is stripped from the relationship, but no second decl added.
+        assert result.count('class B["乙"]') == 1
+        assert 'A *-- B : part-of' in result
+
+    def test_ignores_non_classdiagram_fence(self):
+        body = 'graph TD\n    A *-- B["x"] : part-of'
+        result, fixes = self._q(body)
+        assert fixes == []
+        assert 'B["x"]' in result
+
+    def test_idempotent(self):
+        from core.parser import repair_mermaid_classdiagram
+        body = (
+            'classDiagram\n'
+            '    class Differentiation["微分"]\n'
+            '    class Approx["近似"]\n'
+            '    class Approx["近似"]\n'
+            '    Differentiation *-- MultivariableDiff["多變數微分"] : part-of'
+        )
+        once, _ = self._q(body)
+        twice, fixes = repair_mermaid_classdiagram(once)
+        assert once == twice
+        assert fixes == []
