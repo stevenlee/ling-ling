@@ -165,42 +165,46 @@ class TestBrokenHeuristic:
 # ── LaTeX-in-label degradation ─────────────────────────────────────
 
 class TestLatexLabels:
-    """Obsidian's mermaid parser dies on `$$...$$`/`\\command` in node labels;
-    they must be degraded to plain text inside fences only."""
+    """Mermaid renders KaTeX math in labels via `$$...$$`, so math is PRESERVED
+    and single `$...$` is promoted to `$$...$$`. A bare `\\command` with no `$`
+    (which KaTeX never sees) is still degraded to plain text."""
 
     def _strip(self, body):
         text = f"```mermaid\n{body}\n```"
         return repair_mermaid_latex_labels(text)
 
-    def test_strips_double_dollar_wrapper(self):
-        # `\\mathcal{M}_0` — note the quote-repair pass doubles the backslash.
-        result, fixes = self._strip(r'graph TD\nB{"定義: 安全基線流形 $$\\mathcal{M}_0$$"}')
-        assert '安全基線流形 M_0' in result
-        assert "$$" not in result and "\\mathcal" not in result
+    def test_preserves_double_dollar_math(self):
+        # `$$...$$` is mermaid's KaTeX delimiter — keep it and its commands.
+        result, fixes = self._strip(r'graph LR\nA["公式 $$\frac{1}{2}(l+r)$$ 成立"]')
+        assert r'$$\frac{1}{2}(l+r)$$' in result
+        assert fixes == []
+
+    def test_promotes_single_dollar_to_double(self):
+        # Mermaid only renders `$$...$$`, so `$...$` is promoted; the command
+        # is PRESERVED (KaTeX renders it), not unicode-degraded.
+        result, fixes = self._strip(r'graph LR\nA["速率 $\alpha$ 增長"]')
+        assert r'$$\alpha$$' in result
+        assert any(f["type"] == "normalized_mermaid_math" for f in fixes)
+
+    def test_preserves_commands_inside_math(self):
+        result, _ = self._strip(r'graph LR\nA["$P_0 y^{m-1} + \dots + P_m$"]')
+        assert r'$$P_0 y^{m-1} + \dots + P_m$$' in result
+
+    def test_multiple_math_spans_each_promoted(self):
+        result, _ = self._strip(r'graph LR\nA["$x$ 和 $y^2$"]')
+        assert '$$x$$ 和 $$y^2$$' in result
+
+    def test_bare_command_without_dollar_degraded(self):
+        # No `$` delimiters — KaTeX never sees it, so degrade `\alpha`/`\dots`.
+        result, fixes = self._strip(r'graph LR\nA["速率 \alpha 增長 \dots"]')
+        assert '速率 α 增長 …' in result
         assert any(f["type"] == "stripped_mermaid_latex" for f in fixes)
-
-    def test_converts_symbol_to_unicode(self):
-        result, _ = self._strip(r'graph TD\nE{"驗證: $$\\mathcal{T}_{New} \\cong \\mathcal{M}_0?$$"}')
-        assert '驗證: T_New ≅ M_0?' in result
-        assert "\\cong" not in result
-
-    def test_single_dollar_inline_math_in_label(self):
-        result, _ = self._strip(r'graph TD\nA["速率 $\\alpha$ 增長"]')
-        assert '速率 α 增長' in result
-        assert "$" not in result
 
     def test_plain_label_untouched(self):
         text = '```mermaid\ngraph TD\nA["處理中... (Processing)"] --> B["結束"]\n```'
         result, fixes = repair_mermaid_latex_labels(text)
         assert result == text
         assert fixes == []
-
-    def test_escaped_quote_in_label_preserved(self):
-        # `\"` is a legitimate label escape and must survive even when we
-        # strip surrounding LaTeX.
-        result, _ = self._strip(r'graph TD\nA["說 \"$$\\alpha$$\" 的人"]')
-        assert r'\"' in result
-        assert "$$" not in result and "\\alpha" not in result
 
     def test_outside_mermaid_math_preserved(self):
         # Inline `$...$` in prose is valid Obsidian markdown — never touch it.
@@ -209,8 +213,30 @@ class TestLatexLabels:
         assert "$\\mathcal{M}_0$" in result
         assert fixes == []
 
+    def test_restores_corrupted_command_inside_math(self):
+        # `\frac`→`rac`, `\triangle`→`riangle`, `\neq`→`eq` etc. (the leading
+        # `\x` control char was flattened to a space) are recovered INSIDE math.
+        result, _ = self._strip(r'graph LR\nA["$s_n = rac{1}{2}$ 且 $ riangle$ 且 $r eq 1$"]')
+        assert r'\frac{1}{2}' in result
+        assert r'\triangle' in result
+        assert r'\neq' in result
+
+    def test_recovery_only_inside_math(self):
+        # A bare tail OUTSIDE math is left alone (could be a real word/variable).
+        result, fixes = self._strip(r'graph LR\nA["the rac team"]')
+        assert 'the rac team' in result
+        assert fixes == []
+
+    def test_recovery_idempotent(self):
+        from core.parser import repair_mermaid_latex_labels
+        body = r'graph LR\nA["$ rac{1}{2}$ 與 $ heta$"]'
+        once, _ = self._strip(body)
+        twice, fixes = repair_mermaid_latex_labels(once)
+        assert once == twice
+        assert fixes == []
+
     def test_idempotent(self):
-        body = r'graph TD\nE{"驗證: $$\\mathcal{T}_{New} \\cong \\mathcal{M}_0?$$"}'
+        body = r'graph LR\nA["速率 $\alpha$ 與 $$\beta$$ 以及 \gamma"]'
         once, _ = self._strip(body)
         twice, fixes = repair_mermaid_latex_labels(once)
         assert once == twice

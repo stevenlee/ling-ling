@@ -269,6 +269,8 @@ _MERMAID_LATEX_SYMBOLS: dict[str, str] = {
     "oplus": "⊕", "otimes": "⊗", "cup": "∪", "cap": "∩", "land": "∧",
     "lor": "∨", "neg": "¬", "sqrt": "√", "sum": "Σ", "prod": "Π", "int": "∫",
     "to": "→", "in": "∈",
+    "ldots": "…", "cdots": "…", "dotsc": "…", "dotsb": "…", "dots": "…",
+    "vdots": "⋮", "ddots": "⋱", "langle": "⟨", "rangle": "⟩",
     "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
     "zeta": "ζ", "eta": "η", "theta": "θ", "iota": "ι", "kappa": "κ",
     "lambda": "λ", "mu": "μ", "nu": "ν", "xi": "ξ", "rho": "ρ", "sigma": "σ",
@@ -286,13 +288,63 @@ _MERMAID_LATEX_SYMBOL_RES: tuple[tuple[re.Pattern, str], ...] = tuple(
         _MERMAID_LATEX_SYMBOLS.items(), key=lambda kv: len(kv[0]), reverse=True
     )
 )
-# `_{sub}` / `^{sup}` → drop the braces, keep `_sub` / `^sup`.
+# `_{sub}` / `^{sup}` → keep the marker; wrap multi-char scripts in parens so
+# grouping survives (`y^{m-1}` → `y^(m-1)`, not the ambiguous `y^m-1`). A
+# single-char script drops its braces (`y^{2}` → `y^2`).
 _MERMAID_LATEX_SCRIPT_RE = re.compile(r'([_^])\{([^{}]*)\}')
+
+
+def _mermaid_script_repl(m: "re.Match") -> str:
+    marker, content = m.group(1), m.group(2)
+    # Parenthesize only when grouping is ambiguous — an operator or space inside
+    # (`y^{m-1}` → `y^(m-1)`). Plain word/number scripts read fine bare
+    # (`T_{New}` → `T_New`, `x^{2}` → `x^2`).
+    if re.search(r'[-+*/ ,]', content):
+        return f"{marker}({content})"
+    return f"{marker}{content}"
 # Any backslash command we don't have a glyph for: drop it entirely.
 _MERMAID_LATEX_UNKNOWN_CMD_RE = re.compile(r'\\+[a-zA-Z]+')
 # A stray backslash that is NOT escaping a double-quote (`\"` is a legitimate
 # mermaid label escape and must survive).
 _MERMAID_LATEX_STRAY_SLASH_RE = re.compile(r'\\(?!")')
+# A math span inside a label: `$$...$$` (mermaid's KaTeX delimiter) or a single
+# `$...$`. Mermaid only renders the `$$...$$` form, so single-`$` math is
+# normalized up to `$$...$$`; existing `$$...$$` is matched first and kept.
+_MERMAID_MATH_SPAN_RE = re.compile(r'\$\$.+?\$\$|\$[^$\n]+?\$')
+
+# LaTeX commands whose leading `\<letter>` was eaten by a JSON escape collision
+# (`\t`/`\n`/`\f`/`\r`/`\b`/`\v`) AND whose control char was later flattened to a
+# space — leaving a bare command tail (`\frac`→`rac`, `\theta`→`heta`). The
+# control char is gone, so this can't be recovered deterministically in PLAIN
+# text. But INSIDE a `$...$` math span the ambiguity vanishes: a bare known tail
+# is always a corrupted command. Each recovery is anchored (not preceded/followed
+# by a letter or backslash; argument-taking ones require a following `{`) and
+# only multi-char, unambiguous tails are included — single-letter tails like
+# `o` (`\to`) / `u` (`\nu`) are too easily real variables and are left alone.
+_LATEX_MATH_COMMAND_RECOVERIES: tuple[tuple[re.Pattern, str], ...] = tuple(
+    (re.compile(pat), repl) for pat, repl in (
+        (r'(?<![\\A-Za-z])rac(?=\{)', r'\\frac'),
+        (r'(?<![\\A-Za-z])inom(?=\{)', r'\\binom'),
+        (r'(?<![\\A-Za-z])ec(?=\{)', r'\\vec'),
+        (r'(?<![\\A-Za-z])ightarrow(?![A-Za-z])', r'\\rightarrow'),
+        (r'(?<![\\A-Za-z])riangle(?![A-Za-z])', r'\\triangle'),
+        (r'(?<![\\A-Za-z])orall(?![A-Za-z])', r'\\forall'),
+        (r'(?<![\\A-Za-z])heta(?![A-Za-z])', r'\\theta'),
+        (r'(?<![\\A-Za-z])imes(?![A-Za-z])', r'\\times'),
+        (r'(?<![\\A-Za-z])abla(?![A-Za-z])', r'\\nabla'),
+        (r'(?<![\\A-Za-z])eta(?![A-Za-z])', r'\\beta'),
+        (r'(?<![\\A-Za-z])ho(?![A-Za-z])', r'\\rho'),
+        (r'(?<![\\A-Za-z])au(?![A-Za-z])', r'\\tau'),
+        (r'(?<![\\A-Za-z])eq(?![A-Za-z])', r'\\neq'),
+    )
+)
+
+
+def _restore_math_commands(s: str) -> str:
+    """Restore backslash-eaten LaTeX commands inside a math span (see map)."""
+    for pat, repl in _LATEX_MATH_COMMAND_RECOVERIES:
+        s = pat.sub(repl, s)
+    return s
 
 
 # ─── quality_fix record helpers ───────────────────────────────────────
@@ -1380,7 +1432,7 @@ def _mermaid_latex_to_plaintext(s: str) -> str:
         s = _MERMAID_LATEX_WRAPPER_RE.sub(r"\1", s)
     for pattern, glyph in _MERMAID_LATEX_SYMBOL_RES:
         s = pattern.sub(glyph, s)
-    s = _MERMAID_LATEX_SCRIPT_RE.sub(r"\1\2", s)
+    s = _MERMAID_LATEX_SCRIPT_RE.sub(_mermaid_script_repl, s)
     s = s.replace("{", "").replace("}", "")
     s = _MERMAID_LATEX_UNKNOWN_CMD_RE.sub("", s)
     s = _MERMAID_LATEX_STRAY_SLASH_RE.sub("", s)
@@ -1389,15 +1441,28 @@ def _mermaid_latex_to_plaintext(s: str) -> str:
     return re.sub(r"\s+([,.;:?!])", r"\1", s).strip()
 
 
-def _strip_latex_in_mermaid_line(line: str) -> tuple[str, bool]:
-    """Degrade LaTeX inside each double-quoted label on one mermaid line.
+def _normalize_math_span(m: "re.Match") -> str:
+    seg = m.group(0)
+    body = seg[2:-2] if seg.startswith("$$") else seg[1:-1]
+    return f"$${_restore_math_commands(body)}$$"
 
-    Only quoted segments containing a `$` or a `\\command` are touched, so
-    ordinary labels (and the line's arrow/structure syntax) are left intact.
+
+def _normalize_math_in_mermaid_line(line: str) -> tuple[str, str | None]:
+    r"""Make LaTeX inside each double-quoted label render in mermaid's KaTeX.
+
+    Per quoted label:
+      * Contains ``$`` math → keep ``$$...$$`` and promote single ``$...$`` to
+        ``$$...$$`` (the only form mermaid renders). The commands inside are
+        left intact for KaTeX.
+      * Contains a bare ``\command`` but NO ``$`` (KaTeX never sees it) → degrade
+        to unicode/plain text so the label doesn't show literal backslashes.
+
+    Arrow/structure syntax outside quotes is never touched. Returns the new line
+    and the fix-type that applies (or ``None`` if unchanged).
     """
     out: list[str] = []
     i, n = 0, len(line)
-    changed = False
+    action: str | None = None
     while i < n:
         ch = line[i]
         if ch != '"':
@@ -1411,22 +1476,30 @@ def _strip_latex_in_mermaid_line(line: str) -> tuple[str, bool]:
                 continue
             j += 1
         inner = line[i + 1:j]
-        if "$" in inner or re.search(r"\\[a-zA-Z]", inner):
+        if "$" in inner:
+            new_inner = _MERMAID_MATH_SPAN_RE.sub(_normalize_math_span, inner)
+            if new_inner != inner:
+                inner = new_inner
+                action = "normalized_mermaid_math"
+        elif re.search(r"\\[a-zA-Z]", inner):
             degraded = _mermaid_latex_to_plaintext(inner)
             if degraded != inner:
-                changed = True
                 inner = degraded
+                action = action or "stripped_mermaid_latex"
         out.append(f'"{inner}"')
         i = j + 1 if j < n else j
-    return "".join(out), changed
+    return "".join(out), action
 
 
 def repair_mermaid_latex_labels(text: str) -> tuple[str, list[dict]]:
-    """Degrade LaTeX math inside mermaid node labels to plain text.
+    r"""Normalize math inside mermaid node labels so it renders via KaTeX.
 
-    Runs after label-quoting so every label is already wrapped in `"..."`.
-    Obsidian's mermaid renderer can't parse `$$...$$`/`\\command` inside a
-    label and fails the whole diagram; this keeps the diagram renderable.
+    The target renderers support mermaid's KaTeX math (``$$...$$`` inside a
+    label), so we PRESERVE it and promote single ``$...$`` up to ``$$...$$``
+    rather than stripping math out. A bare ``\command`` with no ``$`` delimiters
+    (which KaTeX would never pick up) is still degraded to plain text.
+
+    Runs after label-quoting so every label is already wrapped in ``"..."``.
     """
     if not text:
         return "", []
@@ -1448,10 +1521,10 @@ def repair_mermaid_latex_labels(text: str) -> tuple[str, list[dict]]:
             continue
 
         if in_mermaid:
-            new_line, changed = _strip_latex_in_mermaid_line(line)
-            if changed:
+            new_line, action = _normalize_math_in_mermaid_line(line)
+            if action:
                 fixes.append(_make_fix(
-                    "stripped_mermaid_latex",
+                    action,
                     line=idx + 1,
                     before=line,
                     after=new_line,

@@ -64,7 +64,9 @@ _MERMAID_KIND = {
 # crucially, the double-quote rule is FLOWCHART-only: mindmap is indentation-
 # based and a quoted node (`"概念"`) is a parse error that kills the diagram.
 _MERMAID_RULES_COMMON = (
-    "只輸出一個 ```mermaid 區塊,不要任何說明文字。label 裡不要放 LaTeX/數學($...$、\\mathcal 等)。"
+    "只輸出一個 ```mermaid 區塊,不要任何說明文字。"
+    "label 裡若要放數學式,務必用 `$$…$$` 雙錢號包起來（mermaid 的 KaTeX 語法,例 `N[\"增長率 $$\\alpha$$\"]`）；"
+    "不要用單一 `$`,也不要把非數學的文字（如普通變數名、省略號）塞進 `$$`,那些直接寫純文字即可。"
     "【重要】全面使用純英文 ID：所有節點或變數名稱必須使用純英文(例如 Goal, Baseline)，絕對不可使用中文，以防編碼解析失敗。"
 )
 _MERMAID_RULES_QUOTED = (
@@ -75,7 +77,8 @@ _MERMAID_RULES_QUOTED = (
 )
 _MERMAID_RULES_MINDMAP = (
     "絕對不要用雙引號包節點文字（mindmap 用了引號會整張圖解析失敗）；"
-    "節點文字直接寫純文字,並避免括號 () [] {} 等特殊字元(需要時改用全形或省略)。"
+    "節點文字直接寫純文字,並避免括號 () [] {} 等特殊字元(需要時改用全形或省略)；"
+    "mindmap 不支援數學渲染,不要使用 `$$…$$` 或 LaTeX,數學式改寫成純文字（如 1/2、x^2）。"
 )
 # Kinds that use flowchart-style quoted labels.
 _QUOTED_KINDS = frozenset({"flowchart", "concept_map"})
