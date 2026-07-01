@@ -315,7 +315,7 @@ cited the page being merged into, that agreement is circular and is recorded
 but explicitly excluded from reinforcement — otherwise the system could
 convince itself of something by re-reading its own prior conclusion.
 
-**"Three-layer validation"** (`services/cortex_validation.py`): despite the
+**"Three-layer validation"** (`maintenance/cortex_validation.py`): despite the
 README describing this as three layers, it is implemented as **one**
 `run_validation()` function that runs three sequential check tiers in a
 single audit report, not three separate scheduled passes:
