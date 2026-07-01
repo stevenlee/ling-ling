@@ -550,3 +550,34 @@ class TestRenderPatentTable:
         out = c._render_patent_table([], [])
         assert "找不到相關的專利資料" not in out
         assert "查無符合的專利" in out
+
+
+# ── _parse_json_array: salvage on truncation / malformed objects ─────
+
+class TestParseJsonArraySalvage:
+    def test_clean_array(self):
+        rows = LLMClient._parse_json_array('[{"idx":0,"relevance":"高"},{"idx":1,"relevance":"低"}]')
+        assert len(rows) == 2 and rows[0]["idx"] == 0
+
+    def test_json_fenced(self):
+        rows = LLMClient._parse_json_array('```json\n[{"idx":5,"relevance":"中"}]\n```')
+        assert rows == [{"idx": 5, "relevance": "中"}]
+
+    def test_truncated_tail_recovers_complete_objects(self):
+        # Response cut off at the output-token limit: no closing ]; last object
+        # is incomplete. Old code returned []; salvage keeps the complete ones.
+        truncated = ('[\n{"idx":0,"relevance":"高","zh":"a"},\n'
+                     '{"idx":1,"relevance":"中","zh":"b"},\n'
+                     '{"idx":2,"relevance":"低","zh":"c"},\n'
+                     '{"idx":3,"relevance":"高","zh":"trunc')  # cut mid-object
+        rows = LLMClient._parse_json_array(truncated)
+        assert [r["idx"] for r in rows] == [0, 1, 2]   # 3 complete survive, cut one dropped
+
+    def test_single_malformed_object_doesnt_zero_the_rest(self):
+        bad_middle = ('[{"idx":0,"relevance":"高"}, {oops not json}, '
+                      '{"idx":2,"relevance":"低"}]')
+        rows = LLMClient._parse_json_array(bad_middle)
+        assert [r["idx"] for r in rows] == [0, 2]
+
+    def test_no_array_returns_empty(self):
+        assert LLMClient._parse_json_array("sorry, I cannot help with that") == []

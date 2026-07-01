@@ -1846,16 +1846,34 @@ class LLMClient:
 
     @staticmethod
     def _parse_json_array(text: str) -> list:
-        """Best-effort extraction of a JSON array from an LLM response."""
+        """Best-effort extraction of a JSON array from an LLM response.
+
+        Tolerant of common local-model failure modes: ```json fences, a tail
+        truncated at the output-token limit (no closing ]), or a single
+        malformed object. The fast path parses the whole array; on failure it
+        SALVAGES individual top-level objects so one cut-off/bad entry doesn't
+        discard the entire list (the old behaviour — a single glitch anywhere
+        returned [], which then looked like "the LLM produced nothing").
+        """
         import json, re
         match = re.search(r'\[.*\]', text, re.DOTALL)
-        if not match:
-            return []
-        try:
-            parsed = json.loads(match.group(0))
-            return parsed if isinstance(parsed, list) else []
-        except Exception:
-            return []
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+                if isinstance(parsed, list):
+                    return parsed
+            except Exception:
+                pass
+        # Salvage: parse each flat {...} object independently, keeping successes.
+        objs = []
+        for om in re.finditer(r'\{[^{}]*\}', text, re.DOTALL):
+            try:
+                obj = json.loads(om.group(0))
+                if isinstance(obj, dict):
+                    objs.append(obj)
+            except Exception:
+                continue
+        return objs
 
     @staticmethod
     def _md_cell(text) -> str:
