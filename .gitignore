@@ -46,6 +46,10 @@ lings-desktop/Backups/
 lings-desktop/toLingLing/
 lings-desktop/fromLingLing/
 lings-desktop/raw/
+# Consolidate/ is the ingestion INBOX — the daemon consumes files dropped here
+# and archives them to raw/, so its contents are transient (like the other
+# inboxes above). It must not be version-controlled.
+lings-desktop/Consolidate/
 lings-desktop/ReadingIndex.md
 .kb_lock
 debug_last_error.json
