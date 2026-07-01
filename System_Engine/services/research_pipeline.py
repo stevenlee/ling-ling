@@ -11,10 +11,25 @@ import requests
 
 from core.state import global_busy_state
 
+# Minimum gap between consecutive FreePatentsOnline requests. FPO is scraped,
+# not an API — hammering it in a tight per-keyword loop looks like a bot and
+# gets the burst rate-limited (which then surfaced as a misleading "no patents
+# found"). A ~1.33s spacing keeps the request cadence human-ish.
+FPO_MIN_INTERVAL = 1.33
+
+
+class PatentFetchError(Exception):
+    """FPO could not be fetched/parsed (network, rate-limit, structure change).
+
+    Distinct from "genuinely zero matching patents" so the caller can tell the
+    user the truth instead of blaming their keywords."""
+
+
 class ResearchPipeline:
     def __init__(self, llm_client):
         self.llm = llm_client
         self._cache = {}
+        self._last_fpo_at = 0.0   # monotonic time of the last FPO request
 
     def _get_with_retry(self, url: str, headers: dict, timeout: int = 20, retries: int = 3):
         """GET with retry: exponential backoff on HTTP 429, fixed backoff on other transient errors."""
@@ -110,24 +125,40 @@ class ResearchPipeline:
             logging.error(f"Wikipedia search failed for '{keyword}': {e}")
             return []
 
+    def _throttle_fpo(self):
+        """Self-rate-limit FPO to a human-ish cadence (see FPO_MIN_INTERVAL)."""
+        wait = self._last_fpo_at + FPO_MIN_INTERVAL - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        self._last_fpo_at = time.monotonic()
+
     def search_patents(self, keyword: str, limit: int = 30) -> list[dict]:
+        """Search patents via FreePatentsOnline (FPO) scraping.
+
+        Returns a (possibly empty) list on a successful fetch — an empty list
+        means FPO genuinely returned no matching patents. Raises
+        PatentFetchError when the page can't be fetched or parsed (network,
+        rate-limit, HTML change) so the caller doesn't misreport a transient
+        failure as "no patents found".
         """
-        Search for patents using FreePatentsOnline (FPO) scraping.
-        FPO provides snippets directly in the search results page without API keys.
-        """
+        from bs4 import BeautifulSoup
+        import html
+
+        url = f"https://www.freepatentsonline.com/result.html?sort=relevance&srch=top&query_txt={urllib.parse.quote(keyword)}&submit=&patents_us=on"
+        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"}
+
+        self._throttle_fpo()
         try:
-            from bs4 import BeautifulSoup
-            import html
-
-            url = f"https://www.freepatentsonline.com/result.html?sort=relevance&srch=top&query_txt={urllib.parse.quote(keyword)}&submit=&patents_us=on"
-            headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"}
-
             response = self._get_with_retry(url, headers)
+        except Exception as e:
+            logging.error(f"FPO fetch failed for '{keyword}': {e}")
+            raise PatentFetchError(f"fetch failed: {e}") from e
 
+        try:
             # FPO HTML is slightly malformed, lxml parses it robustly
             soup = BeautifulSoup(response.text, "lxml")
             tables = soup.find_all("table", class_="listing_table")
-            
+
             results = []
             if tables:
                 rows = tables[0].find_all("tr")
@@ -139,15 +170,15 @@ class ResearchPipeline:
                         title_node = tds[2].find("a")
                         title = title_node.text.strip() if title_node else "Unknown Title"
                         link = "https://www.freepatentsonline.com" + title_node["href"] if title_node else ""
-                        
+
                         br = tds[2].find("br")
                         abstract = ""
                         if br and br.next_sibling:
                             abstract = br.next_sibling.text.strip()
-                        
+
                         title = html.unescape(re.sub(r'<[^>]+>', '', title))
                         abstract = html.unescape(re.sub(r'<[^>]+>', '', abstract))
-                        
+
                         results.append({
                             "id": p_id,
                             "title": title,
@@ -157,8 +188,8 @@ class ResearchPipeline:
                         })
             return results
         except Exception as e:
-            logging.error(f"FPO Patent search failed for '{keyword}': {e}")
-            return []
+            logging.error(f"FPO parse failed for '{keyword}': {e}")
+            raise PatentFetchError(f"parse failed: {e}") from e
 
 
     def prepare_and_run(self, instruction: str, base_content: str) -> str:
@@ -210,12 +241,19 @@ class ResearchPipeline:
         # 2. Fetch Data
         arxiv_wiki_results = []
         patent_results = []
-        
+        patent_fetch_failed = False
+
         for kw in keywords:
             ui.info(f"🔎 正在搜尋關鍵字: {kw}")
             arxiv_wiki_results.extend(self.search_arxiv(kw, limit=2))
             arxiv_wiki_results.extend(self.search_wikipedia(kw, limit=2))
-            patent_results.extend(self.search_patents(kw, limit=10))
+            try:
+                patent_results.extend(self.search_patents(kw, limit=10))
+            except PatentFetchError as e:
+                # A transient/structural FPO failure — record it so we don't
+                # later blame the user's keywords for an empty patent section.
+                patent_fetch_failed = True
+                logging.warning(f"Patent fetch skipped for '{kw}': {e}")
 
         # Dedupe across keywords: literature by URL, patents by title
         # (collapses granted + application variants of the same invention).
@@ -230,8 +268,13 @@ class ResearchPipeline:
         patent_table_md = ""
         if patent_results:
             patent_table_md = self.llm.generate_patent_table(patent_results, topic=instruction)
+        elif patent_fetch_failed:
+            # Honest distinction: the fetch failed, so we CAN'T say there are no
+            # patents — only that we couldn't reach FPO this time.
+            patent_table_md = ("> ⚠️ 專利來源（FreePatentsOnline）這次無法連線或被限流，暫時略過。"
+                               "稍後重跑 `@ling-research` 再試一次。")
         else:
-            patent_table_md = "> 找不到相關的專利資料。可能是關鍵字過於限縮或沒有符合的專利。"
+            patent_table_md = "> 查無符合的專利（此主題可能較少出現在專利，或關鍵字過於限縮）。"
         
         # 4. Construct Final Markdown Block
         keywords_str = ", ".join(keywords)
