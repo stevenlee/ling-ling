@@ -190,9 +190,17 @@ class TestLatexLabels:
         result, _ = self._strip(r'graph LR\nA["$P_0 y^{m-1} + \dots + P_m$"]')
         assert r'$$P_0 y^{m-1} + \dots + P_m$$' in result
 
-    def test_multiple_math_spans_each_promoted(self):
+    def test_multiple_spans_keeps_only_richest(self):
+        # Obsidian errors on 2+ $$ per line; keep the richest, plaintext the rest.
         result, _ = self._strip(r'graph LR\nA["$x$ 和 $y^2$"]')
-        assert '$$x$$ 和 $$y^2$$' in result
+        assert 'x 和 $$y^2$$' in result
+        assert result.count("$$") == 2          # exactly one $$ span
+
+    def test_all_trivial_spans_all_plaintext(self):
+        # Every span is a bare variable → no $$ at all (nothing worth rendering).
+        result, _ = self._strip(r'graph LR\nA["$P$ 與 $Q$ 互斥"]')
+        assert 'P 與 Q 互斥' in result
+        assert "$$" not in result
 
     def test_bare_command_without_dollar_degraded(self):
         # No `$` delimiters — KaTeX never sees it, so degrade `\alpha`/`\dots`.
@@ -214,12 +222,16 @@ class TestLatexLabels:
         assert fixes == []
 
     def test_restores_corrupted_command_inside_math(self):
-        # `\frac`→`rac`, `\triangle`→`riangle`, `\neq`→`eq` etc. (the leading
-        # `\x` control char was flattened to a space) are recovered INSIDE math.
-        result, _ = self._strip(r'graph LR\nA["$s_n = rac{1}{2}$ 且 $ riangle$ 且 $r eq 1$"]')
-        assert r'\frac{1}{2}' in result
-        assert r'\triangle' in result
-        assert r'\neq' in result
+        # `\frac`→`rac` (leading `\f` control char flattened to a space) is
+        # recovered inside a math span. Single span so it stays as $$.
+        result, _ = self._strip(r'graph LR\nA["部分和 $s_n = rac{1-r^n}{1-r}$"]')
+        assert r'$$s_n = \frac{1-r^n}{1-r}$$' in result
+
+    def test_multispan_keeps_richest_recovered(self):
+        # Corruption recovered in every span, but only the richest is kept as $$.
+        result, _ = self._strip(r'graph LR\nA["$ riangle$ 且 $s_n = rac{1}{2}$"]')
+        assert r'$$s_n = \frac{1}{2}$$' in result
+        assert result.count("$$") == 2          # richest only; triangle degraded
 
     def test_recovery_only_inside_math(self):
         # A bare tail OUTSIDE math is left alone (could be a real word/variable).

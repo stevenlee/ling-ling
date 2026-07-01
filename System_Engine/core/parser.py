@@ -1441,19 +1441,51 @@ def _mermaid_latex_to_plaintext(s: str) -> str:
     return re.sub(r"\s+([,.;:?!])", r"\1", s).strip()
 
 
-def _normalize_math_span(m: "re.Match") -> str:
-    seg = m.group(0)
-    body = seg[2:-2] if seg.startswith("$$") else seg[1:-1]
-    return f"$${_restore_math_commands(body)}$$"
+def _math_complexity(body: str) -> int:
+    """Rough richness of a math span: count of commands + super/subscripts."""
+    return len(re.findall(r"\\[a-zA-Z]+", body)) + body.count("^") + body.count("_")
+
+
+def _consolidate_math_in_label(s: str) -> str:
+    r"""Leave AT MOST ONE ``$$...$$`` span in a label (Obsidian's mermaid errors
+    on 2+ math spans per line — it greedily spans first ``$$`` to last).
+
+    * 1 math span → promote to ``$$...$$`` (with command recovery).
+    * ≥2 spans → keep the single *richest* span as ``$$...$$`` and degrade the
+      rest to unicode/plain text. If every span is trivial (bare variables),
+      degrade them all (no ``$$`` at all).
+    """
+    spans = list(_MERMAID_MATH_SPAN_RE.finditer(s))
+    if not spans:
+        return s
+    bodies = [
+        _restore_math_commands(m.group(0)[2:-2] if m.group(0).startswith("$$")
+                               else m.group(0)[1:-1])
+        for m in spans
+    ]
+    scores = [_math_complexity(b) for b in bodies]
+    best = max(range(len(spans)), key=lambda i: scores[i])
+    keep_math = scores[best] > 0            # nothing worth rendering → all plain
+    out: list[str] = []
+    last = 0
+    for i, m in enumerate(spans):
+        out.append(s[last:m.start()])
+        if i == best and keep_math:
+            out.append(f"$${bodies[i]}$$")
+        else:
+            out.append(_mermaid_latex_to_plaintext(bodies[i]))
+        last = m.end()
+    out.append(s[last:])
+    return "".join(out)
 
 
 def _normalize_math_in_mermaid_line(line: str) -> tuple[str, str | None]:
     r"""Make LaTeX inside each double-quoted label render in mermaid's KaTeX.
 
     Per quoted label:
-      * Contains ``$`` math → keep ``$$...$$`` and promote single ``$...$`` to
-        ``$$...$$`` (the only form mermaid renders). The commands inside are
-        left intact for KaTeX.
+      * Contains ``$`` math → keep at most ONE ``$$...$$`` span (Obsidian errors
+        on 2+ per line); the richest span is kept and promoted, the rest are
+        degraded to plain text (see ``_consolidate_math_in_label``).
       * Contains a bare ``\command`` but NO ``$`` (KaTeX never sees it) → degrade
         to unicode/plain text so the label doesn't show literal backslashes.
 
@@ -1477,7 +1509,7 @@ def _normalize_math_in_mermaid_line(line: str) -> tuple[str, str | None]:
             j += 1
         inner = line[i + 1:j]
         if "$" in inner:
-            new_inner = _MERMAID_MATH_SPAN_RE.sub(_normalize_math_span, inner)
+            new_inner = _consolidate_math_in_label(inner)
             if new_inner != inner:
                 inner = new_inner
                 action = "normalized_mermaid_math"
