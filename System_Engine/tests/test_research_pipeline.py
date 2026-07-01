@@ -17,7 +17,7 @@ def _rp():
 
 def test_fetch_failure_raises_not_empty(monkeypatch):
     rp = _rp()
-    monkeypatch.setattr(rp, "_throttle_fpo", lambda: None)
+    monkeypatch.setattr(rp, "_throttle", lambda source: None)
 
     def boom(url, headers):
         raise ConnectionError("429 Too Many Requests")
@@ -29,7 +29,7 @@ def test_fetch_failure_raises_not_empty(monkeypatch):
 
 def test_genuine_empty_returns_empty_list(monkeypatch):
     rp = _rp()
-    monkeypatch.setattr(rp, "_throttle_fpo", lambda: None)
+    monkeypatch.setattr(rp, "_throttle", lambda source: None)
     # Valid page, but no listing_table → genuinely no results.
     monkeypatch.setattr(rp, "_get_with_retry",
                         lambda url, headers: types.SimpleNamespace(text="<html><body>no hits</body></html>"))
@@ -38,7 +38,7 @@ def test_genuine_empty_returns_empty_list(monkeypatch):
 
 def test_parse_success_returns_rows(monkeypatch):
     rp = _rp()
-    monkeypatch.setattr(rp, "_throttle_fpo", lambda: None)
+    monkeypatch.setattr(rp, "_throttle", lambda source: None)
     html_doc = """
     <table class="listing_table">
       <tr><th>#</th><th>ID</th><th>Title</th><th>Score</th></tr>
@@ -63,8 +63,23 @@ def test_throttle_spaces_consecutive_requests(monkeypatch):
     monkeypatch.setattr(rpmod.time, "monotonic", lambda: clock["t"])
 
     rp = _rp()
-    rp._throttle_fpo()                 # first call: last_fpo_at was 0 → no wait
+    rp._throttle("fpo")                 # first call for this source → no wait
     assert slept == []
-    rp._throttle_fpo()                 # immediate second call → must wait ~FPO_MIN_INTERVAL
+    rp._throttle("fpo")                 # immediate second → wait ~fpo interval
     assert len(slept) == 1
-    assert abs(slept[0] - rpmod.FPO_MIN_INTERVAL) < 0.01
+    assert abs(slept[0] - rpmod._SOURCE_MIN_INTERVAL["fpo"]) < 0.01
+
+
+def test_throttle_is_per_source(monkeypatch):
+    # Each source has an independent clock — throttling FPO must not make the
+    # first Wikipedia call wait.
+    from services import research_pipeline as rpmod
+    slept = []
+    monkeypatch.setattr(rpmod.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(rpmod.time, "monotonic", lambda: 100.0)
+
+    rp = _rp()
+    rp._throttle("fpo")
+    rp._throttle("wikipedia")          # different source, first hit → no wait
+    rp._throttle("arxiv")              # different source, first hit → no wait
+    assert slept == []
