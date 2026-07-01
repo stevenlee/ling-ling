@@ -1937,45 +1937,96 @@ class LLMClient:
         )
         return header + "\n\n".join(items)
 
+    _PATENT_TABLE_HEADER = (
+        "| 專利編號 | 關聯性 | 主旨 | 摘要 | 全文連結 |\n"
+        "| :--- | :---: | :--- | :--- | :--- |\n"
+    )
+
     def generate_patent_table(self, patent_results: list[dict], topic: str = "") -> str:
-        # The LLM only filters/ranks/translates; the patent number and URL are
-        # rendered from our own data so the model can never corrupt them.
+        """Render fetched patents as a Markdown table. The LLM only filters/
+        ranks/translates; patent number + URL come from our own data so the
+        model can't corrupt them. subject/summary are written in the configured
+        OUTPUT_LANGUAGE (not a hardcoded language). Three tiers keep patents —
+        and their translation — from being lost to a flaky ranking step:
+        rank+translate → translate-only → raw source text (last resort)."""
         import json
+        if not patent_results:
+            return "> 查無符合的專利（此主題可能較少出現在專利，或關鍵字過於限縮）。"
+
+        lang = self._get_lang_hint()
         indexed = [
             {"idx": i, "id": p.get("id", ""), "title": p.get("title", ""), "summary": p.get("summary", "")}
             for i, p in enumerate(patent_results)
         ]
         data_str = json.dumps(indexed, ensure_ascii=False, indent=2)
-        prompt = f"""請針對主題「{topic}」，從以下專利清單中篩選出與主題相關的專利，並依關聯性由高到低排序。
+
+        # Tier 1: filter + rank + translate.
+        rank_prompt = f"""請針對主題「{topic}」，從以下專利清單中篩選出與主題相關的專利，並依關聯性由高到低排序。
 對每一筆你選出的專利，請輸出：
 - idx：原始清單中的索引（整數，務必照抄，不要更動）
 - relevance：關聯性，只能是「高」「中」「低」三者之一
-- zh_subject：用繁體中文寫的「主旨」（一句話點出技術核心）
-- zh_summary：用繁體中文寫的摘要（1~2 句）
+- subject：「主旨」，一句話點出技術核心，用 {lang} 書寫
+- summary：摘要（1~2 句），用 {lang} 書寫
 
 請「只」輸出 JSON 陣列，不要有任何其他文字或 Markdown 標記：
-[{{"idx": 0, "relevance": "高", "zh_subject": "...", "zh_summary": "..."}}]
+[{{"idx": 0, "relevance": "高", "subject": "...", "summary": "..."}}]
 
 [專利清單]
 {data_str}
 """
+        lines = self._patent_rows_to_lines(self._safe_json_rows(rank_prompt), patent_results)
+        if lines:
+            return self._PATENT_TABLE_HEADER + "\n".join(lines)
+
+        # Tier 2: ranking failed — translate every patent (no ranking). A
+        # simpler task than rank+translate, so its JSON is more likely to parse.
+        translate_prompt = f"""請把以下每一筆專利的「主旨」與「摘要」翻譯／改寫成 {lang}。不要篩選、不要排序，全部保留。
+對每一筆輸出：
+- idx：原始索引（整數，照抄）
+- subject：主旨（一句話點出技術核心），用 {lang}
+- summary：摘要（1~2 句），用 {lang}
+
+請「只」輸出 JSON 陣列：
+[{{"idx": 0, "subject": "...", "summary": "..."}}]
+
+[專利清單]
+{data_str}
+"""
+        lines = self._patent_rows_to_lines(
+            self._safe_json_rows(translate_prompt), patent_results, default_relevance="—"
+        )
+        if lines:
+            note = "> ⚠️ 關聯性排序這次無法產生，以下為已翻譯但未排序的專利：\n\n"
+            return note + self._PATENT_TABLE_HEADER + "\n".join(lines)
+
+        # Tier 3: even translation failed — raw source text, clearly labelled.
+        raw = [
+            f"| {self._md_cell(p.get('id', ''))} | — | {self._md_cell(p.get('title', ''))} | "
+            f"{self._md_cell((p.get('summary', '') or '')[:160])} | "
+            f"{('[連結](' + p.get('url', '') + ')') if p.get('url') else '—'} |"
+            for p in patent_results
+        ]
+        note = ("> ⚠️ 排序與翻譯這次都無法產生（LLM 格式化失敗），"
+                f"以下為抓到的 {len(raw)} 筆原始專利（未排序、原文）：\n\n")
+        return note + self._PATENT_TABLE_HEADER + "\n".join(raw)
+
+    def _safe_json_rows(self, prompt: str) -> list:
+        """One JSON-array LLM call, salvage-parsed; [] on any failure."""
         try:
             res = self._complete_text(
                 system_prompt="You are a knowledgeable research assistant. Output only a JSON array.",
                 user_msg=prompt,
                 temperature=0.3,
             )
-            rows = self._parse_json_array(res)
-            return self._render_patent_table(rows, patent_results)
+            return self._parse_json_array(res)
         except Exception as e:
-            logging.error(f"Failed to generate patent table: {e}")
-            return "無法生成專利表格。"
+            logging.error(f"Patent JSON step failed: {e}")
+            return []
 
-    def _render_patent_table(self, rows: list[dict], patent_results: list[dict]) -> str:
-        header = (
-            "| 專利編號 | 關聯性 | 主旨 | 摘要 | 全文連結 |\n"
-            "| :--- | :---: | :--- | :--- | :--- |\n"
-        )
+    def _patent_rows_to_lines(self, rows: list[dict], patent_results: list[dict],
+                              default_relevance: str = "") -> list[str]:
+        """Map LLM rows (idx/relevance/subject/summary) back onto our patent
+        data, skipping any row with a bad/out-of-range idx."""
         lines = []
         for r in rows:
             try:
@@ -1987,25 +2038,9 @@ class LLMClient:
             src = patent_results[idx]
             pid = self._md_cell(src.get("id", ""))
             url = src.get("url", "")
-            relevance = self._md_cell(r.get("relevance", ""))
-            subject = self._md_cell(r.get("zh_subject", ""))
-            summary = self._md_cell(r.get("zh_summary", ""))
+            relevance = self._md_cell(r.get("relevance", default_relevance) or default_relevance)
+            subject = self._md_cell(r.get("subject", ""))
+            summary = self._md_cell(r.get("summary", ""))
             link = f"[連結]({url})" if url else "—"
             lines.append(f"| {pid} | {relevance} | {subject} | {summary} | {link} |")
-        if not lines:
-            # The LLM ranking step returned nothing usable (empty/malformed JSON,
-            # or it filtered everything out). We DID fetch patents, so don't claim
-            # none were found — render them raw (unranked) so the fetch isn't lost.
-            if patent_results:
-                raw = [
-                    f"| {self._md_cell(p.get('id', ''))} | — | "
-                    f"{self._md_cell(p.get('title', ''))} | "
-                    f"{self._md_cell((p.get('summary', '') or '')[:160])} | "
-                    f"{('[連結](' + p.get('url', '') + ')') if p.get('url') else '—'} |"
-                    for p in patent_results
-                ]
-                note = ("> ⚠️ 關聯性排序這次無法產生（LLM 格式化失敗），"
-                        f"以下為抓到的 {len(raw)} 筆原始專利（未排序）：\n\n")
-                return note + header + "\n".join(raw)
-            return "> 查無符合的專利（此主題可能較少出現在專利，或關鍵字過於限縮）。"
-        return header + "\n".join(lines)
+        return lines
