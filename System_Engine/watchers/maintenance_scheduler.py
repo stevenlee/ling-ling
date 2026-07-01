@@ -78,6 +78,15 @@ class MaintenanceScheduler(threading.Thread):
             result = run_daily_insight(self.llm, self.rag)
             return MaintenanceResult(result.status, result.summary)
 
+        def spaced_review() -> MaintenanceResult:
+            # Phase 2 study aid: deterministic card assembled from Cortex claims
+            # whose retrievability has dropped below the freshness line. Cheap
+            # (no LLM), so no idle/dream-window gating — it should be ready for
+            # the user during the day, not hidden in deep sleep.
+            from maintenance.spaced_review import run_spaced_review
+            result = run_spaced_review(self.llm, self.rag)
+            return MaintenanceResult(result.status, result.summary)
+
         def weekly_full_insight() -> MaintenanceResult:
             insight_agent.generate_full_insight(
                 user_directive="Scheduled weekly comprehensive reflection."
@@ -257,6 +266,14 @@ class MaintenanceScheduler(threading.Thread):
                 idle_required=True,
                 intent="maintenance.retrieval_bench",
                 agent="RetrievalBench",
+            ),
+            MaintenanceTask(
+                name="spaced_review_daily",
+                action=spaced_review,
+                daily=True,
+                idle_required=False,
+                intent="maintenance.spaced_review",
+                agent="SpacedReview",
             ),
             MaintenanceTask(
                 name="trace_prune_daily",

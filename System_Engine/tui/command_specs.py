@@ -77,6 +77,11 @@ COMMANDS: tuple[CommandSpec, ...] = (
                 "之後到 kafu 跑 `make publish` 上線"),
     CommandSpec("recall", "recall", "回想 (蒸餾主張)", "Cortex", fields=(_TARGETS, _BODY)),
     CommandSpec("tensions", "tensions", "知識張力掃描", "Cortex"),
+    CommandSpec("quiz", "quiz", "複習卡 (小老師出題)", "Cortex",
+                "把快忘記的 Cortex 主張出成一張主動回想卡"),
+    CommandSpec("recalled", "recalled", "我記得 (強化主張)", "Cortex",
+                "回報你記得某條主張，拉長它的半衰期",
+                fields=(Field("targets", "主張 [[claim]]", "links", required=True),)),
     CommandSpec("cortex", "cortex", "Cortex 三層驗證", "Cortex"),
     CommandSpec("visualize", "visualize", "視覺化 (圖表)", "Cortex", fields=(
         Field("targets", "目標 [[筆記]]", "links", required=True),

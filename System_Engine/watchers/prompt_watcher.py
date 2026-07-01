@@ -47,6 +47,9 @@ INTENT_ROUTES = [
     # Build + deploy stay on the kafu side (`make publish`). Dispatches BlogAgent.
     (["blog"],                               ["blog"],        "blog"),
     (["profiles", "profile"],                ["profiles", "profile"], "profiles"),
+    # "recalled" before "recall": longer trigger first, else @ling-recalled
+    # would false-match the recall (Q&A) route. Fires a spaced-review reinforce.
+    (["recalled"],                           ["recalled"],    "recalled"),
     (["recall"],                             ["recall"],      "recall"),
     (["tensions", "tension"],                ["tensions", "tension"], "tensions"),
     (["improve", "improvements"],            ["improve"],     "improve"),
@@ -60,6 +63,9 @@ INTENT_ROUTES = [
     (["decay"],                              ["decay"],       "decay"),
     (["ledger"],                             ["ledger"],      "ledger"),
     (["assess", "checkup"],                  ["assess", "checkup"], "assess"),
+    # Spaced-review card on demand (小老師出題考你). Daily auto-push runs via the
+    # scheduler; this is the manual "give me a card now" trigger.
+    (["quiz"],                               ["quiz"],        "quiz"),
     (["plan"],                               ["plan"],        "plan"),
     (["do"],                                 ["do"],          "do"),
     (["zip"],                                ["zip"],         "kb_zip"),
@@ -69,7 +75,8 @@ INTENT_ROUTES = [
 ]
 
 # Intents dispatched directly to a maintenance/cognition function (no agent).
-_BRAIN_OPS = {"dream", "consolidate", "decay", "ledger", "assess", "resynthesize"}
+_BRAIN_OPS = {"dream", "consolidate", "decay", "ledger", "assess", "resynthesize",
+              "quiz", "recalled"}
 
 class PromptWatcher(watchdog.events.FileSystemEventHandler):
     def __init__(self, llm_client, rag_manager):
@@ -453,6 +460,17 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
         busy lock, so these run under the same contention discipline."""
         if intent_key == "resynthesize":
             return self._resynthesize(target_entities)
+
+        # Spaced-review (Phase 2): a card on demand, or a reinforce on recall.
+        # Both read/write only Cortex/*.md via cortex_store — no agent needed.
+        if intent_key == "quiz":
+            from maintenance.spaced_review import run_spaced_review
+            result = run_spaced_review(self.llm, self.rag, occasion="Manual")
+            return f"[{result.status}] {result.summary}"
+        if intent_key == "recalled":
+            from maintenance.spaced_review import run_recalled_report
+            result = run_recalled_report(target_entities)
+            return f"[{result.status}] {result.summary}"
 
         trace_store = getattr(self.llm, "trace_store", None)
         if intent_key == "dream":
