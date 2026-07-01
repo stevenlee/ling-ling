@@ -516,3 +516,37 @@ class TestExtractClaimsAppliesWhen:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ── _render_patent_table: LLM-ranking-failure fallback ──────────────
+
+class TestRenderPatentTable:
+    def _client(self):
+        # Bypass __init__ (no provider/network); _render_patent_table only
+        # needs the static _md_cell helper.
+        return object.__new__(LLMClient)
+
+    _PATENTS = [
+        {"id": "US111", "title": "Alpha", "summary": "a summary", "url": "http://x/1"},
+        {"id": "US222", "title": "Beta", "summary": "b summary", "url": "http://x/2"},
+    ]
+
+    def test_ranked_rows_render_normally(self):
+        c = self._client()
+        rows = [{"idx": 1, "relevance": "高", "zh_subject": "主旨", "zh_summary": "摘要"}]
+        out = c._render_patent_table(rows, self._PATENTS)
+        assert "US222" in out and "高" in out
+        assert "US111" not in out            # only the ranked row
+
+    def test_empty_rows_with_patents_falls_back_to_raw(self):
+        c = self._client()
+        out = c._render_patent_table([], self._PATENTS)
+        assert "找不到相關的專利資料" not in out   # never the misleading old message
+        assert "US111" in out and "US222" in out  # fetched patents preserved
+        assert "未排序" in out                      # labelled as raw/unranked
+
+    def test_empty_rows_no_patents_is_honest(self):
+        c = self._client()
+        out = c._render_patent_table([], [])
+        assert "找不到相關的專利資料" not in out
+        assert "查無符合的專利" in out

@@ -1975,5 +1975,19 @@ class LLMClient:
             link = f"[連結]({url})" if url else "—"
             lines.append(f"| {pid} | {relevance} | {subject} | {summary} | {link} |")
         if not lines:
-            return "> 找不到相關的專利資料。可能是關鍵字過於限縮或沒有符合的專利。"
+            # The LLM ranking step returned nothing usable (empty/malformed JSON,
+            # or it filtered everything out). We DID fetch patents, so don't claim
+            # none were found — render them raw (unranked) so the fetch isn't lost.
+            if patent_results:
+                raw = [
+                    f"| {self._md_cell(p.get('id', ''))} | — | "
+                    f"{self._md_cell(p.get('title', ''))} | "
+                    f"{self._md_cell((p.get('summary', '') or '')[:160])} | "
+                    f"{('[連結](' + p.get('url', '') + ')') if p.get('url') else '—'} |"
+                    for p in patent_results
+                ]
+                note = ("> ⚠️ 關聯性排序這次無法產生（LLM 格式化失敗），"
+                        f"以下為抓到的 {len(raw)} 筆原始專利（未排序）：\n\n")
+                return note + header + "\n".join(raw)
+            return "> 查無符合的專利（此主題可能較少出現在專利，或關鍵字過於限縮）。"
         return header + "\n".join(lines)
