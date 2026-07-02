@@ -851,3 +851,27 @@ class TestClassDiagramRepair:
         twice, fixes = repair_mermaid_classdiagram(once)
         assert once == twice
         assert fixes == []
+
+    def test_non_ascii_stereotype_normalized_to_instance(self):
+        # Real regression (Non-Invasive Part 12 + 87 other vault files): the
+        # ontology prompt told the model to emit `<<個體>>` — CJK that breaks
+        # mermaid's annotation lexer — and drift/corruptions produced `<<個．體>>`
+        # / `<<個int>>` too. All non-ASCII stereotypes normalize to <<instance>>.
+        body = (
+            "classDiagram\n"
+            '    class Sentence["句子"]\n'
+            "    Fido { <<個體>> }\n"
+            "    Bad { <<個．體>> }\n"
+            "    Ok { <<choice>> }"
+        )
+        result, fixes = self._q(body)
+        assert result.count("<<instance>>") == 2
+        assert "個體" not in result and "個．體" not in result
+        assert "<<choice>>" in result  # clean ASCII stereotype untouched
+        assert sum(f["type"] == "normalized_class_annotation" for f in fixes) == 2
+
+    def test_ascii_stereotype_untouched(self):
+        body = "classDiagram\n    class Repo\n    Repo { <<Infrastructure>> }"
+        result, fixes = self._q(body)
+        assert "<<Infrastructure>>" in result
+        assert not any(f["type"] == "normalized_class_annotation" for f in fixes)

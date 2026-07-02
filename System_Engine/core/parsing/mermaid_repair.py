@@ -120,6 +120,16 @@ _CLASSDIAGRAM_BODY_OPEN_RE = re.compile(
     r'^(\s*)class\s+([A-Za-z_]\w*)\s*(\["[^"\n]*"\]|\[[^\]\n]*\])?\s*\{(.*)$'
 )
 
+# A classDiagram `<<...>>` stereotype whose content holds ANY non-ASCII char.
+# Mermaid's annotation lexer rejects CJK, and the ontology generator's
+# individual marker `<<個體>>` (plus its LLM corruptions `<<個．體>>` /
+# `<<個int>>`) is the ONLY non-ASCII annotation this system emits. Its exact
+# English equivalent is "instance" — it already matches the `..> X :
+# instance-of` relation the ontology draws, and is already the drift variant
+# in the corpus. So every non-ASCII stereotype normalizes to `<<instance>>`;
+# clean ASCII ones (`<<choice>>`, `<<Infrastructure>>`) are left untouched.
+_NONASCII_CLASS_ANNOTATION_RE = re.compile(r"<<[^>]*[^\x00-\x7f][^>]*>>")
+
 # A LaTeX `\r…` command (\rightarrow, \rangle, …) emitted in under-escaped JSON
 # decodes to a carriage-return CONTROL char + the suffix, not a literal `\r`.
 
@@ -1115,6 +1125,24 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
     Idempotent: once hoisted, deduped and stripped, no pattern matches again.
     """
     fixes: list[dict] = []
+
+    # Normalize non-ASCII `<<...>>` stereotypes (CJK breaks mermaid's annotation
+    # lexer) BEFORE the body-keep/strip logic, so `<<個體>>` becomes a real
+    # `<<instance>>` the diagram can render — see _NONASCII_CLASS_ANNOTATION_RE.
+    normalized: list[str] = []
+    for offset, ln in enumerate(body):
+        fixed = _NONASCII_CLASS_ANNOTATION_RE.sub("<<instance>>", ln)
+        if fixed != ln:
+            fixes.append(
+                _make_fix(
+                    "normalized_class_annotation",
+                    line=base_line + offset,
+                    before=ln,
+                    after=fixed,
+                )
+            )
+        normalized.append(fixed)
+    body = normalized
 
     # Pre-scan: ids already given a `class` declaration (any form), and the
     # indentation to reuse for hoisted declarations.

@@ -65,12 +65,12 @@ _MERMAID_KIND = {
 # based and a quoted node (`"概念"`) is a parse error that kills the diagram.
 _MERMAID_RULES_COMMON = (
     "只輸出一個 ```mermaid 區塊,不要任何說明文字。"
-    "label 裡若要放數學式,務必用 `$$…$$` 雙錢號包起來（mermaid 的 KaTeX 語法,例 `N[\"增長率 $$\\alpha$$\"]`）；"
+    'label 裡若要放數學式,務必用 `$$…$$` 雙錢號包起來（mermaid 的 KaTeX 語法,例 `N["增長率 $$\\alpha$$"]`）；'
     "不要用單一 `$`,也不要把非數學的文字（如普通變數名、省略號）塞進 `$$`,那些直接寫純文字即可。"
     "【重要】全面使用純英文 ID：所有節點或變數名稱必須使用純英文(例如 Goal, Baseline)，絕對不可使用中文，以防編碼解析失敗。"
 )
 _MERMAID_RULES_QUOTED = (
-    "每個 node label 用雙引號包住（如 `Baseline[\"基準模型\"]`）；subgraph 名稱也用雙引號；不要在 label 裡用未跳脫的特殊字元；"
+    '每個 node label 用雙引號包住（如 `Baseline["基準模型"]`）；subgraph 名稱也用雙引號；不要在 label 裡用未跳脫的特殊字元；'
     "集中管理連線邏輯：先在上方宣告所有節點（含 subgraph 的內部節點），最後在最下方統一撰寫所有節點間的連線關係 (`-->`)，將定義與連線分開。"
     "【ID 一致性】節點 ID 只用純英文短代號（如 `ED1`），ID 本身絕不加引號（中文只放在引號 label 裡）；"
     "同一個節點在「宣告、連線、style」三處必須用『完全相同』的 ID，否則 Mermaid 會把它們當成不同節點而產生重複/懸空節點，且 style 會綁定失敗。"
@@ -96,34 +96,35 @@ _LANG_MATCH_RULE = (
 # Per-kind syntax guidance (the generic rules above aren't enough for mindmap).
 _MERMAID_HINTS = {
     "mindmap": "mindmap 語法：第一行 `mindmap`,再用**縮排**表示階層,根節點寫 `root((主題))`（不加引號）,"
-               "子節點每行一個、用縮排表示層級（如 `    分支A`、`      子項`）。不要用 `-->` 箭頭。",
+    "子節點每行一個、用縮排表示層級（如 `    分支A`、`      子項`）。不要用 `-->` 箭頭。",
     "timeline": "timeline 語法：第一行 `timeline`,接 `title 標題`,然後每段寫 `時期 : 事件 : 事件`。",
     "quadrant": "quadrantChart 語法：第一行 `quadrantChart`,設 `x-axis`、`y-axis`、四個 `quadrant-1..4`,"
-                "再以 `\"點名\": [x, y]`（0~1）放點。",
-    "concept_map": "節點間用帶標籤的邊表達關係,如 `A[\"概念\"] -->|\"關係\"| B[\"概念\"]`。請根據內容結構決定方向：並行分支多或文字長時強烈建議使用 LR 以收斂左右寬度。",
-    "flowchart": "箭頭 `-->` 表流程/因果,需要分組時用 `subgraph \"群組\" ... end`。請根據內容結構決定方向：並行分支多或文字長時強烈建議使用 LR 以收斂左右寬度。",
+    '再以 `"點名": [x, y]`（0~1）放點。',
+    "concept_map": '節點間用帶標籤的邊表達關係,如 `A["概念"] -->|"關係"| B["概念"]`。請根據內容結構決定方向：並行分支多或文字長時強烈建議使用 LR 以收斂左右寬度。',
+    "flowchart": '箭頭 `-->` 表流程/因果,需要分組時用 `subgraph "群組" ... end`。請根據內容結構決定方向：並行分支多或文字長時強烈建議使用 LR 以收斂左右寬度。',
     "sequence_diagram": "sequenceDiagram 語法：第一行 `sequenceDiagram`,參與者用 `participant A`，訊息用 `A->>B: 訊息`，可搭配 `Note over A,B: 說明`。",
-    "state_diagram": "stateDiagram-v2 語法：第一行 `stateDiagram-v2` (若需要左右排版可加 `direction LR`)。起點與終點用 `[*]`。轉移如 `A --> B : 條件`。【重要優化】1. 引入狀態 ID：為所有節點定義純英文 ID (如 `state \"中文\" as CHMM_Model`)，確保跨層級連接穩定。2. 符號視覺優化：將文字敘述的 gamma, xi, theta, delta 等改為實際符號 γ, ξ, θ, Δ，將 10^-4 寫作 10⁻⁴。3. 結構封裝：明確定義複合狀態內的起始與結束關聯 `[*]`，避免游離節點。",
+    "state_diagram": 'stateDiagram-v2 語法：第一行 `stateDiagram-v2` (若需要左右排版可加 `direction LR`)。起點與終點用 `[*]`。轉移如 `A --> B : 條件`。【重要優化】1. 引入狀態 ID：為所有節點定義純英文 ID (如 `state "中文" as CHMM_Model`)，確保跨層級連接穩定。2. 符號視覺優化：將文字敘述的 gamma, xi, theta, delta 等改為實際符號 γ, ξ, θ, Δ，將 10^-4 寫作 10⁻⁴。3. 結構封裝：明確定義複合狀態內的起始與結束關聯 `[*]`，避免游離節點。',
     "user_journey": "journey 語法：第一行 `journey`,標題 `title ...`,區段 `section ...`,步驟寫法為 `任務名稱: 分數: 角色`,例如 `逛商品: 5: User`（分數1~5）。",
     "gantt_chart": "gantt 語法：第一行 `gantt`,接 `title ...` 與 `dateFormat YYYY-MM-DD`，區段用 `section 名稱`，任務為 `任務名 :狀態, ID, 開始日, 結束日`。",
-    "pie_chart": "pie 語法：第一行 `pie title 標題`,每行寫 `\"類別\" : 數值`（數值必須是純數字）。",
+    "pie_chart": 'pie 語法：第一行 `pie title 標題`,每行寫 `"類別" : 數值`（數值必須是純數字）。',
     "sankey_diagram": "sankey-beta 語法：第一行 `sankey-beta`,每行寫 `來源節點, 目標節點, 數值`，如 `A, B, 10`。不要用雙引號包住節點名稱。",
-    "xy_chart": "xychart-beta 語法：第一行 `xychart-beta`，接著 `title \"標題\"`，定義 `x-axis [...]` 和 `y-axis \"標籤\" 區間`，最後加 `bar [...]` 或 `line [...]`。",
+    "xy_chart": 'xychart-beta 語法：第一行 `xychart-beta`，接著 `title "標題"`，定義 `x-axis [...]` 和 `y-axis "標籤" 區間`，最後加 `bar [...]` 或 `line [...]`。',
     "block_diagram": "block-beta 語法：第一行 `block-beta`，可用 `columns 數量` 定義排版，接著寫節點名稱。不要用雙引號包住節點。",
-    "c4_diagram": "C4Context 語法：使用 `Person(alias, \"Label\")`、`System(alias, \"Label\")` 與 `Rel(from, to, \"Label\")` 等巨集指令。",
+    "c4_diagram": 'C4Context 語法：使用 `Person(alias, "Label")`、`System(alias, "Label")` 與 `Rel(from, to, "Label")` 等巨集指令。',
     "class_diagram": "classDiagram 語法：第一行 `classDiagram`，使用 `class 類別名 { ... }` 或是 `類別A <|-- 類別B` 來表示繼承。",
     "er_diagram": "erDiagram 語法：第一行 `erDiagram`，實體關聯用 `實體1 ||--o{ 實體2 : 關係標籤` 等語法。",
     "ontology": (
         "ontology（本體論）語法：用 classDiagram 的符號表達領域本體，第一行寫 `classDiagram`。"
-        "節點 ID 一律純英文，概念名稱放在標籤裡，如 `class Animal[\"動物\"]`。"
-        "【宣告規則】每個類別只在最上方用 `class 類別名[\"標籤\"]` 宣告一次（不可重複宣告同一類別）；"
-        "關係行只准放純類別 ID，絕對不要在關係行裡寫 `[\"標籤\"]`（如 `A *-- B[\"乙\"]` 是錯的，B 的標籤要寫在它自己的 `class B[\"乙\"]` 宣告）。"
+        '節點 ID 一律純英文，概念名稱放在標籤裡，如 `class Animal["動物"]`。'
+        '【宣告規則】每個類別只在最上方用 `class 類別名["標籤"]` 宣告一次（不可重複宣告同一類別）；'
+        '關係行只准放純類別 ID，絕對不要在關係行裡寫 `["標籤"]`（如 `A *-- B["乙"]` 是錯的，B 的標籤要寫在它自己的 `class B["乙"]` 宣告）。'
         "請務必依語意選用「不同」的箭頭區分四種關係，切勿全部用同一種線："
         "① is-a／子類別 (subClassOf)：用空心三角繼承箭頭 `Superclass <|-- Subclass`（例：`Animal <|-- Dog`），這是唯一用來表達分類階層的符號；"
         "② part-of／組成：用組合菱形 `Whole *-- Part : part-of`；"
-        "③ 物件屬性／一般語意關係 (object property)：用帶標籤的實線關聯 `ClassA --> ClassB : 關係名稱`，必要時加基數如 `ClassA \"1\" --> \"*\" ClassB : owns`；"
-        "④ 個體／實例 (instance-of)：個體用 stereotype 標註 `class Fido { <<個體>> }`，再用虛線依賴 `Fido ..> Dog : instance-of` 連到其類別。"
-        "大括號 `{}` 只在需要放 stereotype（如 `<<個體>>`）或資料屬性時才加；若沒有內容就完全省略大括號，不要留空的或殘缺的 `{}`。"
+        '③ 物件屬性／一般語意關係 (object property)：用帶標籤的實線關聯 `ClassA --> ClassB : 關係名稱`，必要時加基數如 `ClassA "1" --> "*" ClassB : owns`；'
+        "④ 個體／實例 (instance-of)：個體用 stereotype 標註 `class Fido { <<instance>> }`（stereotype 一律用英文，"
+        "mermaid 的 `<<>>` 註解不支援中文，寫成 `<<個體>>` 會導致語法錯誤），再用虛線依賴 `Fido ..> Dog : instance-of` 連到其類別。"
+        "大括號 `{}` 只在需要放 stereotype（如 `<<instance>>`）或資料屬性時才加；若沒有內容就完全省略大括號，不要留空的或殘缺的 `{}`。"
         "資料屬性 (data property) 寫在 class 內部，如 `Animal : +name string`。"
         "目標是讓階層、組成、屬性、個體在圖上一眼可辨，而非畫成扁平的概念網。"
     ),
@@ -139,10 +140,15 @@ _ONTOLOGY_PRIORITY = (
 
 
 def _build_classify_system(limit: int, exclude_types: set[str] | None = None) -> str:
-    allowed_types = {k: v for k, v in ARTIFACT_TYPES.items() if not exclude_types or k not in exclude_types}
+    allowed_types = {
+        k: v for k, v in ARTIFACT_TYPES.items() if not exclude_types or k not in exclude_types
+    }
     try:
         from core.config import settings
-        ontology_bias = bool(getattr(settings, "ONTOLOGY_BIAS", False)) and "ontology" in allowed_types
+
+        ontology_bias = (
+            bool(getattr(settings, "ONTOLOGY_BIAS", False)) and "ontology" in allowed_types
+        )
     except Exception:
         ontology_bias = False
     priority_clause = _ONTOLOGY_PRIORITY if ontology_bias else ""
@@ -151,17 +157,21 @@ def _build_classify_system(limit: int, exclude_types: set[str] | None = None) ->
         f"並依適合度排序(最適合在前),最多回{limit}種。\n"
         "選項（type 只能用下列之一）：\n"
         + "\n".join(f"- {k}：{v}" for k, v in allowed_types.items())
-        + "\n\n回 JSON：{\"ranked\": [{\"type\": \"<上列之一>\", \"confidence\": <0-1>, "
-        "\"reason\": \"<一句話為什麼>\"}, ...]}（依適合度排序,1~" + str(limit) + " 項）\n"
-        "重要：內容若沒有清楚的結構,ranked 只放一項 type=\"none\"——寧可不產圖,也不要硬湊誤導的圖。"
-        "多種產物要呈現不同的認知切面(例如流程 vs 階層),不要選本質相同的。"
-        + priority_clause
+        + '\n\n回 JSON：{"ranked": [{"type": "<上列之一>", "confidence": <0-1>, '
+        '"reason": "<一句話為什麼>"}, ...]}（依適合度排序,1~' + str(limit) + " 項）\n"
+        '重要：內容若沒有清楚的結構,ranked 只放一項 type="none"——寧可不產圖,也不要硬湊誤導的圖。'
+        "多種產物要呈現不同的認知切面(例如流程 vs 階層),不要選本質相同的。" + priority_clause
     )
+
 
 _MERMAID_BLOCK_RE = re.compile(r"```mermaid.*?```", re.DOTALL)
 
 
-_NONE_RESULT = {"type": "none", "confidence": 0.0, "reason": "classification failed or unstructured"}
+_NONE_RESULT = {
+    "type": "none",
+    "confidence": 0.0,
+    "reason": "classification failed or unstructured",
+}
 
 
 def _coerce_choice(raw) -> dict | None:
@@ -178,24 +188,30 @@ def _coerce_choice(raw) -> dict | None:
     }
 
 
-def classify_structures(llm, content: str, *, limit: int = 2, exclude_types: set[str] | None = None) -> list[dict]:
+def classify_structures(
+    llm, content: str, *, limit: int = 2, exclude_types: set[str] | None = None
+) -> list[dict]:
     """Return a ranked list (1..limit) of {type, confidence, reason}.
 
     Accepts both the ranked shape `{"ranked": [...]}` and the legacy single
     `{"type": ...}` (kept so callers/tests passing a single dict still work).
     Drops `none` once any real structure is present, dedups by type, and
     fail-opens to `[none]`."""
-    parsed = llm._complete_json(
-        kind="object",
-        system_prompt=_build_classify_system(limit, exclude_types),
-        user_msg=content[:6000],
-        temperature=0.0,
-        trace_context={"stage": "artifact_classify", "metadata": {}},
-    ) if hasattr(llm, "_complete_json") else {}
+    parsed = (
+        llm._complete_json(
+            kind="object",
+            system_prompt=_build_classify_system(limit, exclude_types),
+            user_msg=content[:6000],
+            temperature=0.0,
+            trace_context={"stage": "artifact_classify", "metadata": {}},
+        )
+        if hasattr(llm, "_complete_json")
+        else {}
+    )
 
     if isinstance(parsed, dict) and isinstance(parsed.get("ranked"), list):
         raw_choices = parsed["ranked"]
-    elif isinstance(parsed, dict) and "type" in parsed:   # legacy single-pick
+    elif isinstance(parsed, dict) and "type" in parsed:  # legacy single-pick
         raw_choices = [parsed]
     else:
         raw_choices = []
@@ -222,8 +238,10 @@ def classify_structure(llm, content: str) -> dict:
 
 
 def _render_table(llm, content: str) -> str:
-    sys = ("把內容整理成**一個 Markdown 比較表格**,欄是比較維度、列是被比較的對象。"
-           "只輸出表格本身,不要前後說明。維度要能凸顯差異。" + _LANG_MATCH_RULE)
+    sys = (
+        "把內容整理成**一個 Markdown 比較表格**,欄是比較維度、列是被比較的對象。"
+        "只輸出表格本身,不要前後說明。維度要能凸顯差異。" + _LANG_MATCH_RULE
+    )
     return llm.complete(sys, content[:6000], temperature=0.2, stage="artifact_table").strip()
 
 
@@ -236,7 +254,7 @@ def _render_mermaid(llm, content: str, kind: str) -> str:
         rules = f"{_MERMAID_RULES_QUOTED} {_MERMAID_RULES_COMMON}"
     else:
         rules = _MERMAID_RULES_COMMON
-    sys = (f"把內容畫成一個 Mermaid **{kind}**（以 `{header}` 開頭）。{hint} {rules} {_LANG_MATCH_RULE}")
+    sys = f"把內容畫成一個 Mermaid **{kind}**（以 `{header}` 開頭）。{hint} {rules} {_LANG_MATCH_RULE}"
     raw = llm.complete(sys, content[:6000], temperature=0.2, stage=f"artifact_{kind}")
     # Repair common issues (fences, label quotes, arrows) via the existing
     # quality checker, then validate the diagram is actually the requested kind.
@@ -252,18 +270,21 @@ def _validate_mermaid(block: str, kind: str) -> bool:
     Catches 'asked for mindmap, got flowchart' and empty/garbage blocks. Not a
     full Mermaid parser — header keyword + non-trivial body."""
     inner = block.strip()
-    inner = inner[inner.find("\n") + 1:] if "\n" in inner else ""   # drop ```mermaid fence line
-    inner = inner.rsplit("```", 1)[0].strip()                       # drop closing fence
+    inner = inner[inner.find("\n") + 1 :] if "\n" in inner else ""  # drop ```mermaid fence line
+    inner = inner.rsplit("```", 1)[0].strip()  # drop closing fence
     lines = [ln for ln in inner.splitlines() if ln.strip()]
-    if len(lines) < 2:                                              # header + ≥1 content line
+    if len(lines) < 2:  # header + ≥1 content line
         return False
-    expected = _MERMAID_KIND[kind].split()[0].lower()              # flowchart/mindmap/timeline/quadrantchart/graph
+    expected = (
+        _MERMAID_KIND[kind].split()[0].lower()
+    )  # flowchart/mindmap/timeline/quadrantchart/graph
     if not lines[0].strip().lower().startswith(expected):
         return False
     # An ontology with no relationship edges is just a disconnected node dump
     # (degenerate — the whole point is the typed relations). Require ≥1 edge.
     if kind == "ontology" and not any(
-        tok in inner for tok in ("<|--", "*--", "o--", "-->", "..>", "..|>", "<..", "--|>", "--*", "--o")
+        tok in inner
+        for tok in ("<|--", "*--", "o--", "-->", "..>", "..|>", "<..", "--|>", "--*", "--o")
     ):
         return False
     return True
@@ -279,6 +300,7 @@ def _render_for_type(llm, content: str, t: str) -> str:
         if t == "argument_map":
             from core.config import settings
             from services.argument_map import build_argument_map, render_argument_map
+
             return render_argument_map(
                 build_argument_map(llm, content), with_mermaid=settings.ARGUMENT_MAP_MERMAID
             )
@@ -308,7 +330,9 @@ def build_artifact(llm, content: str, *, forced_type: str | None = None) -> dict
     return {"type": t, "reason": chosen.get("reason", ""), "artifact": artifact}
 
 
-def build_artifacts(llm, content: str, *, limit: int = 2, exclude_types: set[str] | None = None) -> list[dict]:
+def build_artifacts(
+    llm, content: str, *, limit: int = 2, exclude_types: set[str] | None = None
+) -> list[dict]:
     """Classify into a ranked top-`limit` → render each → keep the ones that
     produced a real artifact. Returns a list of {type, reason, artifact} (may
     be empty). Used by the auto-attach path to surface complementary views."""
@@ -325,7 +349,9 @@ def build_artifacts(llm, content: str, *, limit: int = 2, exclude_types: set[str
     return results
 
 
-def maybe_artifact_section(llm, content: str, *, limit: int = 2, exclude_types: set[str] | None = None) -> str:
+def maybe_artifact_section(
+    llm, content: str, *, limit: int = 2, exclude_types: set[str] | None = None
+) -> str:
     """One or more '## 🖼️ 學習輔助（type）' sections for `content` (the top-`limit`
     complementary views), or '' when disabled / unstructured / all renders fail.
     Gated by Scripture's `visual_router` — this is the AUTO-attach to
@@ -334,6 +360,7 @@ def maybe_artifact_section(llm, content: str, *, limit: int = 2, exclude_types: 
     a daemon restart. Returns '' (and makes zero LLM calls) when off, so callers
     stay byte-identical by default. Fail-open."""
     from core.config import settings
+
     if not settings.VISUAL_ROUTER_ENABLED:
         return ""
     try:
@@ -341,6 +368,4 @@ def maybe_artifact_section(llm, content: str, *, limit: int = 2, exclude_types: 
     except Exception as e:
         logging.warning(f"learning_artifacts: auto-attach failed: {e}")
         return ""
-    return "".join(
-        f"## 🖼️ 學習輔助（{r['type']}）\n\n{r['artifact']}\n\n" for r in results
-    )
+    return "".join(f"## 🖼️ 學習輔助（{r['type']}）\n\n{r['artifact']}\n\n" for r in results)
