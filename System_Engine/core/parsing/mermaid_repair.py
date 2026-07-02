@@ -459,6 +459,14 @@ _SUBGRAPH_ASCII_MALFORMED_RE = re.compile(
     r"^(\s*)sub(?:\s+|sub)+graph\b(.*)$",
     re.IGNORECASE,
 )
+# CJK INSERTED into the keyword while `graph` survives: `sub議subgraph "t"`
+# (distinct from _SUBGRAPH_BROKEN_RE, where CJK REPLACES `graph`). Requires a
+# non-ASCII char between `sub` and a surviving `graph`, so a valid `subgraph`
+# (no junk between) and pure-ASCII ids like `subprocess_graph` never match.
+_SUBGRAPH_CJK_INJECTED_RE = re.compile(
+    r"^(\s*)sub\S*[^\x00-\x7F]\S*graph\b(.*)$",
+    re.IGNORECASE,
+)
 
 
 def repair_mermaid_subgraph_keyword(text: str) -> tuple[str, list[dict]]:
@@ -495,6 +503,10 @@ def repair_mermaid_subgraph_keyword(text: str) -> tuple[str, list[dict]]:
             m = _SUBGRAPH_BROKEN_RE.match(line)
             if m:
                 new_line = f"{m.group(1)}subgraph {m.group(3)}"
+            elif c := _SUBGRAPH_CJK_INJECTED_RE.match(line):
+                # `sub議subgraph "t"` — CJK inserted, `graph` survives; group(2)
+                # is the title tail (leading space already inside it).
+                new_line = f"{c.group(1)}subgraph{c.group(2)}"
             else:
                 a = _SUBGRAPH_ASCII_MALFORMED_RE.match(line)
                 new_line = f"{a.group(1)}subgraph{a.group(2)}" if a else line

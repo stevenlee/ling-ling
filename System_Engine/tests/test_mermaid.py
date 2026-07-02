@@ -555,6 +555,22 @@ class TestSubgraphRepair:
         assert '  subgraph SG["Group A"]' in result
         assert not fixes
 
+    def test_repairs_cjk_injected_keyword(self):
+        # Real regression (Non-Invasive Stitched): `sub議subgraph "t"` — a CJK
+        # char inserted while `graph` survives (distinct from CJK REPLACING
+        # graph). Broke the diagram (unbalanced subgraph/end).
+        result, fixes = self._repair('graph TD\n    sub議subgraph "編碼器架構 (Encoder)"\n    end')
+        assert '    subgraph "編碼器架構 (Encoder)"' in result
+        assert "議" not in result
+        assert any(f["type"] == "repaired_mermaid_subgraph_keyword" for f in fixes)
+
+    def test_ascii_id_with_graph_substring_untouched(self):
+        # `subprocess_graph` is a valid node id — the CJK-injected rule must not
+        # fire (it requires a non-ASCII char between sub and graph).
+        result, fixes = self._repair('graph TD\n    subprocess_graph["node"]')
+        assert 'subprocess_graph["node"]' in result
+        assert not fixes
+
 
 # ── Quoted-id cross-reference consistency ──────────────────────────
 
