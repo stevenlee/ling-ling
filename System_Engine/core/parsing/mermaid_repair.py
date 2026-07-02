@@ -147,6 +147,15 @@ _CLASSDIAGRAM_STEREOTYPE_BODY_RE = re.compile(
     r'^(\s*)(?:class\s+)?([A-Za-z_]\w*)\s*(\["[^"\n]*"\]|\[[^\]\n]*\])?\s*\{\s*(<<[^<>]+>>)\s*\}\s*$'
 )
 
+# A fullwidth period `．` (U+FF0E) the LLM injects into an ASCII class id —
+# `DreamBooth ..> ImageDiffusion．Model` — is a lexical error (mermaid ids are
+# `\w`). Removing it rejoins the token (`ImageDiffusionModel`), which matches
+# how these single-token CamelCase ids are declared. Only stripped between word
+# characters and OUTSIDE quoted labels / the `: relationship-label` tail (see
+# _strip_fullwidth_id_period), so CJK label text keeps its punctuation.
+_FULLWIDTH_ID_PERIOD_RE = re.compile(r"(?<=\w)．(?=\w)")
+_QUOTED_LABEL_SPLIT_RE = re.compile(r'("[^"\n]*")')
+
 # A LaTeX `\r…` command (\rightarrow, \rangle, …) emitted in under-escaped JSON
 # decodes to a carriage-return CONTROL char + the suffix, not a literal `\r`.
 
@@ -1226,6 +1235,17 @@ def repair_mermaid_quadrant_points(text: str) -> tuple[str, list[dict]]:
 # ─── Mermaid: classDiagram structural repair ──────────────────────────
 
 
+def _strip_fullwidth_id_period(line: str) -> str:
+    """Remove fullwidth-period corruption from id positions of a classDiagram
+    line: the part before a ` : ` relationship label, and outside `"…"` labels.
+    CJK label text (quoted, or in the relationship label) keeps its `．`."""
+    head, sep, tail = line.partition(" : ")
+    parts = _QUOTED_LABEL_SPLIT_RE.split(head)  # quoted segments land at odd indices
+    for i in range(0, len(parts), 2):
+        parts[i] = _FULLWIDTH_ID_PERIOD_RE.sub("", parts[i])
+    return "".join(parts) + sep + tail
+
+
 def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str], list[dict]]:
     """Fix two structural faults inside one ``classDiagram`` fence body.
 
@@ -1262,6 +1282,23 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
             )
         normalized.append(fixed)
     body = normalized
+
+    # Strip fullwidth-period corruption from id positions (`ImageDiffusion．Model`
+    # → `ImageDiffusionModel`) — a mermaid lexical error otherwise.
+    depunct: list[str] = []
+    for offset, ln in enumerate(body):
+        fixed = _strip_fullwidth_id_period(ln)
+        if fixed != ln:
+            fixes.append(
+                _make_fix(
+                    "stripped_fullwidth_id_period",
+                    line=base_line + offset,
+                    before=ln,
+                    after=fixed,
+                )
+            )
+        depunct.append(fixed)
+    body = depunct
 
     # Convert inline stereotype bodies (`Id { <<instance>> }`, often missing the
     # required `class` keyword) to the canonical standalone form

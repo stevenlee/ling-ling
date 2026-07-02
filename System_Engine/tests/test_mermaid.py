@@ -963,3 +963,25 @@ class TestClassDiagramRepair:
         assert "<<Infrastructure>> Repo" in result
         assert not any(f["type"] == "normalized_class_annotation" for f in fixes)
         assert any(f["type"] == "standalone_class_stereotype" for f in fixes)
+
+    def test_fullwidth_period_in_id_stripped(self):
+        # Real regression (High-Resolution Video Synthesis Part 1): a fullwidth
+        # period `．` (U+FF0E) injected into an ASCII class id — a mermaid
+        # lexical error. Removing it rejoins the token to match the declaration.
+        body = (
+            "classDiagram\n"
+            '    class ImageDiffusionModel["圖像擴散模型"]\n'
+            "    DreamBooth ..> ImageDiffusion．Model : instance-of"
+        )
+        result, fixes = self._q(body)
+        assert "DreamBooth ..> ImageDiffusionModel : instance-of" in result
+        assert "．" not in result
+        assert any(f["type"] == "stripped_fullwidth_id_period" for f in fixes)
+
+    def test_fullwidth_period_in_label_preserved(self):
+        # `．` inside a quoted label or after `: ` (relationship-label text) is
+        # content, not an id — leave it alone.
+        body = 'classDiagram\n    class Ver["版本 2．0"]\n    A ..> B．C : 見說明．補充'
+        result, _ = self._q(body)
+        assert '["版本 2．0"]' in result  # quoted-label period kept
+        assert "A ..> BC : 見說明．補充" in result  # id period gone, label period kept
