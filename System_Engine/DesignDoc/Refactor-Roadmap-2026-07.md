@@ -1,5 +1,12 @@
 # Refactor Roadmap 2026-07 — 強韌・彈性・乾淨・效率
 
+> **STATUS：P0–P4 全部完成（2026-07-02，17 個 commit，`c83fc15..fc5b4a5`）。**
+> 成果：parser 2140→54(facade)、llm_client 2100→1462、prompt_watcher 567→248、
+> ingestion 1296→1038、rag_manager 1618→1080、insight_agent 1902→210；
+> golden bench 前後皆 1.000；mypy 豁免清單 43→36（只減不增契約持續有效）；
+> 測試 1191→1321。尚餘：7 個既存過期測試（獨立 task）、tension_agent._render 死碼裁決、
+> （選配）insight mixin→協作者、IngestResult 型別化。
+>
 > 基於 2026-07-02 的四份全面架構掃描（core 層／services 層／agents 層／watchers・tests・工具鏈）。
 > 專案規模：System_Engine 共 191 個 .py、約 48.5k 行；262 commits（2026-04 起）。
 
