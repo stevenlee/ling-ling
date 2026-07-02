@@ -1,6 +1,13 @@
 import logging
 import threading
+import time
 from pathlib import Path
+
+# A callback running longer than this gets a warning: while it runs, ALL idle
+# work (queued prompts, clippings, pumps) is blocked. Legitimate long passes
+# (daydream generation on a local model) can take minutes — the warning is a
+# breadcrumb for diagnosing a hung daemon, not an error.
+_SLOW_CALLBACK_SECONDS = 600.0
 
 
 class BusyState:
@@ -40,7 +47,10 @@ class BusyState:
             if not status:
                 try:
                     from core.ui import ui
-                    ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)
+
+                    ui.set_status(
+                        "Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False
+                    )
                 except Exception:
                     pass
             return
@@ -49,11 +59,21 @@ class BusyState:
             while True:
                 processed = 0
                 for cb in self._idle_callbacks:
+                    started = time.monotonic()
                     try:
                         result = cb()
                     except Exception as e:
                         logging.error(f"Idle callback error: {e}")
                         continue
+                    finally:
+                        elapsed = time.monotonic() - started
+                        if elapsed > _SLOW_CALLBACK_SECONDS:
+                            name = getattr(cb, "__qualname__", None) or repr(cb)
+                            logging.warning(
+                                f"Idle callback {name} ran {elapsed:.0f}s "
+                                f"(>{_SLOW_CALLBACK_SECONDS:.0f}s); it blocks all other "
+                                f"idle work (queued prompts/clippings/pumps) while running."
+                            )
                     if isinstance(result, int):
                         processed += result
                 if processed == 0:
@@ -64,7 +84,10 @@ class BusyState:
                 self._firing_callbacks = False
             try:
                 from core.ui import ui
-                ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)
+
+                ui.set_status(
+                    "Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False
+                )
             except Exception:
                 pass
 

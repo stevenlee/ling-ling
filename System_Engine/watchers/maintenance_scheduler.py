@@ -75,6 +75,7 @@ class MaintenanceScheduler(threading.Thread):
         def daily_insight() -> MaintenanceResult:
             # Shared with the daytime DaydreamPump — single generation path.
             from maintenance.daily_insight import run_daily_insight
+
             result = run_daily_insight(self.llm, self.rag)
             return MaintenanceResult(result.status, result.summary)
 
@@ -84,6 +85,7 @@ class MaintenanceScheduler(threading.Thread):
             # (no LLM), so no idle/dream-window gating — it should be ready for
             # the user during the day, not hidden in deep sleep.
             from maintenance.spaced_review import run_spaced_review
+
             result = run_spaced_review(self.llm, self.rag)
             return MaintenanceResult(result.status, result.summary)
 
@@ -95,6 +97,7 @@ class MaintenanceScheduler(threading.Thread):
 
         def retrieval_bench() -> MaintenanceResult:
             from core.config import BENCH_HISTORY_FILE, FACET_INDEX_ENABLED, FROM_LLM_DIR
+
             result = run_retrieval_bench(
                 self.rag,
                 ab_facets=FACET_INDEX_ENABLED,
@@ -105,6 +108,7 @@ class MaintenanceScheduler(threading.Thread):
 
         def bench_builder() -> MaintenanceResult:
             from maintenance.bench_builder import build_bench_cases
+
             result = build_bench_cases(self.rag, self.llm)
             return MaintenanceResult(result.status, result.message)
 
@@ -113,29 +117,40 @@ class MaintenanceScheduler(threading.Thread):
             if trace_store is None:
                 return MaintenanceResult("skipped", "No trace store associated with LLM client.")
             trace_store.prune_old()
-            return MaintenanceResult("succeeded", "SQLite trace logs pruned successfully.")
+            # P4: also retire runs stuck in 'running' for >24h (age-gated, so a
+            # live run is never touched) — previously orphans only got reaped
+            # at daemon startup and accumulated between restarts.
+            stale = trace_store.reap_stale_runs()
+            note = f" Reaped {stale} stale run(s)." if stale else ""
+            return MaintenanceResult("succeeded", f"SQLite trace logs pruned successfully.{note}")
 
         def cortex_consolidation() -> MaintenanceResult:
             from core.config import CORTEX_CONSOLIDATION_ENABLED
+
             if not CORTEX_CONSOLIDATION_ENABLED:
                 return MaintenanceResult("skipped", "Cortex consolidation disabled.")
             from maintenance.cortex_consolidation import run_consolidation
+
             result = run_consolidation(self.llm, self.rag)
             return MaintenanceResult(result.status, result.message)
 
         def cortex_decay() -> MaintenanceResult:
             from core.config import CORTEX_DECAY_ENABLED
+
             if not CORTEX_DECAY_ENABLED:
                 return MaintenanceResult("skipped", "Cortex decay disabled.")
             from maintenance.cortex_decay_pass import run_decay_pass
+
             result = run_decay_pass(self.llm, self.rag)
             return MaintenanceResult(result.status, result.message)
 
         def cortex_ledger() -> MaintenanceResult:
             from core.config import CORTEX_LEDGER_ENABLED
+
             if not CORTEX_LEDGER_ENABLED:
                 return MaintenanceResult("skipped", "Cortex ledger disabled.")
             from maintenance.cortex_ledger import run_ledger_pass
+
             result = run_ledger_pass(self.llm, self.rag)
             return MaintenanceResult(result.status, result.message)
 
@@ -153,6 +168,7 @@ class MaintenanceScheduler(threading.Thread):
 
         def template_audit() -> MaintenanceResult:
             from maintenance.template_audit import run_template_audit
+
             result = run_template_audit()
             return MaintenanceResult(result.status, result.message)
 
@@ -161,6 +177,7 @@ class MaintenanceScheduler(threading.Thread):
             if trace_store is None:
                 return MaintenanceResult("skipped", "No trace store associated with LLM client.")
             from maintenance.routing_report import run_routing_report
+
             result = run_routing_report(trace_store)
             return MaintenanceResult(result.status, result.message)
 
@@ -169,6 +186,7 @@ class MaintenanceScheduler(threading.Thread):
             if trace_store is None:
                 return MaintenanceResult("skipped", "No trace store associated with LLM client.")
             from maintenance.weekly_memoir import run_weekly_memoir
+
             result = run_weekly_memoir(trace_store)
             return MaintenanceResult(result.status, result.message)
 
@@ -177,6 +195,7 @@ class MaintenanceScheduler(threading.Thread):
             # echo-chamber signature. Reports "insufficient" until F1 is enabled
             # and grounded insights accumulate — harmless to run meanwhile.
             from maintenance.echo_canary import run_echo_canary
+
             result = run_echo_canary()
             return MaintenanceResult("succeeded", f"[{result.status}] {result.message}")
 
@@ -185,9 +204,11 @@ class MaintenanceScheduler(threading.Thread):
             # auto-rollback. No-op (and no state write) unless AUTOTUNE_ENABLED
             # and a knob's metric has enough samples.
             from core.config import AUTOTUNE_ENABLED
+
             if not AUTOTUNE_ENABLED:
                 return MaintenanceResult("skipped", "AUTOTUNE_ENABLED 為關閉。")
             from maintenance.autotune import run_autotune
+
             result = run_autotune()
             return MaintenanceResult(result.status, result.message)
 
@@ -201,16 +222,20 @@ class MaintenanceScheduler(threading.Thread):
             if trace_store is None:
                 return MaintenanceResult("skipped", "No trace store associated with LLM client.")
             from maintenance.self_assessment import run_self_assessment
+
             result = run_self_assessment(trace_store)
             msg = result.message
             from core.config import SELF_DIAGNOSIS_ENABLED, SELF_IMPROVE_ENABLED
+
             if SELF_DIAGNOSIS_ENABLED:
                 from maintenance.self_diagnosis import run_self_diagnosis
+
                 dx = run_self_diagnosis(self.llm, result)
                 msg = f"{msg} ｜ 診斷：{dx.message}"
                 # M3: auto-generate revision proposals (queued, never applied).
                 if SELF_IMPROVE_ENABLED:
                     from maintenance.self_improve import run_self_improve
+
                     imp = run_self_improve(self.llm, result, dx)
                     msg = f"{msg} ｜ 提案：{imp.message}"
             return MaintenanceResult(result.status, msg)
@@ -219,9 +244,9 @@ class MaintenanceScheduler(threading.Thread):
             from services.tag_optimizer import TagOptimizer
             from core.config import PAGES_DIR, NOTES_DIR
             from core.parser import parse_markdown_metadata
-            
+
             optimizer = TagOptimizer(self.llm)
-            
+
             processed = 0
             for directory in [PAGES_DIR, NOTES_DIR]:
                 if directory.exists():
@@ -236,7 +261,7 @@ class MaintenanceScheduler(threading.Thread):
                             success = optimizer.generate_and_optimize(filepath)
                             if success:
                                 processed += 1
-                                
+
             return MaintenanceResult("succeeded", f"Auto-tagged {processed} unprocessed notes.")
 
         return [
@@ -520,7 +545,8 @@ class MaintenanceScheduler(threading.Thread):
             # failure took 30 minutes of cross-referencing the trace DB
             # because the original log line dropped the stack entirely.
             logging.exception(
-                "MaintenanceScheduler: task %s failed", task.name,
+                "MaintenanceScheduler: task %s failed",
+                task.name,
             )
         finally:
             with self._state_lock:

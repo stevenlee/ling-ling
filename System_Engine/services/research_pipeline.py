@@ -122,6 +122,14 @@ class ResearchPipeline:
             tables = soup.find_all("table", class_="listing_table")
 
             results = []
+            if not tables:
+                # HTTP 200 with no listing_table: either genuinely zero hits or
+                # FPO changed its HTML. Leave a breadcrumb — this used to return
+                # [] silently, which made structure changes look like no-results.
+                logging.warning(
+                    f"FPO returned HTTP 200 for '{keyword}' but no listing_table was "
+                    f"found — zero results, or the page structure changed."
+                )
             if tables:
                 rows = tables[0].find_all("tr")
                 # Skip header row and limit results

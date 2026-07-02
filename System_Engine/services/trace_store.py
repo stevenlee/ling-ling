@@ -76,6 +76,26 @@ class TraceStore:
             )
             return cur.rowcount
 
+    def reap_stale_runs(self, max_age_hours: float = 24.0) -> int:
+        """Periodic variant of reap_orphan_runs, safe while the daemon is LIVE.
+
+        Only retires 'running' rows older than ``max_age_hours`` — a genuinely
+        active run is never that old, so this can run from the maintenance
+        scheduler without the startup-only restriction (P4: previously orphans
+        accumulated between restarts). Returns the count.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE runs SET status='interrupted', ended_at=?, "
+                "error=COALESCE(error, 'stale: still running after 24h') "
+                "WHERE status='running' AND started_at < ?",
+                (_utc_now(), cutoff),
+            )
+            return cur.rowcount
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=10.0)
         conn.row_factory = sqlite3.Row
@@ -182,9 +202,7 @@ class TraceStore:
                 conn.execute("ALTER TABLE runs ADD COLUMN parent_run_id TEXT")
             except sqlite3.OperationalError:
                 pass  # column already exists
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id)"
-            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id)")
 
     @contextlib.contextmanager
     def run(
@@ -416,9 +434,11 @@ class TraceStore:
 
     @staticmethod
     def _since_cutoff(days: int) -> str:
-        return (datetime.now(UTC) - timedelta(days=days)).isoformat(
-            timespec="milliseconds"
-        ).replace("+00:00", "Z")
+        return (
+            (datetime.now(UTC) - timedelta(days=days))
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
 
     def query_artifacts(self, artifact_type: str, since_days: int = 7) -> list[dict]:
         """Fetch artifacts of one type within the window, metadata parsed.
@@ -465,8 +485,6 @@ class TraceStore:
                 record["metadata"] = {}
             out.append(record)
         return out
-
-
 
     def query_all_artifacts(self, since_days: int = 7) -> list[dict]:
         """All artifacts in the window regardless of type, metadata parsed.
@@ -572,9 +590,11 @@ class TraceStore:
     def prune_old(self) -> None:
         if self.retention_days <= 0:
             return
-        cutoff = (datetime.now(UTC) - timedelta(days=self.retention_days)).isoformat(
-            timespec="milliseconds"
-        ).replace("+00:00", "Z")
+        cutoff = (
+            (datetime.now(UTC) - timedelta(days=self.retention_days))
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
         try:
             with self._connect() as conn:
                 conn.execute("DELETE FROM retrieval_events WHERE ts < ?", (cutoff,))

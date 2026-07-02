@@ -86,9 +86,14 @@ def test_scheduler_persists_state_across_instances(tmp_path):
 class MockTraceStore:
     def __init__(self):
         self.pruned = False
+        self.stale_reaped = False
 
     def prune_old(self):
         self.pruned = True
+
+    def reap_stale_runs(self, max_age_hours: float = 24.0) -> int:
+        self.stale_reaped = True
+        return 0
 
 
 class MockLLMForDefaultTasks:
