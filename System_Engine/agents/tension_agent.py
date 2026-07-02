@@ -26,8 +26,12 @@ class TensionAgent(BaseAgent):
             "thin_evidence": len(report.thin_evidence),
             "falsified": len(report.falsified),
         }
+        # be58079 swapped _render(report) for report.format_markdown() here —
+        # but TensionReport never had that method, so @ling-tensions crashed
+        # with AttributeError from 2026-06-28 until this fix. _render is the
+        # real renderer (and what test_cortex_tensions pins).
         _, full_markdown = self._write_report(
-            "Tensions", report.format_markdown(), "ctx-tension", counts
+            "Tensions", self._render(report), "ctx-tension", counts
         )
         flagged = sum(counts.values())
         ui.success(f"💬 張力掃描完成：{flagged} 處（{report.total_pages} 頁）→ fromLingLing/")

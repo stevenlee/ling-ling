@@ -410,7 +410,7 @@ class TestPlannerPreview:
         )
 
         assert "planner_mode: preview" in full_markdown
-        assert "type: report_insight_planner_preview" in full_markdown
+        assert "type: ins-plan-pre" in full_markdown
         assert "Planner mode preview contains a validated recommended plan" in full_markdown
         assert "## Readiness Check" in full_markdown
         assert "## Preview Handoff" in full_markdown
@@ -444,7 +444,7 @@ class TestPlannerPreview:
 
         assert "execute_requested: true" in full_markdown
         assert "planner_mode: execute" in full_markdown
-        assert "type: report_insight_planner_execute" in full_markdown
+        assert "type: ins-plan-exe" in full_markdown
         assert "execution_status: succeeded" in full_markdown
         assert "finality_status: critique_only" in full_markdown
         assert "## Execution Result" in full_markdown

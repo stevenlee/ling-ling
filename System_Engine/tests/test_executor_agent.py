@@ -274,7 +274,7 @@ class TestExecutorExecute:
         assert len(llm.critique_calls) == 1
         # Report metadata captures status and pipeline_run_id
         write = agent._writes[0]
-        assert write["report_type"] == "executor_run"
+        assert write["report_type"] == "cmd"
         assert write["metadata"]["plan_id"] == "happy"
         assert write["metadata"]["execution_status"] == "succeeded"
         # Status for each step

@@ -224,7 +224,7 @@ class TestPromptWatcherBrainOps:
 
         assert len(calls) == 1  # ran the real maintenance fn
         reports = list(out.iterdir())
-        assert reports and "admin-rpt" in reports[0].name
+        assert reports and "sys-admin" in reports[0].name
         assert "2 new claim(s)" in reports[0].read_text(encoding="utf-8")
 
     def test_resynthesize_copies_source_and_images_into_consolidate(self, monkeypatch, tmp_path):

@@ -4,7 +4,7 @@ import os
 
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
-from services.cortex_tensions import scan_tensions
+from services.cortex_tensions import TensionReport, scan_tensions
 from services.cortex_store import CortexPage, make_claim_id, save_cortex_page
 
 
@@ -124,3 +124,31 @@ def test_agent_render_no_tensions(tmp_path):
     agent = TensionAgent.__new__(TensionAgent)
     body = agent._render(TensionReport(total_pages=3))
     assert "沒有偵測到張力" in body
+
+
+def test_execute_renders_and_writes_report(monkeypatch, tmp_path):
+    """Pin the whole execute() path — the format_markdown AttributeError that
+    broke @ling-tensions for four days lived exactly in this gap (only
+    _render was unit-tested; nothing exercised execute())."""
+    import agents.tension_agent as ta
+
+    r = TensionReport(total_pages=2)
+    r.dogmatic.append(_page(tmp_path, "unfalsifiable but confident", confidence=0.9))
+    monkeypatch.setattr(ta, "scan_tensions", lambda d: r)
+
+    agent = ta.TensionAgent.__new__(ta.TensionAgent)
+    agent.llm = type("L", (), {"model": "stub"})()
+    agent.rag = None
+    agent.stats = {"input_chars": 0, "output_chars": 0}
+    writes = []
+
+    def fake_write(title, body, rtype, meta=None):
+        writes.append({"title": title, "body": body, "rtype": rtype, "meta": meta})
+        return None, body
+
+    agent._write_report = fake_write
+
+    out = agent.execute({})
+    assert writes and writes[0]["rtype"] == "ctx-tension"
+    assert "Cortex 知識張力" in out  # _render's header — the REAL renderer ran
+    assert writes[0]["meta"]["dogmatic"] == 1

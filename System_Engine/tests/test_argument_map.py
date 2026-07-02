@@ -75,7 +75,7 @@ def test_render_no_mermaid_by_default():
 
 def test_render_with_mermaid_appends_deterministic_graph():
     body = render_argument_map(_TOULMIN, with_mermaid=True)
-    assert "```mermaid" in body and "graph TD" in body
+    assert "```mermaid" in body and "graph LR" in body
     # grounds → solid edge to claim; warrants/rebuttals → dashed edges.
     assert "--> C" in body and "-. 未明說 .-> C" in body and "-. 挑戰 .-> C" in body
 

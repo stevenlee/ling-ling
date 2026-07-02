@@ -322,7 +322,7 @@ class TestPlannerExecute:
         assert "empty user directive" in body
         # _write_report still called (error report)
         assert len(agent._writes) == 1
-        assert agent._writes[0]["report_type"] == "planner_plan"
+        assert agent._writes[0]["report_type"] == "ins-plan"
 
     def test_no_capabilities_errors_out(self):
         agent = _planner(_FakeLLM(_FakeCapMgr([])))
@@ -366,7 +366,7 @@ class TestPlannerExecute:
         # Exactly one report was written
         assert len(agent._writes) == 1
         write = agent._writes[0]
-        assert write["report_type"] == "planner_plan"
+        assert write["report_type"] == "ins-plan"
         assert write["metadata"]["plan_id"] == "synth_then_crit"
         assert write["metadata"]["step_count"] == 2
         assert write["metadata"]["readiness_verdict"] in {"ready", "needs_review", "blocked"}
