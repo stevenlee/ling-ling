@@ -83,6 +83,13 @@ _MERMAID_BARE_ID_RE = re.compile(r"^[\w\-一-鿿]+$")
 # and `style`/`class` lines use, or the declaration and the edges render as two
 # different nodes. Anchored at line start; lookahead requires a shape opener.
 _MERMAID_QUOTED_DECL_RE = re.compile(r'^(\s*)"([^"\n]+)"(?=[\[\(\{>])')
+# A BARE quoted label on its own line — `    "MEG 標記 (MEG Token)"` — with no
+# id and no shape. Not a valid node declaration (a node needs `id["label"]`);
+# the LLM emits these as subgraph members. Promoted to a synthesized-id node so
+# the same fence-global label→id map keeps it consistent with any edge that
+# references the same quoted label. (subgraph titles start with `subgraph`, so
+# `^\s*"..."$` never matches them.)
+_MERMAID_BARE_QUOTED_DECL_RE = re.compile(r'^(\s*)"([^"\n]+)"\s*$')
 # `style "X" ...` / `class "X" ...` / `click "X" ...` — the quoted token is a
 # node id reference, so it must resolve to the same synthesized id as the node.
 _MERMAID_QUOTED_STYLE_TARGET_RE = re.compile(r'^(\s*)(style|class|click)\s+"([^"\n]+)"')
@@ -792,6 +799,26 @@ def repair_mermaid_quoted_endpoint_labels(text: str) -> tuple[str, list[dict]]:
                 return f"{m.group(1)} {nid}{m.group(3)}"
             return f'{m.group(1)} {nid}["{label}"]{m.group(3)}'
 
+        # Bare quoted-label declaration line (no id/shape): promote to a real
+        # node `id["label"]`. Checked first — none of the other anchors match a
+        # full-line bare label (no arrow, no shape opener). Skipped when the
+        # label is already a legal bare id (`"A1"`), left for the unquote pass.
+        bare = _MERMAID_BARE_QUOTED_DECL_RE.match(line)
+        if bare and not _MERMAID_BARE_ID_RE.match(bare.group(2)):
+            label = bare.group(2)
+            nid = _synthesize_node_id(label, label_to_id, used_ids)
+            labeled_ids.add(nid)
+            new = f'{bare.group(1)}{nid}["{label}"]'
+            fixes.append(
+                _make_fix(
+                    "bracketed_mermaid_quoted_endpoint",
+                    line=idx + 1,
+                    before=line,
+                    after=new,
+                )
+            )
+            return new
+
         new = _MERMAID_QUOTED_DECL_RE.sub(repl_decl, line)
         new = _MERMAID_QUOTED_STYLE_TARGET_RE.sub(repl_style, new)
         new = _MERMAID_CONN_START_QUOTED_LABEL_RE.sub(repl_start, new)
@@ -991,7 +1018,17 @@ _MINDMAP_SHAPE_PAIRS = (
 
 
 def _neutralize_brackets(s: str) -> str:
-    return "".join(_MINDMAP_HALF_TO_FULL.get(c, c) for c in s)
+    # Preserve brackets inside `$$…$$` / `$…$` math spans: KaTeX needs REAL
+    # `{}` for grouping (`10^{-6}`), so half→full-width there would corrupt the
+    # math. Only node-shape-ambiguous brackets in the plain text are neutralized.
+    out: list[str] = []
+    last = 0
+    for m in _MERMAID_MATH_SPAN_RE.finditer(s):
+        out.append("".join(_MINDMAP_HALF_TO_FULL.get(c, c) for c in s[last : m.start()]))
+        out.append(m.group(0))  # math span kept verbatim
+        last = m.end()
+    out.append("".join(_MINDMAP_HALF_TO_FULL.get(c, c) for c in s[last:]))
+    return "".join(out)
 
 
 def _fix_mindmap_brackets(content: str) -> str:

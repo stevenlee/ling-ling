@@ -758,6 +758,15 @@ class TestMindmapBrackets:
         assert fixes == []
         assert "f(x)" in result
 
+    def test_preserves_braces_inside_math_span(self):
+        # Real regression (Non-Invasive Stitched): a mindmap node with math
+        # `$$p < 10^{-6}$$` — the `{}` are KaTeX grouping, NOT shape syntax, so
+        # they must stay half-width. Only NON-math brackets are neutralized.
+        result, _ = self._q("mindmap\n  root((R))\n    顯著性 $$p < 10^{-6}$$ 與集合 {x}")
+        assert "$$p < 10^{-6}$$" in result  # math braces untouched
+        assert "｛-6｝" not in result
+        assert "集合 ｛x｝" in result  # non-math brace still neutralized
+
     def test_idempotent(self):
         from core.parser import repair_mermaid_mindmap_brackets
 
