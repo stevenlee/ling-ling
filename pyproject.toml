@@ -143,7 +143,6 @@ module = [
     "services.seed_sampler",
     "services.thoughtful_splitter",
     "services.trace_store",
-    "watchers.prompt_watcher",
     "watchers.vault_watcher",
 ]
 ignore_errors = true

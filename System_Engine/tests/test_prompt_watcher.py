@@ -54,7 +54,7 @@ class TestPromptWatcherProcessPrompt:
         mock_path.read_text.return_value = "referenced file content"
         mock_resolve = MagicMock(return_value=[(mock_path, "direct")])
 
-        monkeypatch.setattr("watchers.prompt_watcher._resolve_source_paths", mock_resolve)
+        monkeypatch.setattr("services.command_dispatcher._resolve_source_paths", mock_resolve)
 
         # 4. Create prompt file
         prompt_file = tmp_path / "test_prompt.md"
@@ -69,7 +69,7 @@ class TestPromptWatcherProcessPrompt:
         # Mock FROM_LLM_DIR
         mock_from_llm = tmp_path / "from_llm"
         mock_from_llm.mkdir()
-        monkeypatch.setattr("watchers.prompt_watcher.FROM_LLM_DIR", mock_from_llm)
+        monkeypatch.setattr("services.command_dispatcher.FROM_LLM_DIR", mock_from_llm)
 
         # 6. Execute process_prompt
         watcher.process_prompt(prompt_file)
@@ -103,8 +103,8 @@ class TestPromptWatcherProcessPrompt:
         mock_path = MagicMock()
         mock_path.read_text.return_value = "abcdefg"
         mock_resolve = MagicMock(return_value=[(mock_path, "direct")])
-        monkeypatch.setattr("watchers.prompt_watcher._resolve_source_paths", mock_resolve)
-        monkeypatch.setattr("watchers.prompt_watcher.LOAD_SOURCES_MAX_CHARS_PER_SOURCE", 4)
+        monkeypatch.setattr("services.command_dispatcher._resolve_source_paths", mock_resolve)
+        monkeypatch.setattr("services.command_dispatcher.LOAD_SOURCES_MAX_CHARS_PER_SOURCE", 4)
 
         prompt_file = tmp_path / "test_prompt.md"
         prompt_file.write_text("Summarize [[BigDoc]]", encoding="utf-8")
@@ -114,7 +114,7 @@ class TestPromptWatcherProcessPrompt:
 
         mock_from_llm = tmp_path / "from_llm"
         mock_from_llm.mkdir()
-        monkeypatch.setattr("watchers.prompt_watcher.FROM_LLM_DIR", mock_from_llm)
+        monkeypatch.setattr("services.command_dispatcher.FROM_LLM_DIR", mock_from_llm)
 
         watcher.process_prompt(prompt_file)
 
@@ -146,7 +146,7 @@ class TestPromptWatcherProcessPrompt:
         mock_rag.query_similar_notes.return_value = []
 
         monkeypatch.setattr(
-            "watchers.prompt_watcher._resolve_source_paths",
+            "services.command_dispatcher._resolve_source_paths",
             MagicMock(return_value=[]),
         )
 
@@ -162,7 +162,7 @@ class TestPromptWatcherProcessPrompt:
 
         mock_from_llm = tmp_path / "from_llm"
         mock_from_llm.mkdir()
-        monkeypatch.setattr("watchers.prompt_watcher.FROM_LLM_DIR", mock_from_llm)
+        monkeypatch.setattr("services.command_dispatcher.FROM_LLM_DIR", mock_from_llm)
 
         watcher.process_prompt(prompt_file)
 
@@ -216,7 +216,7 @@ class TestPromptWatcherBrainOps:
         monkeypatch.setattr(w, "_archive_raw", MagicMock())
         out = tmp_path / "from"
         out.mkdir()
-        monkeypatch.setattr("watchers.prompt_watcher.FROM_LLM_DIR", out)
+        monkeypatch.setattr("services.command_dispatcher.FROM_LLM_DIR", out)
 
         f = tmp_path / "@ling-consolidate.md"
         f.write_text("go", encoding="utf-8")

@@ -108,7 +108,7 @@ class KBManager:
         finally:
             self._remove_lock()
 
-    def unzip_kb(self, zip_filename: str = None) -> str:
+    def unzip_kb(self, zip_filename: str | None = None) -> str:
         """Importing/Unzipping a KB archive with duplicate detection."""
         if not zip_filename:
             # Pick the latest backup automatically
