@@ -867,11 +867,35 @@ class TestClassDiagramRepair:
         result, fixes = self._q(body)
         assert result.count("<<instance>>") == 2
         assert "個體" not in result and "個．體" not in result
-        assert "<<choice>>" in result  # clean ASCII stereotype untouched
+        assert "<<choice>>" in result  # clean ASCII stereotype content untouched
         assert sum(f["type"] == "normalized_class_annotation" for f in fixes) == 2
 
-    def test_ascii_stereotype_untouched(self):
-        body = "classDiagram\n    class Repo\n    Repo { <<Infrastructure>> }"
+    def test_inline_stereotype_body_converted_to_standalone(self):
+        # mermaid's valid annotation forms are standalone `<<x>> Id` or
+        # `class Id { <<x>> }` (WITH the keyword). The generator drops the
+        # keyword — `Id { <<x>> }` — which is malformed. Every inline
+        # stereotype body converts to the canonical standalone line; a label
+        # is preserved as a separate `class Id["label"]` decl.
+        body = (
+            "classDiagram\n"
+            "    Best { <<instance>> }\n"
+            '    class Fido["狗實例"] { <<instance>> }\n'
+            "    class WithAttr { +name string }"
+        )
         result, fixes = self._q(body)
-        assert "<<Infrastructure>>" in result
+        assert "<<instance>> Best" in result
+        assert "{ <<instance>> }" not in result and "{ <<instance>>}" not in result
+        # label kept as its own decl, stereotype hoisted out
+        assert 'class Fido["狗實例"]' in result and "<<instance>> Fido" in result
+        # a genuine attribute body is left intact
+        assert "class WithAttr { +name string }" in result
+        assert sum(f["type"] == "standalone_class_stereotype" for f in fixes) == 2
+
+    def test_ascii_stereotype_still_hoisted_to_standalone(self):
+        # ASCII content isn't normalized, but the inline body is still the
+        # wrong form → hoisted to standalone.
+        body = "classDiagram\n    Repo { <<Infrastructure>> }"
+        result, fixes = self._q(body)
+        assert "<<Infrastructure>> Repo" in result
         assert not any(f["type"] == "normalized_class_annotation" for f in fixes)
+        assert any(f["type"] == "standalone_class_stereotype" for f in fixes)

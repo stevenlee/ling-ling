@@ -122,9 +122,10 @@ _MERMAID_HINTS = {
         "① is-a／子類別 (subClassOf)：用空心三角繼承箭頭 `Superclass <|-- Subclass`（例：`Animal <|-- Dog`），這是唯一用來表達分類階層的符號；"
         "② part-of／組成：用組合菱形 `Whole *-- Part : part-of`；"
         '③ 物件屬性／一般語意關係 (object property)：用帶標籤的實線關聯 `ClassA --> ClassB : 關係名稱`，必要時加基數如 `ClassA "1" --> "*" ClassB : owns`；'
-        "④ 個體／實例 (instance-of)：個體用 stereotype 標註 `class Fido { <<instance>> }`（stereotype 一律用英文，"
-        "mermaid 的 `<<>>` 註解不支援中文，寫成 `<<個體>>` 會導致語法錯誤），再用虛線依賴 `Fido ..> Dog : instance-of` 連到其類別。"
-        "大括號 `{}` 只在需要放 stereotype（如 `<<instance>>`）或資料屬性時才加；若沒有內容就完全省略大括號，不要留空的或殘缺的 `{}`。"
+        "④ 個體／實例 (instance-of)：個體用**獨立一行**的 stereotype 宣告 `<<instance>> Fido`（stereotype 在前、類別名稱在後，"
+        "各自一行；不要用 `Fido { <<instance>> }` 這種大括號內嵌寫法。stereotype 一律用英文，mermaid 的 `<<>>` 不支援中文，"
+        "寫成 `<<個體>>` 會導致語法錯誤），再用虛線依賴 `Fido ..> Dog : instance-of` 連到其類別。"
+        "大括號 `{}` 只在放資料屬性時才加；stereotype 用上面的獨立行寫法，不要留空的或殘缺的 `{}`。"
         "資料屬性 (data property) 寫在 class 內部，如 `Animal : +name string`。"
         "目標是讓階層、組成、屬性、個體在圖上一眼可辨，而非畫成扁平的概念網。"
     ),

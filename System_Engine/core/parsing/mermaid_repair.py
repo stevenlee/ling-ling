@@ -130,6 +130,16 @@ _CLASSDIAGRAM_BODY_OPEN_RE = re.compile(
 # clean ASCII ones (`<<choice>>`, `<<Infrastructure>>`) are left untouched.
 _NONASCII_CLASS_ANNOTATION_RE = re.compile(r"<<[^>]*[^\x00-\x7f][^>]*>>")
 
+# An inline stereotype body: `[class ]Id[["label"]] { <<stereotype>> }`. Mermaid's
+# only valid annotation forms are the standalone `<<stereotype>> Id` (annotation
+# on its own line, name after it) and `class Id { <<stereotype>> }` (WITH the
+# `class` keyword). The generator routinely drops the keyword — `Id { <<x>> }` —
+# which is malformed. We rewrite every inline stereotype body to the canonical
+# standalone form (keeping a `class Id["label"]` decl when a label was present).
+_CLASSDIAGRAM_STEREOTYPE_BODY_RE = re.compile(
+    r'^(\s*)(?:class\s+)?([A-Za-z_]\w*)\s*(\["[^"\n]*"\]|\[[^\]\n]*\])?\s*\{\s*(<<[^<>]+>>)\s*\}\s*$'
+)
+
 # A LaTeX `\r…` command (\rightarrow, \rangle, …) emitted in under-escaped JSON
 # decodes to a carriage-return CONTROL char + the suffix, not a literal `\r`.
 
@@ -1143,6 +1153,33 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
             )
         normalized.append(fixed)
     body = normalized
+
+    # Convert inline stereotype bodies (`Id { <<instance>> }`, often missing the
+    # required `class` keyword) to the canonical standalone form
+    # `<<instance>> Id` — see _CLASSDIAGRAM_STEREOTYPE_BODY_RE. A label is
+    # preserved as a separate `class Id["label"]` decl (dedup'd below if it also
+    # appears elsewhere).
+    extracted: list[str] = []
+    for offset, ln in enumerate(body):
+        m = _CLASSDIAGRAM_STEREOTYPE_BODY_RE.match(ln)
+        if not m:
+            extracted.append(ln)
+            continue
+        indent, cid, label, stereo = m.groups()
+        new_lines = []
+        if label:
+            new_lines.append(f"{indent}class {cid}{label}")
+        new_lines.append(f"{indent}{stereo} {cid}")
+        fixes.append(
+            _make_fix(
+                "standalone_class_stereotype",
+                line=base_line + offset,
+                before=ln,
+                after="\n".join(new_lines),
+            )
+        )
+        extracted.extend(new_lines)
+    body = extracted
 
     # Pre-scan: ids already given a `class` declaration (any form), and the
     # indentation to reuse for hoisted declarations.
