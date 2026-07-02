@@ -44,6 +44,7 @@ from services.ingest.digest_format import format_digest_appendix as _format_dige
 from services.ingest.digest_format import format_one_digest as _format_one_digest_fn
 from services.ingest.part_state import PartState
 from services.ingest.profile_routing import ProfileRouter
+from services.ingest.result import IngestResult
 from services.profile_manager import ProfileManager
 from services.text_splitter import TextSplitter
 
@@ -112,6 +113,11 @@ class IngestionPipeline:
             )
         else:
             result = self.ingest_to_wiki(content, source_filepath, doc_config=doc_config)
+            if not result:
+                logging.warning(
+                    f"Short-doc ingest failed for {source_filepath.name}: "
+                    f"stage={result.stage} kind={result.error_kind} — {result.detail}"
+                )
             self._index_short_doc_facets(content, result)
 
     # ── Facet index (summary-as-pointer retrieval) ───────────────────
@@ -161,13 +167,13 @@ class IngestionPipeline:
         except Exception as e:
             logging.warning(f"Facet indexing failed for {title}: {e}")
 
-    def _index_short_doc_facets(self, raw_content: str, ingest_result: dict | None) -> None:
+    def _index_short_doc_facets(self, raw_content: str, ingest_result: IngestResult | None) -> None:
         """Phase B: short docs have no part digests, so spend one light LLM
         call to produce one — then index its facets. Fail-soft throughout."""
-        if not FACET_INDEX_ENABLED or not isinstance(ingest_result, dict):
+        if not FACET_INDEX_ENABLED or not ingest_result:
             return
-        page_path = ingest_result.get("_page_path")
-        title = ingest_result.get("_title")
+        page_path = ingest_result.page_path
+        title = ingest_result.title
         if not page_path or not title:
             return
         try:
@@ -176,13 +182,13 @@ class IngestionPipeline:
                 1,
                 1,
                 raw_content,
-                ingest_result.get("content", ""),
+                ingest_result.content,
                 "",
             )
         except Exception as e:
             logging.warning(f"Short-doc digest for facets failed for {title}: {e}")
             return
-        self._index_digest_facets(page_path, title, digest, tags=ingest_result.get("_tags"))
+        self._index_digest_facets(page_path, title, digest, tags=ingest_result.tags)
 
     # ── Profile routing ──────────────────────────────────────────────
 
@@ -219,14 +225,17 @@ class IngestionPipeline:
         llm_result: dict | None = None,
         part_info: dict | None = None,
         doc_config: dict | None = None,
-    ):
-        """Convert raw content into one wiki page.
+    ) -> IngestResult:
+        """Convert raw content into one wiki page. Returns an IngestResult —
+        falsy on failure, with `stage`/`error_kind` saying what broke where
+        (the old contract was a bare None for every failure mode).
 
         `part_info` flags this as a long-document part; when set, RAG indexing
         and wiki-index rebuild can be deferred to the driver so we don't
         rebuild the entire index N times for an N-part document.
         """
         template_used = None
+        stage = "llm"
         try:
             if not llm_result:
                 context_hint = (part_info or {}).get("context_hint", "")
@@ -281,6 +290,7 @@ class IngestionPipeline:
             tags = (part_info or {}).get("master_tags") or llm_result.get("tags", [])
             page_type = llm_result.get("type", "entity")
 
+            stage = "quality"
             body, quality_fixes = run_markdown_quality_checks(
                 llm_result.get("content", ""),
                 strip_frontmatter=True,
@@ -292,12 +302,14 @@ class IngestionPipeline:
             self._attach_trace_metadata(wiki_meta)
             wiki_markdown = dump_markdown_with_metadata(wiki_meta, body)
 
+            stage = "write"
             page_folder = PAGES_DIR / base_title
             page_folder.mkdir(parents=True, exist_ok=True)
             page_path = page_folder / f"{title}.md"
             page_path.write_text(wiki_markdown, encoding="utf-8")
             self._record_artifact(page_path, page_type, title, wiki_meta)
 
+            stage = "rag_index"
             if not (part_info and part_info.get("defer_rag")):
                 self.rag.add_document(
                     page_path,
@@ -309,17 +321,23 @@ class IngestionPipeline:
 
             # Long-doc parts pass `defer_index=True` so we only rebuild the
             # wiki index once at the end of the run, not per part.
+            stage = "wiki_index"
             if not (part_info and part_info.get("defer_index")):
                 update_wiki_index(page_path, title, sync_reading_index=True)
 
-            llm_result["_page_path"] = str(page_path)
-            llm_result["_title"] = title
-            llm_result["_tags"] = tags
-            return llm_result
+            return IngestResult(
+                ok=True,
+                page_path=page_path,
+                title=title,
+                tags=tags,
+                content=llm_result.get("content", ""),
+                pending_concepts=llm_result.get("pending_concepts", "") or "",
+                page_type=page_type,
+            )
 
         except Exception as e:
-            logging.error(f"Ingestion failed for {source_filepath.name}: {e}")
-            return None
+            logging.error(f"Ingestion failed for {source_filepath.name} at stage '{stage}': {e}")
+            return IngestResult.failure(stage, e)
 
     # ── Single-page helpers ──────────────────────────────────────────
 
@@ -491,13 +509,19 @@ class IngestionPipeline:
             }
             result = self.ingest_to_wiki(chunk, source_filepath, part_info=part_info)
             if not result:
+                # The typed result finally says WHICH part died and why — a
+                # silently dropped Part used to be indistinguishable from a skip.
+                logging.warning(
+                    f"Part {i + 1}/{total} of '{base_title}' failed at stage "
+                    f"{result.stage!r} ({result.error_kind}); skipping. {result.detail}"
+                )
                 continue
 
-            if not state.master_tags and result.get("tags"):
-                state.master_tags = result["tags"]
-            state.pending_concepts = result.get("pending_concepts", "")
+            if not state.master_tags and result.tags:
+                state.master_tags = result.tags
+            state.pending_concepts = result.pending_concepts
 
-            part_content = result.get("content", "")
+            part_content = result.content
             state.total_output_chars += len(part_content)
             digest = self.llm.generate_part_digest(
                 base_title,
@@ -517,8 +541,8 @@ class IngestionPipeline:
                 chunk=chunk,
             )
             self._index_digest_facets(
-                result.get("_page_path"),
-                result.get("_title"),
+                result.page_path,
+                result.title,
                 digest,
                 tags=state.master_tags,
             )
@@ -530,8 +554,8 @@ class IngestionPipeline:
                 nav_summary = part_content.strip().split("\n")[0][:100]
             state.navigation_items.append(f"- [[{base_title} (Part {i + 1})]]: {nav_summary[:140]}")
 
-            if result.get("_page_path"):
-                state.part_paths.append(Path(result["_page_path"]))
+            if result.page_path:
+                state.part_paths.append(result.page_path)
 
         return state
 
@@ -741,21 +765,15 @@ class IngestionPipeline:
 
     def _append_part_digest_to_note(
         self,
-        ingest_result: dict,
+        ingest_result: IngestResult,
         digest,
         section_path: list | None = None,
         part_content: str | None = None,
         pending_concepts: str = "",
         chunk: str | None = None,
     ) -> None:
-        page_path_value = (
-            ingest_result.get("_page_path") if isinstance(ingest_result, dict) else None
-        )
-        if not page_path_value:
-            return
-
-        page_path = Path(page_path_value)
-        if not page_path.exists():
+        page_path = ingest_result.page_path if ingest_result else None
+        if not page_path or not page_path.exists():
             return
 
         appendix = self.format_digest_appendix([digest])
@@ -803,8 +821,8 @@ class IngestionPipeline:
             doc.meta["part_chunk_hash"] = self._chunk_fingerprint(chunk)
         updated = doc.save()
 
-        title = ingest_result.get("_title") or page_path.stem
-        tags = ingest_result.get("_tags") or ingest_result.get("tags", [])
+        title = ingest_result.title or page_path.stem
+        tags = ingest_result.tags
         self.rag.add_document(
             page_path, title, updated, tags=tags, section_path=section_path or None
         )
