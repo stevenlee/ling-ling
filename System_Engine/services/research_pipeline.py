@@ -5,7 +5,9 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 
+from core.json_extract import salvage_json_array
 from services.http_client import PoliteHttpClient
+from services.llm.prompt_composer import lang_hint
 
 
 class PatentFetchError(Exception):
@@ -157,6 +159,233 @@ class ResearchPipeline:
             logging.error(f"FPO parse failed for '{keyword}': {e}")
             raise PatentFetchError(f"parse failed: {e}") from e
 
+    # ── Research rendering (moved from LLMClient in P2b: patent/digest
+    #    markdown is research domain knowledge, not LLM plumbing) ──────
+
+    def generate_research_keywords(self, content: str, instruction: str) -> list[str]:
+        prompt = f"""
+請根據以下內容與使用者的指示，生成 3 到 5 個適合用於學術與專利搜尋引擎（如 arXiv, Wikipedia, EuropePMC）的英文搜尋關鍵字。
+**重要：關鍵字必須簡短（1 到 3 個單字為佳），並包含廣泛的上位概念（例如 "Artificial intelligence", "Machine learning", "Language model"），以便能在專利資料庫中找到結果。請勿使用過長或過於具體的長句。**
+直接以 JSON 陣列格式輸出，例如 ["keyword1", "keyword2"]，不要有任何其他文字。
+
+[User Instruction]
+{instruction}
+
+[Content]
+{content}
+"""
+        try:
+            res = self.llm.complete(
+                "You are a research assistant. Output only a JSON array of strings.",
+                prompt,
+                temperature=0.3,
+                stage="research_keywords",
+            )
+            import json
+            import re
+
+            match = re.search(r"\[.*\]", res, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group(0))
+                if isinstance(parsed, list):
+                    keywords = [
+                        str(x).strip() for x in parsed if isinstance(x, str) and str(x).strip()
+                    ]
+                    if keywords:
+                        return keywords
+            return ["General Topic"]
+        except Exception as e:
+            logging.error(f"Failed to generate keywords: {e}")
+            return ["General Topic"]
+
+    @staticmethod
+    def _md_cell(text) -> str:
+        """Sanitise a value for use inside a single Markdown table cell."""
+        s = str(text if text is not None else "").replace("\n", " ").replace("|", "\\|").strip()
+        return s or "—"
+
+    def generate_elite_digest(
+        self, arxiv_wiki_results: list[dict], source_name: str, topic: str = ""
+    ) -> str:
+        # The LLM only selects and translates; URLs are rendered from our own data
+        # to avoid the model corrupting links by copying them verbatim.
+        import json
+
+        indexed = [
+            {
+                "idx": i,
+                "title": r.get("title", ""),
+                "summary": r.get("summary", ""),
+                "source": r.get("source", ""),
+            }
+            for i, r in enumerate(arxiv_wiki_results)
+        ]
+        data_str = json.dumps(indexed, ensure_ascii=False, indent=2)
+        prompt = f"""請針對主題「{topic}」，從以下來自 {source_name} 的搜尋結果中，精選 3 到 5 篇最重要的文獻。
+對每一筆你選出的文獻，請輸出：
+- idx：原始清單中的索引（整數，務必照抄，不要更動）
+- zh_title：繁體中文標題（可保留必要的英文專有名詞）
+- zh_summary：繁體中文摘要，結構化說明其核心概念與重要洞察
+
+請「只」輸出 JSON 陣列，依重要性由高到低排序，不要有任何其他文字或 Markdown 標記：
+[{{"idx": 0, "zh_title": "...", "zh_summary": "..."}}]
+
+[搜尋結果]
+{data_str}
+"""
+        try:
+            res = self.llm.complete(
+                "You are a knowledgeable research assistant. Output only a JSON array.",
+                prompt,
+                temperature=0.5,
+                stage="elite_digest",
+            )
+            rows = salvage_json_array(res)
+            return self._render_elite_digest(rows, arxiv_wiki_results, topic)
+        except Exception as e:
+            logging.error(f"Failed to generate elite digest: {e}")
+            return "無法生成摘要。"
+
+    def _render_elite_digest(self, rows: list[dict], results: list[dict], topic: str) -> str:
+        items = []
+        for r in rows:
+            try:
+                idx = int(r.get("idx"))
+            except (TypeError, ValueError):
+                continue
+            if idx < 0 or idx >= len(results):
+                continue
+            src = results[idx]
+            title = str(r.get("zh_title") or src.get("title", "")).strip()
+            summary = str(r.get("zh_summary", "")).strip()
+            url = src.get("url", "")
+            source_line = f"\n    * **來源**：[{url}]({url})" if url else ""
+            items.append(f"* **{title}**\n    * **摘要**：{summary}{source_line}")
+        if not items:
+            return "無法生成摘要。"
+        header = (
+            f"### 📚 Academic & Concept Elite Digest\n"
+            f"以下是為您精選的 {len(items)} 篇關於「{topic}」的重要研究與文獻摘要：\n\n"
+        )
+        return header + "\n\n".join(items)
+
+    _PATENT_TABLE_HEADER = (
+        "| 專利編號 | 關聯性 | 主旨 | 摘要 | 全文連結 |\n| :--- | :---: | :--- | :--- | :--- |\n"
+    )
+
+    def generate_patent_table(self, patent_results: list[dict], topic: str = "") -> str:
+        """Render fetched patents as a Markdown table. The LLM only filters/
+        ranks/translates; patent number + URL come from our own data so the
+        model can't corrupt them. subject/summary are written in the configured
+        OUTPUT_LANGUAGE (not a hardcoded language). Three tiers keep patents —
+        and their translation — from being lost to a flaky ranking step:
+        rank+translate → translate-only → raw source text (last resort)."""
+        import json
+
+        if not patent_results:
+            return "> 查無符合的專利（此主題可能較少出現在專利，或關鍵字過於限縮）。"
+
+        lang = lang_hint()
+        indexed = [
+            {
+                "idx": i,
+                "id": p.get("id", ""),
+                "title": p.get("title", ""),
+                "summary": p.get("summary", ""),
+            }
+            for i, p in enumerate(patent_results)
+        ]
+        data_str = json.dumps(indexed, ensure_ascii=False, indent=2)
+
+        # Tier 1: filter + rank + translate.
+        rank_prompt = f"""請針對主題「{topic}」，從以下專利清單中篩選出與主題相關的專利，並依關聯性由高到低排序。
+對每一筆你選出的專利，請輸出：
+- idx：原始清單中的索引（整數，務必照抄，不要更動）
+- relevance：關聯性，只能是「高」「中」「低」三者之一
+- subject：「主旨」，一句話點出技術核心，用 {lang} 書寫
+- summary：摘要（1~2 句），用 {lang} 書寫
+
+請「只」輸出 JSON 陣列，不要有任何其他文字或 Markdown 標記：
+[{{"idx": 0, "relevance": "高", "subject": "...", "summary": "..."}}]
+
+[專利清單]
+{data_str}
+"""
+        lines = self._patent_rows_to_lines(self._safe_json_rows(rank_prompt), patent_results)
+        if lines:
+            return self._PATENT_TABLE_HEADER + "\n".join(lines)
+
+        # Tier 2: ranking failed — translate every patent (no ranking). A
+        # simpler task than rank+translate, so its JSON is more likely to parse.
+        translate_prompt = f"""請把以下每一筆專利的「主旨」與「摘要」翻譯／改寫成 {lang}。不要篩選、不要排序，全部保留。
+對每一筆輸出：
+- idx：原始索引（整數，照抄）
+- subject：主旨（一句話點出技術核心），用 {lang}
+- summary：摘要（1~2 句），用 {lang}
+
+請「只」輸出 JSON 陣列：
+[{{"idx": 0, "subject": "...", "summary": "..."}}]
+
+[專利清單]
+{data_str}
+"""
+        lines = self._patent_rows_to_lines(
+            self._safe_json_rows(translate_prompt), patent_results, default_relevance="—"
+        )
+        if lines:
+            note = "> ⚠️ 關聯性排序這次無法產生，以下為已翻譯但未排序的專利：\n\n"
+            return note + self._PATENT_TABLE_HEADER + "\n".join(lines)
+
+        # Tier 3: even translation failed — raw source text, clearly labelled.
+        raw = [
+            f"| {self._md_cell(p.get('id', ''))} | — | {self._md_cell(p.get('title', ''))} | "
+            f"{self._md_cell((p.get('summary', '') or '')[:160])} | "
+            f"{('[連結](' + p.get('url', '') + ')') if p.get('url') else '—'} |"
+            for p in patent_results
+        ]
+        note = (
+            "> ⚠️ 排序與翻譯這次都無法產生（LLM 格式化失敗），"
+            f"以下為抓到的 {len(raw)} 筆原始專利（未排序、原文）：\n\n"
+        )
+        return note + self._PATENT_TABLE_HEADER + "\n".join(raw)
+
+    def _safe_json_rows(self, prompt: str) -> list:
+        """One JSON-array LLM call, salvage-parsed; [] on any failure."""
+        try:
+            res = self.llm.complete(
+                "You are a knowledgeable research assistant. Output only a JSON array.",
+                prompt,
+                temperature=0.3,
+                stage="patent_table",
+            )
+            return salvage_json_array(res)
+        except Exception as e:
+            logging.error(f"Patent JSON step failed: {e}")
+            return []
+
+    def _patent_rows_to_lines(
+        self, rows: list[dict], patent_results: list[dict], default_relevance: str = ""
+    ) -> list[str]:
+        """Map LLM rows (idx/relevance/subject/summary) back onto our patent
+        data, skipping any row with a bad/out-of-range idx."""
+        lines = []
+        for r in rows:
+            try:
+                idx = int(r.get("idx"))
+            except (TypeError, ValueError):
+                continue
+            if idx < 0 or idx >= len(patent_results):
+                continue
+            src = patent_results[idx]
+            pid = self._md_cell(src.get("id", ""))
+            url = src.get("url", "")
+            relevance = self._md_cell(r.get("relevance", default_relevance) or default_relevance)
+            subject = self._md_cell(r.get("subject", ""))
+            summary = self._md_cell(r.get("summary", ""))
+            link = f"[連結]({url})" if url else "—"
+            lines.append(f"| {pid} | {relevance} | {subject} | {summary} | {link} |")
+        return lines
+
     def prepare_and_run(self, instruction: str, base_content: str) -> str:
         """Unifies context preparation for both vault inline tags and prompt files."""
         # 1. Extract wikilinks and load content (Do this first before keywords truncate instruction)
@@ -196,7 +425,7 @@ class ResearchPipeline:
         keywords = user_keywords.copy()
 
         if len(keywords) < 5:
-            llm_keywords = self.llm.generate_research_keywords(content, instruction)
+            llm_keywords = self.generate_research_keywords(content, instruction)
             for kw in llm_keywords:
                 if kw not in keywords:
                     keywords.append(kw)
@@ -232,13 +461,13 @@ class ResearchPipeline:
         # 3. Generate Markdown Blocks
         elite_digest_md = ""
         if arxiv_wiki_results:
-            elite_digest_md = self.llm.generate_elite_digest(
+            elite_digest_md = self.generate_elite_digest(
                 arxiv_wiki_results, "arXiv & Wikipedia", topic=instruction
             )
 
         patent_table_md = ""
         if patent_results:
-            patent_table_md = self.llm.generate_patent_table(patent_results, topic=instruction)
+            patent_table_md = self.generate_patent_table(patent_results, topic=instruction)
         elif patent_fetch_failed:
             # Honest distinction: the fetch failed, so we CAN'T say there are no
             # patents — only that we couldn't reach FPO this time.

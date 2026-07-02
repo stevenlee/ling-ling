@@ -21,41 +21,32 @@ from __future__ import annotations
 import base64
 import logging
 import mimetypes
-import os
 import re
 import time
 from pathlib import Path
 from typing import Any
 
-import yaml
 
 from core.config import (
-    GUIDELINES_DIR,
     LLM_PROVIDER,
     OPERATIONS_DIR,
-    PERSONAS_DIR,
-    PROJECT_ROOT,
     SKILLS_DIR,
-    TEMPLATES_DIR,
     settings,
 )
 from core.parser import (
     extract_json_array,
     extract_json_object,
     is_empty_json_literal,
-    strip_body_frontmatter,
     clean_llm_response,
 )
 from core.json_extract import salvage_json_array
 from core.retrying import reroll, retry_call
 from core.utils import MtimeCache, digest_value_to_text
 from services.capability_manager import CapabilityManager
-from services.trace_store import TraceStore, elapsed_ms, usage_to_counts
+from services.trace_store import TraceStore, elapsed_ms
 
 
 # ─── Constants ────────────────────────────────────────────────────────
-
-_OPENAI_COMPATIBLE_PROVIDERS = frozenset({"vllm", "ollama"})
 
 # User-message field labels, keyed by the localized-content suffix (".zh"/".ja")
 # from `_localized_suffix()`. Keying on the suffix — not on `_get_lang_hint()`'s
@@ -67,180 +58,24 @@ _LABELS_BY_SUFFIX = {
 }
 _DEFAULT_LABELS = {"file": "Filename", "content": "Content"}
 
-_FENCED_MARKDOWN_RE = re.compile(r"^```(?:markdown|md)?\s*\n(.*?)\n```$", re.DOTALL | re.IGNORECASE)
-_YAML_HEADER_RE = re.compile(
-    r"(?:^|\n)(?:---|```yaml)\s*\n(.*?)\n(?:---|```)\s*(?:\n|$)", re.DOTALL
+# Version-locked quality/splitter prompts now live in services/llm/task_prompts.py
+# (P2b). Old underscore names kept as aliases for in-module callers.
+from services.llm.task_prompts import (  # noqa: E402
+    CHUNK_COHERENCE_PROMPTS as _CHUNK_COHERENCE_PROMPTS,
+    SUMMARY_PROMPTS as _SUMMARY_PROMPTS,
+    TOPIC_SHIFT_PROMPTS as _TOPIC_SHIFT_PROMPTS,
 )
-_YAML_MARKDOWN_CLEANUP_RE = re.compile(
-    r"(^|[:\[,\s])[\*\_]{1,2}(.*?)[\*\_]{1,2}(?=[\]\s,:]|$)",
-    re.MULTILINE,
+
+# Provider machinery now lives in services/llm/transport.py (P2b). The old
+# underscore names stay importable from here — tests and callers use them.
+from services.llm import prompt_composer, response_parsing  # noqa: E402
+from services.llm import transport as _transport  # noqa: E402
+from services.llm.prompt_composer import PromptComposer  # noqa: E402
+from services.llm.transport import (  # noqa: E402
+    _genai,
+    is_non_retryable_llm_error as _is_non_retryable_llm_error,  # noqa: F401  (test import surface)
+    is_transient_llm_error as _is_transient_llm_error,
 )
-_H1_TITLE_RE = re.compile(r"^#\s+(.*)", re.MULTILINE)
-
-_PROJECT_IDENTITY_FILES = ("README.md", "SCHEMA.md")
-_PROJECT_IDENTITY_TRUNCATE = 4000
-
-
-# ─── Quality scorer prompts (version-locked) ──────────────────────────
-#
-# Prompt text is locked in code so regression runs across days/weeks see the
-# same prompt. To change a prompt, add a new version key — never edit an
-# existing version after it's been used to produce baseline scores.
-
-_CHUNK_COHERENCE_PROMPTS: dict[str, str] = {
-    "v1": (
-        "You are evaluating how self-contained a text chunk is for use as a "
-        "retrieval unit in a knowledge base. Score 1-10:\n"
-        "- 10: Reads as a complete, standalone thought. No dangling references.\n"
-        "- 7-9: Mostly self-contained, minor context-dependence.\n"
-        "- 4-6: Somewhat broken at the start or end mid-thought.\n"
-        "- 1-3: Severely fragmented; cannot stand alone.\n\n"
-        "Return ONLY a JSON object with this exact schema:\n"
-        '{"score": <integer 1-10>, "reason": "<one short sentence>"}\n\n'
-        "Do not include any text outside the JSON object."
-    ),
-}
-
-# Topic-shift detection (Phase 4 of the Thoughtful Splitter).
-#
-# LLMs hallucinate character offsets but reliably handle PARAGRAPH INDICES
-# — so the contract is "split_after paragraph N", not "split at offset N".
-# The splitter converts indices back to source offsets deterministically.
-#
-# IMPORTANT: never edit an existing version after baseline outputs exist.
-# To change a prompt, add a new version key.
-
-# Context summary (Phase 5 of the Thoughtful Splitter).
-#
-# A 1-2 sentence factual summary of the previous chunk, used as a context
-# preamble for the next chunk. Replaces structural overlap when enabled.
-# Must match the source language (Chinese in, Chinese out).
-#
-# Same versioning rules: never edit an existing version.
-
-_SUMMARY_PROMPTS: dict[str, str] = {
-    "v1": (
-        "You are generating a brief context preamble. A reader is about to read a section\n"
-        "of text and you must hand them the gist of the section that came IMMEDIATELY before,\n"
-        "so they can pick up the thread.\n\n"
-        "Rules:\n"
-        "- 1 to 2 sentences, total length ≤ 200 characters.\n"
-        "- Match the INPUT LANGUAGE exactly (Chinese in → Chinese out; English in → English out).\n"
-        '- Write declarative facts. No "As we saw...", "This passage discusses...", or other meta framing.\n'
-        "- Preserve key proper nouns, names, terms, and the conclusion.\n"
-        "- Do not invent facts that the input doesn't support.\n\n"
-        "Return ONLY a JSON object with this exact schema:\n"
-        '  {"summary": "<1-2 sentences, ≤ 200 chars>"}\n\n'
-        "No prose, no markdown, no commentary outside the JSON."
-    ),
-}
-
-
-_TOPIC_SHIFT_PROMPTS: dict[str, str] = {
-    "v1": (
-        "You are an editor segmenting a long passage of prose into self-contained sections.\n"
-        "The passage has no chapter headings — it flows through one or more topics paragraph by paragraph.\n\n"
-        "You will receive numbered paragraphs. Identify 0, 1, or 2 paragraph boundaries where the topic\n"
-        "**clearly shifts** to a substantially new idea (not just a sub-point, restatement, or example).\n\n"
-        "Return ONLY a single JSON object with this exact schema:\n"
-        '  {"split_after": [<paragraph_number>, ...]}\n\n'
-        "Examples:\n"
-        '  - All paragraphs continue one topic → {"split_after": []}\n'
-        '  - Paragraphs 1-3 about topic A, 4-N about topic B → {"split_after": [3]}\n'
-        '  - Three distinct topics with shifts after P3 and P6 → {"split_after": [3, 6]}\n\n'
-        "Rules:\n"
-        "- Each value must be between 1 and (N-1) inclusive. You cannot split before the first\n"
-        "  paragraph or after the last.\n"
-        "- Maximum 2 entries. If you detect more than 2 shifts, return only the 2 strongest.\n"
-        "- Only a **clear topic shift** counts — a paragraph that opens a substantially new line\n"
-        "  of thought, not one that elaborates or rephrases the previous one.\n"
-        "- Output ONLY the JSON object. No prose, no markdown, no commentary."
-    ),
-}
-
-
-# ─── Lazy provider SDK imports ────────────────────────────────────────
-
-_GENAI_MOD = None
-
-
-def _genai():
-    """Lazy-load google.genai (only when gemini provider is active)."""
-    global _GENAI_MOD
-    if _GENAI_MOD is None:
-        from google import genai as _g
-
-        _GENAI_MOD = _g
-    return _GENAI_MOD
-
-
-_TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
-_NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404}
-
-
-def _error_status_code(exc: Exception) -> int | None:
-    for attr in ("status_code", "status", "code"):
-        val = getattr(exc, attr, None)
-        if isinstance(val, int):
-            return val
-        if isinstance(val, str):
-            try:
-                return int(val)
-            except ValueError:
-                pass
-    return None
-
-
-def _is_non_retryable_llm_error(exc: Exception) -> bool:
-    code = _error_status_code(exc)
-    if code in _NON_RETRYABLE_STATUS_CODES:
-        return True
-
-    cls_name = type(exc).__name__
-    non_retry_keywords = (
-        "Authentication",
-        "Permission",
-        "BadRequest",
-        "InvalidArgument",
-        "NotFound",
-    )
-    if any(kw in cls_name for kw in non_retry_keywords):
-        return True
-
-    return False
-
-
-def _is_transient_llm_error(exc: Exception) -> bool:
-    if _is_non_retryable_llm_error(exc):
-        return False
-
-    code = _error_status_code(exc)
-    if code in _TRANSIENT_STATUS_CODES:
-        return True
-
-    cls_name = type(exc).__name__
-    transient_keywords = (
-        "RateLimit",
-        "Timeout",
-        "Connection",
-        "APIConnection",
-        "ServiceUnavailable",
-    )
-    if any(kw in cls_name for kw in transient_keywords):
-        return True
-
-    err_msg = str(exc).lower()
-    fallback_keywords = (
-        "timeout",
-        "temporarily unavailable",
-        "connection",
-        "rate limit",
-        "too many requests",
-    )
-    if any(kw in err_msg for kw in fallback_keywords):
-        return True
-
-    return False
 
 
 # ─── Client ────────────────────────────────────────────────────────────
@@ -253,33 +88,8 @@ class LLMClient:
         self.trace_store = TraceStore()
         self.capability_manager = CapabilityManager(OPERATIONS_DIR, SKILLS_DIR)
 
-        if self.provider == "vllm":
-            self.client, self.model = self._build_openai_client(
-                base_url=os.getenv("VLLM_API_BASE", "http://192.168.1.103:9000/v1"),
-                api_key=os.getenv("VLLM_API_KEY", "dummy-token"),
-                model=os.getenv("VLLM_MODEL", "gpt-oss-20b"),
-            )
-        elif self.provider == "ollama":
-            self.client, self.model = self._build_openai_client(
-                base_url=os.getenv("OLLAMA_API_BASE", "http://localhost:11434/v1"),
-                api_key=os.getenv("OLLAMA_API_KEY", "ollama"),
-                model=os.getenv("OLLAMA_MODEL", "gemma2:27b"),
-            )
-        elif self.provider == "gemini":
-            self.client = _genai().Client(api_key=os.getenv("GEMINI_API_KEY"))
-            self.model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-        else:
-            raise ValueError(
-                f"Unknown LLM_PROVIDER {self.provider!r}. Expected one of: vllm, gemini, ollama."
-            )
-
-    @staticmethod
-    def _build_openai_client(*, base_url: str, api_key: str, model: str):
-        try:
-            from openai import OpenAI
-        except ImportError as e:
-            raise ImportError("pip install openai") from e
-        return OpenAI(base_url=base_url, api_key=api_key, timeout=300.0), model
+        self.composer = PromptComposer(self._file_cache, self.capability_manager)
+        self.client, self.model = _transport.build_client(self.provider)
 
     # ─── Provider dispatch ──────────────────────────────────────────────
 
@@ -367,23 +177,10 @@ class LLMClient:
         temperature: float,
         max_tokens: int,
     ) -> tuple[str, int | None, int | None, int | None]:
-        if self.provider == "gemini":
-            genai = _genai()
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=user_msg if isinstance(user_msg, list) else [str(user_msg)],
-                config=genai.types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=temperature,
-                    max_output_tokens=max_tokens,
-                ),
-            )
-            text = response.text or ""
-            prompt_tokens, completion_tokens, total_tokens = self._gemini_usage_counts(response)
-        else:
-            text, usage = self._openai_chat(system_prompt, user_msg, temperature, max_tokens)
-            prompt_tokens, completion_tokens, total_tokens = usage_to_counts(usage)
-        return text, prompt_tokens, completion_tokens, total_tokens
+        # Thin delegate: tests monkeypatch this method; transport owns the logic.
+        return _transport.complete_once(
+            self.provider, self.client, self.model, system_prompt, user_msg, temperature, max_tokens
+        )
 
     def _complete_provider_text_with_retry(
         self,
@@ -418,50 +215,6 @@ class LLMClient:
             log_label="LLM provider call",
         )
 
-    @staticmethod
-    def _gemini_usage_counts(response: Any) -> tuple[int | None, int | None, int | None]:
-        usage = getattr(response, "usage_metadata", None)
-        if usage is None:
-            return None, None, None
-        prompt = getattr(usage, "prompt_token_count", None)
-        completion = getattr(usage, "candidates_token_count", None)
-        total = getattr(usage, "total_token_count", None)
-        return prompt, completion, total
-
-    def _openai_chat(
-        self, system_prompt: str, user_msg: Any, temperature: float, max_tokens: int
-    ) -> tuple[str, Any]:
-        extra_body = {"num_ctx": settings.MEMORY_LIMIT} if self.provider == "ollama" else {}
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_msg},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            extra_body=extra_body,
-        )
-        message = response.choices[0].message
-        content = message.content or ""
-        if not content.strip():
-            # Reasoning models served via Ollama (e.g. gemma thinking
-            # variants) intermittently emit the whole answer — including
-            # the final JSON — into the reasoning channel and leave
-            # content empty. Fall back so scanning parsers
-            # (extract_json_*, verdict regexes) can still find the answer;
-            # an empty string is strictly worse for every caller.
-            reasoning = getattr(message, "reasoning", None) or getattr(
-                message, "reasoning_content", None
-            )
-            if isinstance(reasoning, str) and reasoning.strip():
-                logging.warning(
-                    "LLM returned empty content with non-empty reasoning; "
-                    "falling back to the reasoning channel."
-                )
-                content = reasoning
-        return content, getattr(response, "usage", None)
-
     def trace_run(self, **kwargs):
         return self.trace_store.run(**kwargs)
 
@@ -473,58 +226,23 @@ class LLMClient:
 
     # ─── Localized prompt loading ───────────────────────────────────────
 
+    # Thin delegates — composition logic lives in services/llm/prompt_composer.py
+    # (P2b). Kept as methods because tests and in-module callers use these names.
+
     def _get_lang_hint(self) -> str:
-        lang = settings.OUTPUT_LANGUAGE.lower()
-        if "simplified" in lang or "簡體" in lang or "简体" in lang or "zh-cn" in lang:
-            return (
-                "Simplified Chinese (zh-CN, 简体中文). MUST NOT use Traditional Chinese (繁體中文)."
-            )
-        if "traditional" in lang or "繁體" in lang or "繁体" in lang or "zh-tw" in lang:
-            return (
-                "Traditional Chinese (zh-TW, 繁體中文). MUST NOT use Simplified Chinese (简体中文)."
-            )
-        if "chinese" in lang or "中文" in lang:
-            return f"{settings.OUTPUT_LANGUAGE}. Please be consistent and do NOT mix Simplified and Traditional characters."
-        if "japanese" in lang or "日本語" in lang:
-            return "Japanese (日本語)"
-        return settings.OUTPUT_LANGUAGE
+        return prompt_composer.lang_hint()
 
     def _localized_suffix(self) -> str:
-        lang = settings.OUTPUT_LANGUAGE.lower()
-        if "chinese" in lang or "中文" in lang:
-            return ".zh"
-        if "japanese" in lang or "日本語" in lang:
-            return ".ja"
-        return ""
+        return prompt_composer.localized_suffix()
 
     def _load_localized_content(self, file_path: Path) -> str:
-        suffix = self._localized_suffix()
-        if suffix:
-            localized = file_path.parent / f"{file_path.stem}{suffix}{file_path.suffix}"
-            if localized.exists():
-                return self._file_cache.read(localized)
-        return self._file_cache.read(file_path)
+        return self.composer.load_localized_content(file_path)
 
     def _load_capability_body(self, file_path: Path) -> str:
-        """Load an Operation/Skill body for inclusion in a system prompt.
-
-        Strips the YAML frontmatter (Phase 4 capability metadata) so it
-        does not leak into the model's system prompt. Returns just the
-        prompt body text.
-        """
-        raw = self._load_localized_content(file_path)
-        if not raw:
-            return ""
-        body, _ = strip_body_frontmatter(raw)
-        return body.strip()
+        return self.composer.load_capability_body(file_path)
 
     def _load_project_identity(self) -> str:
-        parts = []
-        for filename in _PROJECT_IDENTITY_FILES:
-            content = self._file_cache.read(PROJECT_ROOT / filename)
-            if content:
-                parts.append(content[:_PROJECT_IDENTITY_TRUNCATE])
-        return "\n\n---\n\n".join(parts)
+        return self.composer.load_project_identity()
 
     def _build_system_prompt(
         self,
@@ -535,137 +253,20 @@ class LLMClient:
         persona: str | None = None,
         operation: str | None = None,
     ) -> tuple[str, dict]:
-        """Build the system prompt + capability resolution record.
-
-        Returns `(prompt_text, resolution_dict)`. The resolution dict belongs
-        in `trace_context["metadata"]["capability_resolution"]` — it is never
-        injected into the prompt itself.
-        """
-        # Persona axis: None → settings.AGENT_ROLE (legacy), "none" → no persona,
-        # any other string → load that persona file. Lets fixed-methodology
-        # operations (Stitch / Synthesize) opt out of the global AGENT_ROLE.
-        if persona == "none":
-            role_instructions = ""
-            persona_resolved = "none"
-        else:
-            persona_resolved = persona or settings.AGENT_ROLE
-            # Loaded via _load_capability_body: personas now share the unified
-            # frontmatter contract (description/applicable_when), which must
-            # not leak into the system prompt. Frontmatter-less files pass
-            # through unchanged.
-            role_instructions = self._load_capability_body(PERSONAS_DIR / f"{persona_resolved}.md")
-
-        # Operation axis: a persona-agnostic methodology prompt (Synthesize,
-        # Critique, ...). Orthogonal to Template (which controls output shape).
-        # Loaded via _load_capability_body so the Phase 4 capability frontmatter
-        # is stripped before the body is concatenated into the system prompt.
-        operation_instructions = ""
-        if operation and operation != "none":
-            operation_instructions = self._load_capability_body(OPERATIONS_DIR / f"{operation}.md")
-
-        if forced_template == "none":
-            template_instructions = ""
-            template_resolved = "none"
-        else:
-            template_resolved = (
-                (forced_template or default_template) or settings.USE_TEMPLATE or "wiki-note"
-            )
-            template_name = (
-                template_resolved
-                if template_resolved.endswith(".md")
-                else f"{template_resolved}.md"
-            )
-            template_instructions = self._load_capability_body(TEMPLATES_DIR / template_name)
-
-        viz_instructions = self._load_localized_content(GUIDELINES_DIR / "Visualization.md")
-
-        lang_hint = self._get_lang_hint()
-        strict_hint = (
-            "\n## STRICT ADHERENCE REQUIRED\n"
-            "You MUST follow the provided Markdown template exactly. "
-            "Do NOT add conversational fillers, greetings, or meta-comments. "
-            "Focus exclusively on structured content."
-            if settings.STRICT_MODE
-            else ""
-        )
-        yaml_rule = (
-            "Use the standard YAML header (--- title: ... ---) at the beginning of your response."
-            if require_yaml_header
-            else "Do not include YAML frontmatter unless the user explicitly asks for it."
-        )
-        # Leading language banner — first thing the model reads. Personas,
-        # operations and several templates are English-only; without an explicit
-        # override the model copies their English section headers verbatim and
-        # the whole page can drift to English. Stated first AND restated last
-        # (common_rules) so it survives the English bulk in the middle.
-        lang_banner = (
-            f"OUTPUT LANGUAGE (highest priority): write the ENTIRE response — every section "
-            f"heading and all body text — in {lang_hint}. Any English headings or labels in the "
-            f"instructions/template below are illustrative only; translate them into {lang_hint}, "
-            f"never copy them verbatim."
-        )
-        common_rules = (
-            f"\n## Output Language\nOutput everything — including all section headings — in {lang_hint}. "
-            f"The section headers shown in the template are illustrative; render them in {lang_hint}, "
-            f"never reproduce them in English.{strict_hint}\n\n"
-            f"## Task\n{instruction_type}\n\n{viz_instructions}\n\n{yaml_rule}"
-        )
-        sections = [
-            s for s in (role_instructions, operation_instructions, template_instructions) if s
-        ]
-        sections.append(common_rules)
-        prompt = lang_banner + "\n\n" + "\n\n".join(sections)
-
-        resolution = self.capability_manager.resolve(
-            persona=persona_resolved,
+        return self.composer.build_system_prompt(
+            instruction_type,
+            forced_template=forced_template,
+            default_template=default_template,
+            require_yaml_header=require_yaml_header,
+            persona=persona,
             operation=operation,
-            template=template_resolved,
         )
-        return prompt, resolution
 
     # ─── Output cleanup ─────────────────────────────────────────────────
-
-    @staticmethod
-    def _strip_accidental_frontmatter(text: str) -> str:
-        if not text:
-            return ""
-        text = text.strip()
-        text = _FENCED_MARKDOWN_RE.sub(r"\1", text).strip()
-        text, _ = strip_body_frontmatter(text)
-        return text.strip()
-
-    @staticmethod
-    def _hybrid_parse(text: str) -> dict:
-        """Find the Wiki Note YAML+body inside a model response."""
-        if not text:
-            return {"title": "Untitled", "tags": [], "type": "entity", "content": ""}
-
-        text = clean_llm_response(text)
-        result = {"title": "Untitled", "tags": [], "type": "entity", "content": text}
-
-        yaml_match = _YAML_HEADER_RE.search(text)
-        if yaml_match:
-            yaml_str = yaml_match.group(1).strip()
-            try:
-                # Bold/italic markers can sneak into LLM-produced YAML.
-                clean_yaml_str = _YAML_MARKDOWN_CLEANUP_RE.sub(r'\1"\2"', yaml_str)
-                metadata = yaml.safe_load(clean_yaml_str)
-            except Exception as e:
-                if "```yaml" in yaml_match.group(0):
-                    logging.warning(f"YAML parse failed: {e}\nOffending string:\n{yaml_str}")
-                metadata = None
-
-            if isinstance(metadata, dict):
-                for key in ("title", "tags", "type", "pending_concepts"):
-                    if key in metadata:
-                        result[key] = str(metadata[key]) if key == "title" else metadata[key]
-                result["content"] = clean_llm_response(text[yaml_match.end() :].strip())
-                return result
-
-        title_match = _H1_TITLE_RE.search(text)
-        if title_match:
-            result["title"] = title_match.group(1).strip()
-        return result
+    # Logic lives in services/llm/response_parsing.py (P2b); kept as
+    # staticmethods for existing callers/tests.
+    _strip_accidental_frontmatter = staticmethod(response_parsing.strip_accidental_frontmatter)
+    _hybrid_parse = staticmethod(response_parsing.hybrid_parse)
 
     # ─── Public API ─────────────────────────────────────────────────────
 
@@ -874,7 +475,7 @@ class LLMClient:
         which re-rolls until the score itself parses) stays as-is.
         """
         parse = extract_json_array if kind == "array" else extract_json_object
-        empty = [] if kind == "array" else {}
+        empty: list | dict = [] if kind == "array" else {}
         base_trace = dict(complete_kwargs.pop("trace_context", {}) or {})
         base_meta = dict(base_trace.get("metadata") or {})
         for attempt in range(2):
@@ -1856,227 +1457,6 @@ class LLMClient:
             logging.warning(f"generate_persona_and_template LLM call failed: {e}")
             return {}
 
-    def generate_research_keywords(self, content: str, instruction: str) -> list[str]:
-        prompt = f"""
-請根據以下內容與使用者的指示，生成 3 到 5 個適合用於學術與專利搜尋引擎（如 arXiv, Wikipedia, EuropePMC）的英文搜尋關鍵字。
-**重要：關鍵字必須簡短（1 到 3 個單字為佳），並包含廣泛的上位概念（例如 "Artificial intelligence", "Machine learning", "Language model"），以便能在專利資料庫中找到結果。請勿使用過長或過於具體的長句。**
-直接以 JSON 陣列格式輸出，例如 ["keyword1", "keyword2"]，不要有任何其他文字。
-
-[User Instruction]
-{instruction}
-
-[Content]
-{content}
-"""
-        try:
-            res = self._complete_text(
-                system_prompt="You are a research assistant. Output only a JSON array of strings.",
-                user_msg=prompt,
-                temperature=0.3,
-            )
-            import json
-            import re
-
-            match = re.search(r"\[.*\]", res, re.DOTALL)
-            if match:
-                parsed = json.loads(match.group(0))
-                if isinstance(parsed, list):
-                    keywords = [
-                        str(x).strip() for x in parsed if isinstance(x, str) and str(x).strip()
-                    ]
-                    if keywords:
-                        return keywords
-            return ["General Topic"]
-        except Exception as e:
-            logging.error(f"Failed to generate keywords: {e}")
-            return ["General Topic"]
-
     # Truncation/malformed-entry-tolerant array parse; logic lives in
     # core.json_extract (P1). Kept as a staticmethod for existing callers/tests.
     _parse_json_array = staticmethod(salvage_json_array)
-
-    @staticmethod
-    def _md_cell(text) -> str:
-        """Sanitise a value for use inside a single Markdown table cell."""
-        s = str(text if text is not None else "").replace("\n", " ").replace("|", "\\|").strip()
-        return s or "—"
-
-    def generate_elite_digest(
-        self, arxiv_wiki_results: list[dict], source_name: str, topic: str = ""
-    ) -> str:
-        # The LLM only selects and translates; URLs are rendered from our own data
-        # to avoid the model corrupting links by copying them verbatim.
-        import json
-
-        indexed = [
-            {
-                "idx": i,
-                "title": r.get("title", ""),
-                "summary": r.get("summary", ""),
-                "source": r.get("source", ""),
-            }
-            for i, r in enumerate(arxiv_wiki_results)
-        ]
-        data_str = json.dumps(indexed, ensure_ascii=False, indent=2)
-        prompt = f"""請針對主題「{topic}」，從以下來自 {source_name} 的搜尋結果中，精選 3 到 5 篇最重要的文獻。
-對每一筆你選出的文獻，請輸出：
-- idx：原始清單中的索引（整數，務必照抄，不要更動）
-- zh_title：繁體中文標題（可保留必要的英文專有名詞）
-- zh_summary：繁體中文摘要，結構化說明其核心概念與重要洞察
-
-請「只」輸出 JSON 陣列，依重要性由高到低排序，不要有任何其他文字或 Markdown 標記：
-[{{"idx": 0, "zh_title": "...", "zh_summary": "..."}}]
-
-[搜尋結果]
-{data_str}
-"""
-        try:
-            res = self._complete_text(
-                system_prompt="You are a knowledgeable research assistant. Output only a JSON array.",
-                user_msg=prompt,
-                temperature=0.5,
-            )
-            rows = self._parse_json_array(res)
-            return self._render_elite_digest(rows, arxiv_wiki_results, topic)
-        except Exception as e:
-            logging.error(f"Failed to generate elite digest: {e}")
-            return "無法生成摘要。"
-
-    def _render_elite_digest(self, rows: list[dict], results: list[dict], topic: str) -> str:
-        items = []
-        for r in rows:
-            try:
-                idx = int(r.get("idx"))
-            except (TypeError, ValueError):
-                continue
-            if idx < 0 or idx >= len(results):
-                continue
-            src = results[idx]
-            title = str(r.get("zh_title") or src.get("title", "")).strip()
-            summary = str(r.get("zh_summary", "")).strip()
-            url = src.get("url", "")
-            source_line = f"\n    * **來源**：[{url}]({url})" if url else ""
-            items.append(f"* **{title}**\n    * **摘要**：{summary}{source_line}")
-        if not items:
-            return "無法生成摘要。"
-        header = (
-            f"### 📚 Academic & Concept Elite Digest\n"
-            f"以下是為您精選的 {len(items)} 篇關於「{topic}」的重要研究與文獻摘要：\n\n"
-        )
-        return header + "\n\n".join(items)
-
-    _PATENT_TABLE_HEADER = (
-        "| 專利編號 | 關聯性 | 主旨 | 摘要 | 全文連結 |\n| :--- | :---: | :--- | :--- | :--- |\n"
-    )
-
-    def generate_patent_table(self, patent_results: list[dict], topic: str = "") -> str:
-        """Render fetched patents as a Markdown table. The LLM only filters/
-        ranks/translates; patent number + URL come from our own data so the
-        model can't corrupt them. subject/summary are written in the configured
-        OUTPUT_LANGUAGE (not a hardcoded language). Three tiers keep patents —
-        and their translation — from being lost to a flaky ranking step:
-        rank+translate → translate-only → raw source text (last resort)."""
-        import json
-
-        if not patent_results:
-            return "> 查無符合的專利（此主題可能較少出現在專利，或關鍵字過於限縮）。"
-
-        lang = self._get_lang_hint()
-        indexed = [
-            {
-                "idx": i,
-                "id": p.get("id", ""),
-                "title": p.get("title", ""),
-                "summary": p.get("summary", ""),
-            }
-            for i, p in enumerate(patent_results)
-        ]
-        data_str = json.dumps(indexed, ensure_ascii=False, indent=2)
-
-        # Tier 1: filter + rank + translate.
-        rank_prompt = f"""請針對主題「{topic}」，從以下專利清單中篩選出與主題相關的專利，並依關聯性由高到低排序。
-對每一筆你選出的專利，請輸出：
-- idx：原始清單中的索引（整數，務必照抄，不要更動）
-- relevance：關聯性，只能是「高」「中」「低」三者之一
-- subject：「主旨」，一句話點出技術核心，用 {lang} 書寫
-- summary：摘要（1~2 句），用 {lang} 書寫
-
-請「只」輸出 JSON 陣列，不要有任何其他文字或 Markdown 標記：
-[{{"idx": 0, "relevance": "高", "subject": "...", "summary": "..."}}]
-
-[專利清單]
-{data_str}
-"""
-        lines = self._patent_rows_to_lines(self._safe_json_rows(rank_prompt), patent_results)
-        if lines:
-            return self._PATENT_TABLE_HEADER + "\n".join(lines)
-
-        # Tier 2: ranking failed — translate every patent (no ranking). A
-        # simpler task than rank+translate, so its JSON is more likely to parse.
-        translate_prompt = f"""請把以下每一筆專利的「主旨」與「摘要」翻譯／改寫成 {lang}。不要篩選、不要排序，全部保留。
-對每一筆輸出：
-- idx：原始索引（整數，照抄）
-- subject：主旨（一句話點出技術核心），用 {lang}
-- summary：摘要（1~2 句），用 {lang}
-
-請「只」輸出 JSON 陣列：
-[{{"idx": 0, "subject": "...", "summary": "..."}}]
-
-[專利清單]
-{data_str}
-"""
-        lines = self._patent_rows_to_lines(
-            self._safe_json_rows(translate_prompt), patent_results, default_relevance="—"
-        )
-        if lines:
-            note = "> ⚠️ 關聯性排序這次無法產生，以下為已翻譯但未排序的專利：\n\n"
-            return note + self._PATENT_TABLE_HEADER + "\n".join(lines)
-
-        # Tier 3: even translation failed — raw source text, clearly labelled.
-        raw = [
-            f"| {self._md_cell(p.get('id', ''))} | — | {self._md_cell(p.get('title', ''))} | "
-            f"{self._md_cell((p.get('summary', '') or '')[:160])} | "
-            f"{('[連結](' + p.get('url', '') + ')') if p.get('url') else '—'} |"
-            for p in patent_results
-        ]
-        note = (
-            "> ⚠️ 排序與翻譯這次都無法產生（LLM 格式化失敗），"
-            f"以下為抓到的 {len(raw)} 筆原始專利（未排序、原文）：\n\n"
-        )
-        return note + self._PATENT_TABLE_HEADER + "\n".join(raw)
-
-    def _safe_json_rows(self, prompt: str) -> list:
-        """One JSON-array LLM call, salvage-parsed; [] on any failure."""
-        try:
-            res = self._complete_text(
-                system_prompt="You are a knowledgeable research assistant. Output only a JSON array.",
-                user_msg=prompt,
-                temperature=0.3,
-            )
-            return self._parse_json_array(res)
-        except Exception as e:
-            logging.error(f"Patent JSON step failed: {e}")
-            return []
-
-    def _patent_rows_to_lines(
-        self, rows: list[dict], patent_results: list[dict], default_relevance: str = ""
-    ) -> list[str]:
-        """Map LLM rows (idx/relevance/subject/summary) back onto our patent
-        data, skipping any row with a bad/out-of-range idx."""
-        lines = []
-        for r in rows:
-            try:
-                idx = int(r.get("idx"))
-            except (TypeError, ValueError):
-                continue
-            if idx < 0 or idx >= len(patent_results):
-                continue
-            src = patent_results[idx]
-            pid = self._md_cell(src.get("id", ""))
-            url = src.get("url", "")
-            relevance = self._md_cell(r.get("relevance", default_relevance) or default_relevance)
-            subject = self._md_cell(r.get("subject", ""))
-            summary = self._md_cell(r.get("summary", ""))
-            link = f"[連結]({url})" if url else "—"
-            lines.append(f"| {pid} | {relevance} | {subject} | {summary} | {link} |")
-        return lines

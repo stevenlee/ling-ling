@@ -137,7 +137,6 @@ module = [
     "services.ingestion_pipeline",
     "services.insight_signals",
     "services.learning_artifacts",
-    "services.llm_client",
     "services.media_processor",
     "services.rag_manager",
     "services.research_pipeline",
