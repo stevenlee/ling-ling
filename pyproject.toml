@@ -110,7 +110,6 @@ module = [
     "agents.planner_agent",
     "agents.tag_patrol_agent",
     "agents.tension_agent",
-    "core.parser",
     "core.vault_utils",
     "maintenance.autotune",
     "maintenance.backfill_falsifiability",
