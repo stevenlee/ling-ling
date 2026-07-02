@@ -37,6 +37,10 @@ class PlannerAgent(BaseAgent):
     ERROR_META = {"error": True}
     ERROR_STATUS = "🎐 Planner 失敗：{msg}"
 
+    def __init__(self, llm, rag=None):
+        super().__init__(llm, rag)
+        self.planner_service = PlannerService(llm)
+
     def execute(self, task_context: dict) -> str:
         user_directive = (task_context.get("user_directive") or "").strip()
         target_titles = task_context.get("target_titles") or []
@@ -50,7 +54,7 @@ class PlannerAgent(BaseAgent):
 
         ui.set_status(f"🎐 Planner 正在規劃：{user_directive[:60]}…")
 
-        result = PlannerService(self.llm).generate_plan(
+        result = self.planner_service.generate_plan(
             user_directive=user_directive,
             target_titles=target_titles,
             forced_template=forced_template,
@@ -139,7 +143,7 @@ class PlannerAgent(BaseAgent):
         capabilities: list[CapabilitySpec],
         forced_template: str | None,
     ) -> str:
-        return PlannerService(self.llm).ask_llm_for_plan(
+        return self.planner_service.ask_llm_for_plan(
             user_directive=user_directive,
             target_titles=target_titles,
             capabilities=capabilities,
@@ -149,7 +153,7 @@ class PlannerAgent(BaseAgent):
     # ── Capability listing ────────────────────────────────────────────
 
     def _collect_capabilities(self) -> list[CapabilitySpec]:
-        return PlannerService(self.llm).collect_capabilities()
+        return self.planner_service.collect_capabilities()
 
     @staticmethod
     def _format_capability_listing(capabilities: list[CapabilitySpec]) -> str:

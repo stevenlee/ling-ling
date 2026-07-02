@@ -29,6 +29,28 @@ from agents.insight.common import (
 
 
 class PlannerFlowMixin:
+    def _planner_service(self) -> PlannerService:
+        """Lazily built + cached per agent instance. Lazy (not __init__) so
+        tests that build InsightAgent skeletons via __new__ still work."""
+        ps = getattr(self, "_planner_service_cache", None)
+        if ps is None:
+            ps = self._planner_service_cache = PlannerService(self.llm)
+        return ps
+
+    def _pipeline_runner(self) -> PipelineRunner:
+        """Sandbox runner: the registry contains ONLY the built-in adapters,
+        plus whatever the LLMClient instance exposes. Cached per instance."""
+        runner = getattr(self, "_pipeline_runner_cache", None)
+        if runner is None:
+            registry = AdapterRegistry()
+            register_builtin_adapters(registry, self.llm)
+            runner = self._pipeline_runner_cache = PipelineRunner(
+                capability_manager=self.llm.capability_manager,
+                adapter_registry=registry,
+                trace_store=getattr(self.llm, "trace_store", None),
+            )
+        return runner
+
     # Contract: provided by the composed InsightAgent (BaseAgent state +
     # sibling mixins). Declared so each mixin documents what it needs.
     llm: Any
@@ -59,7 +81,7 @@ class PlannerFlowMixin:
             "Generate a plan suitable for an Insight report, but do not execute it. "
             "Prefer registered capabilities with explicit adapters and keep the plan short."
         )
-        result = PlannerService(self.llm).generate_plan(
+        result = self._planner_service().generate_plan(
             user_directive=user_directive,
             target_titles=target_titles,
             forced_template=forced_template,
@@ -312,13 +334,7 @@ class PlannerFlowMixin:
                 f"plan requires context keys not provided by Insight execution: {missing_context}"
             )
 
-        registry = AdapterRegistry()
-        register_builtin_adapters(registry, self.llm)
-        runner = PipelineRunner(
-            capability_manager=self.llm.capability_manager,
-            adapter_registry=registry,
-            trace_store=getattr(self.llm, "trace_store", None),
-        )
+        runner = self._pipeline_runner()
         try:
             runner.validate(spec)
         except PipelineError as e:
@@ -331,13 +347,7 @@ class PlannerFlowMixin:
         from core.ui import ui
 
         ui.set_status(f"⚙️ Insight Planner 執行 plan：{spec.id}（{len(spec.steps)} 個步驟）")
-        registry = AdapterRegistry()
-        register_builtin_adapters(registry, self.llm)
-        runner = PipelineRunner(
-            capability_manager=self.llm.capability_manager,
-            adapter_registry=registry,
-            trace_store=getattr(self.llm, "trace_store", None),
-        )
+        runner = self._pipeline_runner()
         return runner.run(spec, context=execute_context)
 
     @staticmethod

@@ -7,19 +7,31 @@ import re
 from core.state import global_busy_state
 from core.parser import parse_markdown_metadata
 
+
 class VaultWatcher(watchdog.events.FileSystemEventHandler):
     """
     Handles deletions and manual modifications in the wiki vault (pages and Notes).
     """
+
     def __init__(self, rag_manager, llm_client=None):
         super().__init__()
         self.rag = rag_manager
         self.llm = llm_client
         self._timers = {}
         self._timers_lock = threading.Lock()
+        self._research = None  # lazy: llm may be None for index-only watchers
+
+    def _research_pipeline(self):
+        """One pipeline per watcher (P3): keeps the per-source politeness
+        throttle state alive across research triggers."""
+        if self._research is None:
+            from services.research_pipeline import ResearchPipeline
+
+            self._research = ResearchPipeline(self.llm)
+        return self._research
 
     def on_created(self, event):
-        if event.is_directory or not event.src_path.endswith('.md'):
+        if event.is_directory or not event.src_path.endswith(".md"):
             return
 
         filepath = Path(event.src_path)
@@ -43,7 +55,7 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             if self._is_indexed_dir(Path(event.src_path)):
                 self._schedule_orphan_sweep()
             return
-        if not event.src_path.endswith('.md'):
+        if not event.src_path.endswith(".md"):
             return
         filepath = Path(event.src_path)
         if not self._should_watch(filepath):
@@ -57,9 +69,10 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                     self._timers[title].cancel()
                     del self._timers[title]
             from core.vault_utils import update_wiki_index
+
             update_wiki_index(filepath, title, sync_reading_index=True)
             return
-        
+
         with self._timers_lock:
             if title in self._timers:
                 self._timers[title].cancel()
@@ -91,6 +104,7 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             logging.info(f"File deleted in Vault: {title}. Removing from RAG memory...")
             self.rag.delete_document(title)
             from core.vault_utils import update_wiki_index
+
             update_wiki_index(sync_reading_index=True)
         finally:
             global_busy_state.set_busy(False)
@@ -117,16 +131,17 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             self._schedule_process(dest, dest.stem, delay=2.0)
 
     def on_modified(self, event):
-        if event.is_directory or not event.src_path.endswith('.md'):
+        if event.is_directory or not event.src_path.endswith(".md"):
             return
         filepath = Path(event.src_path)
         if not self._should_watch(filepath):
             return
 
         title = filepath.stem
-        
+
         # Special case: Scripture (System Settings)
         from core.config import SCRIPTURE_FILE, settings
+
         if filepath.absolute() == SCRIPTURE_FILE.absolute():
             logging.info("Scripture (Settings) modification detected. Reloading...")
             settings.reload()
@@ -138,7 +153,7 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
         if self._should_refresh_index_only(filepath):
             self._schedule_process(filepath, title, delay=2.0)
             return
-            
+
         # logging.info(f"Vault: {title} modified. Reschedule file sync.")
         self._schedule_process(filepath, title, delay=60.0)
 
@@ -146,7 +161,7 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
         with self._timers_lock:
             if title in self._timers:
                 self._timers[title].cancel()
-                
+
             timer = threading.Timer(delay, self._process_modification, args=[filepath, title])
             self._timers[title] = timer
             timer.start()
@@ -155,52 +170,53 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
         with self._timers_lock:
             if title in self._timers:
                 del self._timers[title]
-                
+
         if not filepath.exists():
             return
-            
+
         if not global_busy_state.try_set_busy():
             # Reschedule and try again later to avoid lock clashing
             self._schedule_process(filepath, title, delay=10.0)
             return
-            
+
         try:
             # 0. Whitelist Filter: Only index pages/ and Notes/
             if self._should_refresh_index_only(filepath):
                 logging.info(f"Reading index modified: {title}. Rebuilding index.md...")
                 from core.vault_utils import update_wiki_index
+
                 update_wiki_index(filepath, title)
                 return
 
             if not self._should_index(filepath):
                 return
-                
-            content = filepath.read_text(encoding='utf-8')
-            
+
+            content = filepath.read_text(encoding="utf-8")
+
             # --- Research Pipeline Triggers ---
             # New markers (@ling-done-research / @ling-failed-research) don't contain
             # the trigger substring at all; (?!-) additionally protects any legacy
             # @ling-research-done markers from being re-triggered.
             research_match = re.search(r"@ling-research(?!-)\s*(.*)", content)
             if research_match:
-                from services.research_pipeline import ResearchPipeline
-                rp = ResearchPipeline(self.llm)
+                rp = self._research_pipeline()
                 rp.process_research(filepath, content, research_match)
                 return  # Skip regular sync while research is pending
-            
+
             # 使用統一解析器提取標籤
             meta = parse_markdown_metadata(content)
-            original_tags = meta.get('tags', [])
-            
+            original_tags = meta.get("tags", [])
+
             # --- 智能標籤強點 (Smart Tag Enrichment) ---
             from core.tag_manager import TagManager
             from core.config import TAG_MAP_FILE
+
             tm = TagManager(TAG_MAP_FILE)
-            
+
             new_tags = set()
             aliases_to_add = []
             tags_to_translate = []
-            
+
             for tag in original_tags:
                 if tm.is_bilingual_needed(tag):
                     eq = tm.get_equivalent(tag)
@@ -211,7 +227,7 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                         tags_to_translate.append(tag)
                 else:
                     new_tags.add(tm.normalize(tag))
-            
+
             # 學習新標籤 (如果本機對照表沒有)
             if tags_to_translate and self.llm:
                 learned_map = self.llm.translate_tags(tags_to_translate)
@@ -219,31 +235,36 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                     tm.add_mapping(src, target)
                     new_tags.add(tm.normalize(target))
                     aliases_to_add.append(src)
-            
+
             final_tags = sorted(list(new_tags))
-            
+
             # 回寫 Obsidian (如果標籤有改變)
             if final_tags != original_tags or aliases_to_add:
                 try:
                     self._update_file_tags(filepath, final_tags, add_aliases=aliases_to_add)
-                    logging.info(f"Vault: Enriched tags for {title}: {original_tags} -> {final_tags} (aliases: {aliases_to_add})")
+                    logging.info(
+                        f"Vault: Enriched tags for {title}: {original_tags} -> {final_tags} (aliases: {aliases_to_add})"
+                    )
                 except Exception as e:
                     logging.error(f"Vault: Failed to write back enriched tags for {title}: {e}")
-            
+
             from core.ui import ui
+
             ui.info(f"🛍️ Syncing Brain...：[bold cyan]{title}[/bold cyan] (๑˃̵ᴗ˂̵)و")
-            
+
             logging.info(f"File sync settled: {title}. Updating memory and index...")
             # 1. Update RAG
             self.rag.add_document(filepath, title, content, tags=final_tags)
-            
+
             # 2. Update index.md
             from core.vault_utils import update_wiki_index
+
             update_wiki_index(filepath, title, sync_reading_index=True)
         except Exception as e:
             logging.exception(f"Failed to update RAG on modification for {title}")
             try:
                 from core.ui import ui
+
                 ui.error(f"同步失敗：{title} 未寫入記憶（{e}）")
             except Exception:
                 pass
@@ -252,6 +273,7 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
 
     def _is_indexed_dir(self, path: Path) -> bool:
         from core.config import CORTEX_DIR, PAGES_DIR, NOTES_DIR
+
         abs_path = path.absolute()
         return (
             self._is_relative_to(abs_path, PAGES_DIR.absolute())
@@ -291,11 +313,13 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             result = self.rag.prune_orphan_chunks()
             if result.get("deleted_chunks"):
                 from core.ui import ui
+
                 ui.info(
                     f"🧹 已清除 {result['deleted_chunks']} 個殘留 chunks"
                     f"（{result['orphan_docs']} 份已刪除文件）"
                 )
             from core.vault_utils import update_wiki_index
+
             update_wiki_index(sync_reading_index=True)
         except Exception:
             logging.exception("Vault: orphan sweep failed")
@@ -304,10 +328,12 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
 
     def _update_file_tags(self, filepath: Path, tags: list[str], add_aliases: list[str] = None):
         from core.vault_utils import update_file_tags
+
         update_file_tags(filepath, tags, add_aliases=add_aliases)
 
     def _should_watch(self, filepath: Path) -> bool:
         from core.config import SCRIPTURE_FILE
+
         return (
             filepath.absolute() == SCRIPTURE_FILE.absolute()
             or self._should_refresh_index_only(filepath)
@@ -316,10 +342,12 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
 
     def _should_refresh_index_only(self, filepath: Path) -> bool:
         from core.vault_utils import READING_INDEX_FILE
+
         return filepath.absolute() == READING_INDEX_FILE.absolute()
 
     def _should_index(self, filepath: Path) -> bool:
         from core.config import CORTEX_DIR, PAGES_DIR, NOTES_DIR
+
         abs_path = filepath.absolute()
         return (
             self._is_relative_to(abs_path, PAGES_DIR.absolute())

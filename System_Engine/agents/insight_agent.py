@@ -44,8 +44,8 @@ class InsightAgent(
     TEMP_EXPAND = 0.5
     TEMP_SYNTHESIZE = 0.3
 
-    def __init__(self, llm, rag_manager):
-        super().__init__(llm, rag_manager)
+    def __init__(self, llm, rag=None):
+        super().__init__(llm, rag)
         self.insights_dir = WIKI_VAULT_DIR / "Insights"
         self.insights_dir.mkdir(parents=True, exist_ok=True)
         self.skills_dir = SKILLS_DIR

@@ -41,12 +41,12 @@ def main():
     ensure_directories()
     settings.reload()  # Load initial settings from Wiki
     ensure_wiki_indexes()
+    # ── Composition root ── every service/watcher below receives its
+    # dependencies HERE; nothing constructs shared services for itself.
     llm_client = LLMClient()
-    rag_manager = RAGManager()
-
-    # Wire the cross-lingual query translator (RAGManager stays LLM-free; it
-    # only holds the injected callable). No-op unless CROSS_LINGUAL_ENABLED.
-    rag_manager.translator = llm_client.translate_query
+    # Cross-lingual query translator injected at construction (RAGManager
+    # stays LLM-free). No-op unless CROSS_LINGUAL_ENABLED.
+    rag_manager = RAGManager(translator=llm_client.translate_query)
 
     # 2.1. Apply any pending DB migrations before watchers start writing.
     # Failures are logged but non-fatal (the migration stays pending and

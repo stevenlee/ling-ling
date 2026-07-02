@@ -7,8 +7,8 @@ from core.parser import parse_markdown_metadata
 
 
 class LinterAgent(BaseAgent):
-    def __init__(self, llm, rag_manager):
-        super().__init__(llm, rag_manager)
+    def __init__(self, llm, rag=None):
+        super().__init__(llm, rag)
         self.vault_dir = WIKI_VAULT_DIR
         self.pages_dir = PAGES_DIR
         self.notes_dir = NOTES_DIR

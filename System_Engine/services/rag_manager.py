@@ -45,7 +45,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 
 class RAGManager:
-    def __init__(self, db_path: str | None = None, skip_config_check: bool = False):
+    def __init__(
+        self, db_path: str | None = None, skip_config_check: bool = False, translator=None
+    ):
         from core.config import DATABASE_DIR
 
         self.db_dir = (DATABASE_DIR / db_path) if db_path else DATABASE_DIR
@@ -59,10 +61,11 @@ class RAGManager:
 
         self.trace_store = TraceStore()
 
-        # Optional cross-lingual query translator, injected post-construction
-        # (RAGManager stays LLM-free): a callable (text, langs) -> {lang: str},
-        # e.g. LLMClient.translate_query. Wired in main.py / the bench harness.
-        self.translator = None
+        # Optional cross-lingual query translator (RAGManager stays LLM-free):
+        # a callable (text, langs) -> {lang: str}, e.g. LLMClient.translate_query.
+        # Passed by main.py's composition root; the bench harness and tests may
+        # still assign the attribute after construction.
+        self.translator = translator
 
         # Embedding function: provider dispatch + cache wrap live in
         # services/rag/embedding.py (P2e).

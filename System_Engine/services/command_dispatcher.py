@@ -136,6 +136,12 @@ class CommandDispatcher:
         self.llm = llm_client
         self.rag = rag_manager
         self.registry = registry or AgentRegistry(self.llm, self.rag)
+        # Owned here (P3): one ResearchPipeline per dispatcher keeps the
+        # per-source politeness throttle state alive ACROSS research commands
+        # (per-dispatch construction reset the timers).
+        from services.research_pipeline import ResearchPipeline
+
+        self.research = ResearchPipeline(self.llm)
 
     # ── Entry point ────────────────────────────────────────────────────
 
@@ -204,9 +210,7 @@ class CommandDispatcher:
         )
 
     def _handle_research(self, query_content: str, filepath: Path) -> None:
-        from services.research_pipeline import ResearchPipeline
-
-        rp = ResearchPipeline(self.llm)
+        rp = self.research
         # We use query_content (original case) but strip the command prefix.
         # Since query_content could contain the trigger anywhere, we remove it.
         # (?!-) so we don't partially strip a @ling-research-done style marker.

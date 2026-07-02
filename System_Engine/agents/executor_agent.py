@@ -56,6 +56,14 @@ class ExecutorAgent(BaseAgent):
     ERROR_META = {"error": True}
     ERROR_STATUS = "⚙️ Executor failed: {msg}"
 
+    def __init__(self, llm, rag=None):
+        super().__init__(llm, rag)
+        # Sandbox: registry contains ONLY the built-in adapters, plus
+        # whatever the LLMClient instance exposes. Steps referencing
+        # unknown adapters fail PipelineRunner.validate() up front.
+        self.adapters = AdapterRegistry()
+        register_builtin_adapters(self.adapters, self.llm)
+
     def execute(self, task_context: dict) -> str:
         user_directive = (task_context.get("user_directive") or "").strip()
         plan_id = self._parse_plan_id(user_directive, task_context)
@@ -84,15 +92,9 @@ class ExecutorAgent(BaseAgent):
                 f"**Validation error:** {e}"
             )
 
-        # Sandbox: registry contains ONLY the built-in adapters, plus
-        # whatever the LLMClient instance exposes. Steps referencing
-        # unknown adapters fail PipelineRunner.validate() up front.
-        registry = AdapterRegistry()
-        register_builtin_adapters(registry, self.llm)
-
         runner = PipelineRunner(
             capability_manager=self.llm.capability_manager,
-            adapter_registry=registry,
+            adapter_registry=self.adapters,
             trace_store=getattr(self.llm, "trace_store", None),
         )
 
