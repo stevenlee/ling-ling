@@ -1,9 +1,7 @@
 """Phase 6 axis (3): argument map (Toulmin) — extraction + rendering."""
-import os
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+import os
+
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 from services.argument_map import build_argument_map, render_argument_map
@@ -61,12 +59,14 @@ def test_render_empty_is_blank():
 def test_router_dispatches_argument_map():
     # build_artifact with forced argument_map → routes through build+render.
     from services.learning_artifacts import build_artifact
+
     out = build_artifact(FakeLLM(_TOULMIN), "an argumentative essay", forced_type="argument_map")
     assert out["type"] == "argument_map"
     assert "隱含前提" in out["artifact"]
 
 
 # ── optional Mermaid (follow-on C) ───────────────────────────────────────
+
 
 def test_render_no_mermaid_by_default():
     body = render_argument_map(_TOULMIN)
@@ -82,6 +82,7 @@ def test_render_with_mermaid_appends_deterministic_graph():
 
 def test_mermaid_label_sanitized():
     from services.argument_map import _argument_mermaid
+
     data = {"claim": 'has "quotes"\nand newline', "grounds": [], "warrants": [], "rebuttals": []}
     mm = _argument_mermaid(data)
     # double-quotes downgraded to single, newline collapsed → valid node label.
@@ -90,6 +91,7 @@ def test_mermaid_label_sanitized():
 
 def test_router_respects_argument_map_mermaid_flag(monkeypatch):
     from services.learning_artifacts import build_artifact
+
     monkeypatch.setattr("core.config.settings.ARGUMENT_MAP_MERMAID", True)
     out = build_artifact(FakeLLM(_TOULMIN), "essay", forced_type="argument_map")
     assert "```mermaid" in out["artifact"]

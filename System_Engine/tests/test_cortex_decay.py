@@ -1,16 +1,14 @@
 """Phase 3: dual-strength decay model, hysteresis, nightly pass,
 revival-rate calibration, and the simulation harness."""
+
 import json
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 from maintenance.cortex_decay_pass import run_decay_pass
 from maintenance.decay_simulation import simulate
 from services.cortex_decay import (
-    DEMOTE_DORMANT,
     derive_status,
     half_life_days,
     load_params,
@@ -25,9 +23,15 @@ NOW = datetime(2026, 6, 12, 4, 0, 0)
 def _page(cortex_dir, claim, *, S=1.0, status="active", reinforced=None, **kw):
     reinforced = (reinforced or NOW).isoformat(timespec="seconds")
     page = CortexPage(
-        claim_id=make_claim_id(claim), path=cortex_dir / f"{claim[:24]}.md", claim=claim,
-        S=S, status=status, last_reinforced_at=reinforced,
-        created=reinforced, updated=reinforced, **kw,
+        claim_id=make_claim_id(claim),
+        path=cortex_dir / f"{claim[:24]}.md",
+        claim=claim,
+        S=S,
+        status=status,
+        last_reinforced_at=reinforced,
+        created=reinforced,
+        updated=reinforced,
+        **kw,
     )
     save_cortex_page(page)
     return page
@@ -36,32 +40,43 @@ def _page(cortex_dir, claim, *, S=1.0, status="active", reinforced=None, **kw):
 class TestModelMath:
     def test_half_life_grows_with_S(self):
         assert half_life_days(1, base_days=21, growth=1.8) == 21 * 1.8
-        assert half_life_days(3, base_days=21, growth=1.8) > half_life_days(2, base_days=21, growth=1.8)
+        assert half_life_days(3, base_days=21, growth=1.8) > half_life_days(
+            2, base_days=21, growth=1.8
+        )
 
     def test_retrievability_decays_and_fails_open(self):
         fresh = retrievability(1.0, NOW.isoformat(), base_days=21, growth=1.8, now=NOW)
         assert fresh == 1.0
         old = retrievability(
-            1.0, (NOW - timedelta(days=200)).isoformat(),
-            base_days=21, growth=1.8, now=NOW,
+            1.0,
+            (NOW - timedelta(days=200)).isoformat(),
+            base_days=21,
+            growth=1.8,
+            now=NOW,
         )
         assert old < 0.1
         assert retrievability(1.0, "garbage-timestamp", base_days=21, growth=1.8) == 1.0
 
     def test_spacing_effect(self):
         page_fresh = CortexPage(
-            claim_id="c1", path=Path("x"), claim="c",
-            S=1.0, last_reinforced_at=NOW.isoformat(timespec="seconds"),
+            claim_id="c1",
+            path=Path("x"),
+            claim="c",
+            S=1.0,
+            last_reinforced_at=NOW.isoformat(timespec="seconds"),
         )
         delta_fresh = reinforce(page_fresh, 1.0, params={"base_days": 21, "growth": 1.8}, now=NOW)
-        assert delta_fresh < 0.01               # R≈1 → almost nothing
+        assert delta_fresh < 0.01  # R≈1 → almost nothing
 
         page_stale = CortexPage(
-            claim_id="c2", path=Path("x"), claim="c",
-            S=1.0, last_reinforced_at=(NOW - timedelta(days=365)).isoformat(timespec="seconds"),
+            claim_id="c2",
+            path=Path("x"),
+            claim="c",
+            S=1.0,
+            last_reinforced_at=(NOW - timedelta(days=365)).isoformat(timespec="seconds"),
         )
         delta_stale = reinforce(page_stale, 1.0, params={"base_days": 21, "growth": 1.8}, now=NOW)
-        assert delta_stale > 0.9                # 快被遺忘 → 大漲
+        assert delta_stale > 0.9  # 快被遺忘 → 大漲
         assert page_stale.last_reinforced_at == NOW.isoformat(timespec="seconds")
 
 
@@ -124,8 +139,11 @@ def _env(tmp_path):
 class TestDecayPass:
     def test_old_page_demotes_and_loses_facets(self, tmp_path):
         env = _env(tmp_path)
-        page = _page(env["cortex_dir"], "Forgotten claim from long ago.",
-                     reinforced=NOW - timedelta(days=400))
+        page = _page(
+            env["cortex_dir"],
+            "Forgotten claim from long ago.",
+            reinforced=NOW - timedelta(days=400),
+        )
         rag = FakeRAG()
 
         result = run_decay_pass(FakeLLM(), rag, **env)
@@ -139,8 +157,12 @@ class TestDecayPass:
 
     def test_retrieval_hit_revives_dormant_page(self, tmp_path):
         env = _env(tmp_path)
-        page = _page(env["cortex_dir"], "Dormant but queried claim.",
-                     status="dormant", reinforced=NOW - timedelta(days=400))
+        page = _page(
+            env["cortex_dir"],
+            "Dormant but queried claim.",
+            status="dormant",
+            reinforced=NOW - timedelta(days=400),
+        )
         rag = FakeRAG()
         llm = FakeLLM(hits=[page.claim_id])
 
@@ -163,10 +185,12 @@ class TestDecayPass:
     def test_user_edit_detected_via_mtime_not_updated(self, tmp_path):
         env = _env(tmp_path)
         page = _page(env["cortex_dir"], "Claim the user will touch.")
-        run_decay_pass(FakeLLM(), FakeRAG(), **env)        # baseline recorded
+        run_decay_pass(FakeLLM(), FakeRAG(), **env)  # baseline recorded
 
         # Simulate an Obsidian edit: mtime moves, frontmatter `updated` doesn't.
-        import os, time
+        import os
+        import time
+
         os.utime(page.path, (time.time() + 99, time.time() + 99))
 
         result = run_decay_pass(FakeLLM(), FakeRAG(), **env)
@@ -178,27 +202,35 @@ class TestDecayPass:
         (env["pages_dir"] / "Src.md").write_text("evidence body " * 30, encoding="utf-8")
         for i in range(4):
             _page(
-                env["cortex_dir"], f"Fading claim number {i} here.",
-                status="fading", S=4.0 - i,
+                env["cortex_dir"],
+                f"Fading claim number {i} here.",
+                status="fading",
+                S=4.0 - i,
                 reinforced=NOW - timedelta(days=40),
-                evidence=[{"insight": "i.md", "sources": ["Src"], "date": "2026-06-01", "summary": "s"}],
+                evidence=[
+                    {"insight": "i.md", "sources": ["Src"], "date": "2026-06-01", "summary": "s"}
+                ],
             )
         llm = FakeLLM(verdict="survived")
 
         result = run_decay_pass(llm, FakeRAG(), **env, revalidations=3)
 
-        assert result.revalidated == 3                     # quota
-        assert len(llm.refute_calls) == 3                  # 高 S 優先
+        assert result.revalidated == 3  # quota
+        assert len(llm.refute_calls) == 3  # 高 S 優先
         assert "number 3" not in " ".join(llm.refute_calls)
 
     def test_failed_revalidation_dents_confidence(self, tmp_path):
         env = _env(tmp_path)
         (env["pages_dir"]).mkdir(parents=True)
         (env["pages_dir"] / "Src.md").write_text("evidence body", encoding="utf-8")
-        page = _page(
-            env["cortex_dir"], "Fading claim that no longer holds.",
-            status="fading", reinforced=NOW - timedelta(days=40),
-            evidence=[{"insight": "i.md", "sources": ["Src"], "date": "2026-06-01", "summary": "s"}],
+        _page(
+            env["cortex_dir"],
+            "Fading claim that no longer holds.",
+            status="fading",
+            reinforced=NOW - timedelta(days=40),
+            evidence=[
+                {"insight": "i.md", "sources": ["Src"], "date": "2026-06-01", "summary": "s"}
+            ],
             confidence=0.5,
         )
         result = run_decay_pass(FakeLLM(verdict="refuted"), FakeRAG(), **env)
@@ -220,22 +252,41 @@ class TestCalibration:
         # Seed a transition history: 20 demotions, 5 revived (25% > 10% target).
         transitions = []
         for i in range(20):
-            transitions.append({"claim_id": f"c{i}", "from": "fading", "to": "dormant",
-                                "ts": "2026-05-01T00:00:00"})
+            transitions.append(
+                {
+                    "claim_id": f"c{i}",
+                    "from": "fading",
+                    "to": "dormant",
+                    "ts": "2026-05-01T00:00:00",
+                }
+            )
         for i in range(5):
-            transitions.append({"claim_id": f"c{i}", "from": "dormant", "to": "fading",
-                                "ts": "2026-05-10T00:00:00"})
+            transitions.append(
+                {
+                    "claim_id": f"c{i}",
+                    "from": "dormant",
+                    "to": "fading",
+                    "ts": "2026-05-10T00:00:00",
+                }
+            )
         env["state_file"].parent.mkdir(parents=True, exist_ok=True)
-        env["state_file"].write_text(json.dumps({
-            "params": {}, "observed": {}, "transitions": transitions,
-            "last_calibration": "",
-        }), encoding="utf-8")
+        env["state_file"].write_text(
+            json.dumps(
+                {
+                    "params": {},
+                    "observed": {},
+                    "transitions": transitions,
+                    "last_calibration": "",
+                }
+            ),
+            encoding="utf-8",
+        )
 
         result = run_decay_pass(FakeLLM(), FakeRAG(), **env)
 
         assert result.calibrated
         params = load_params(env["state_file"])
-        assert params["base_days"] == round(21 * 1.2, 2)   # damped +20%
+        assert params["base_days"] == round(21 * 1.2, 2)  # damped +20%
 
     def test_insufficient_samples_no_calibration(self, tmp_path):
         env = _env(tmp_path)
@@ -247,17 +298,15 @@ class TestCalibration:
 class TestSimulation:
     def test_simulation_reflects_decay(self, tmp_path):
         cortex = tmp_path / "Cortex"
-        old = _page(cortex, "Ancient single-event claim.",
-                    reinforced=NOW - timedelta(days=300))
+        old = _page(cortex, "Ancient single-event claim.", reinforced=NOW - timedelta(days=300))
         old.created = (NOW - timedelta(days=300)).isoformat(timespec="seconds")
         save_cortex_page(old)
-        fresh = _page(cortex, "Fresh claim from yesterday.",
-                      reinforced=NOW - timedelta(days=1))
+        fresh = _page(cortex, "Fresh claim from yesterday.", reinforced=NOW - timedelta(days=1))
         fresh.created = (NOW - timedelta(days=1)).isoformat(timespec="seconds")
         save_cortex_page(fresh)
 
         cell = simulate(load_all_pages(cortex), base_days=21, growth=1.8, now=NOW)
 
-        assert cell.status_counts["dormant"] == 1          # the ancient one
-        assert cell.status_counts["active"] == 1           # the fresh one
+        assert cell.status_counts["dormant"] == 1  # the ancient one
+        assert cell.status_counts["active"] == 1  # the fresh one
         assert 0 < cell.mean_r < 1

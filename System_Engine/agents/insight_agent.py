@@ -3,26 +3,30 @@ import json
 import random
 import re
 import yaml
-from collections import Counter
 from datetime import datetime
 from itertools import combinations
-from pathlib import Path
 
 from agents.base_agent import BaseAgent
 from core.config import SKILLS_DIR, WIKI_VAULT_DIR
 from core.parser import extract_json_array, extract_json_object
 from services.builtin_adapters import builtin_adapter_names, register_builtin_adapters
 from services.plan_readiness import assess_plan_readiness
-from services.pipeline_runner import AdapterRegistry, PipelineError, PipelineRunner, PipelineRunResult, PipelineSpec
+from services.pipeline_runner import (
+    AdapterRegistry,
+    PipelineError,
+    PipelineRunner,
+    PipelineRunResult,
+    PipelineSpec,
+)
 from services.planner_service import PlannerService
 
 
-_WIKILINK_RE = re.compile(r'\[\[(.*?)\]\]')
-_HASHTAG_RE = re.compile(r'#([^\s#]+)')
-_SKILL_FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*\n', re.DOTALL)
-_BOOK_SUFFIX_RE = re.compile(r'\s*\((?:Part\s+\d+|Stitched|Synthesis)\)\s*$', re.IGNORECASE)
-_STITCHED_SUFFIX_RE = re.compile(r'\(Stitched\)\s*$', re.IGNORECASE)
-_SYNTHESIS_SUFFIX_RE = re.compile(r'\(Synthesis\)\s*$', re.IGNORECASE)
+_WIKILINK_RE = re.compile(r"\[\[(.*?)\]\]")
+_HASHTAG_RE = re.compile(r"#([^\s#]+)")
+_SKILL_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+_BOOK_SUFFIX_RE = re.compile(r"\s*\((?:Part\s+\d+|Stitched|Synthesis)\)\s*$", re.IGNORECASE)
+_STITCHED_SUFFIX_RE = re.compile(r"\(Stitched\)\s*$", re.IGNORECASE)
+_SYNTHESIS_SUFFIX_RE = re.compile(r"\(Synthesis\)\s*$", re.IGNORECASE)
 
 # Auto-attached by ingestion_pipeline.py — not content topics, so excluded
 # from tag-cluster sampling (otherwise nearly every run picks one).
@@ -63,7 +67,7 @@ class InsightAgent(BaseAgent):
                 yaml_data = yaml.safe_load(match.group(1))
                 if not isinstance(yaml_data, dict) or "name" not in yaml_data:
                     continue
-                yaml_data["system_prompt"] = content[match.end():].strip()
+                yaml_data["system_prompt"] = content[match.end() :].strip()
                 strategies[yaml_data["name"]] = yaml_data
             except Exception as e:
                 logging.error(f"Failed to load skill {filepath.name}: {e}")
@@ -104,13 +108,17 @@ class InsightAgent(BaseAgent):
         generate_insight and generate_full_insight (audit R7-D — the two were
         byte-for-byte duplicates)."""
         from core.config import INSIGHT_SIGNALS_ENABLED
+
         if not INSIGHT_SIGNALS_ENABLED:
             return {}
         from services.insight_signals import compute_signals
+
         signals = compute_signals(content, target_titles, self.rag, self.llm)
         return {
             "signals": {
-                "groundedness": round(signals.groundedness, 4) if signals.groundedness is not None else None,
+                "groundedness": round(signals.groundedness, 4)
+                if signals.groundedness is not None
+                else None,
                 "novelty": round(signals.novelty, 4) if signals.novelty is not None else None,
                 "bridging": round(signals.bridging, 4) if signals.bridging is not None else None,
                 "refute_verdict": signals.refute_verdict,
@@ -124,6 +132,7 @@ class InsightAgent(BaseAgent):
         a visual is a bonus, never block the insight report on it."""
         try:
             from services.learning_artifacts import maybe_artifact_section
+
             section = maybe_artifact_section(self.llm, content)
             return f"\n\n---\n\n{section}" if section else ""
         except Exception as e:
@@ -153,6 +162,7 @@ class InsightAgent(BaseAgent):
         blockers = self._check_skill_preconditions(config.get("applicable_when") or {})
         if blockers:
             from core.ui import ui
+
             reasons = "；".join(blockers)
             message = f"⏸️ 技能「{strategy_id}」前置條件未滿足：{reasons}"
             ui.error(message)
@@ -161,7 +171,7 @@ class InsightAgent(BaseAgent):
 
         pipeline = config.get("pipeline", "single")
         resolved_template = forced_template or config.get("template")
-        self._grounded_on_acc = set()   # F1: claims this run grounded on (for frontmatter)
+        self._grounded_on_acc = set()  # F1: claims this run grounded on (for frontmatter)
 
         if pipeline == "montecarlo":
             report_content = self._run_montecarlo(config, user_directive, resolved_template)
@@ -181,9 +191,7 @@ class InsightAgent(BaseAgent):
 
         report_content += self._maybe_artifact(report_content)
 
-        _, full_markdown = self._write_report(
-            f"{config['name']}", report_content, "ins", meta
-        )
+        _, full_markdown = self._write_report(f"{config['name']}", report_content, "ins", meta)
         self._mirror_to_insights(
             full_markdown,
             requested_cmd=f"insight-{strategy_id}",
@@ -235,7 +243,7 @@ class InsightAgent(BaseAgent):
         """Run all strategies, then perform a cross-strategy synthesis."""
         section_results = []
         insight_seeds = []
-        self._grounded_on_acc = set()   # F1: accumulates across all strategies' seeds
+        self._grounded_on_acc = set()  # F1: accumulates across all strategies' seeds
 
         for strategy_id, config in self.strategies.items():
             pipeline = config.get("pipeline", "single")
@@ -342,8 +350,8 @@ class InsightAgent(BaseAgent):
 
         ui.set_status(
             "🎐 Insight Planner 正在規劃並準備執行..."
-            if execute_plan else
-            "🎐 Insight Planner 正在規劃預覽..."
+            if execute_plan
+            else "🎐 Insight Planner 正在規劃預覽..."
         )
 
         context_note = (
@@ -368,10 +376,12 @@ class InsightAgent(BaseAgent):
             )
             execution_result = None
             execution_blocker = None
-            execute_context = self._build_planner_execute_context({
-                "user_directive": user_directive,
-                "target_titles": target_titles,
-            })
+            execute_context = self._build_planner_execute_context(
+                {
+                    "user_directive": user_directive,
+                    "target_titles": target_titles,
+                }
+            )
             if execute_plan:
                 execution_blocker = self._planner_execute_blocker(
                     result.spec,
@@ -399,7 +409,8 @@ class InsightAgent(BaseAgent):
                 "planner_mode": "execute" if execution_result else "preview",
                 "execute_requested": execute_plan,
                 "execution_status": (
-                    execution_result.status if execution_result
+                    execution_result.status
+                    if execution_result
                     else ("blocked_by_execution_gate" if execution_blocker else "not_requested")
                 ),
                 "execution_blocker": execution_blocker,
@@ -408,11 +419,13 @@ class InsightAgent(BaseAgent):
                 "step_count": len(spec.steps) if spec else 0,
                 "step_statuses": (
                     {step_id: sr.status for step_id, sr in execution_result.steps.items()}
-                    if execution_result else {}
+                    if execution_result
+                    else {}
                 ),
                 "finality_status": (
                     self._finality_status(spec, execution_result)
-                    if execution_result else "not_executed"
+                    if execution_result
+                    else "not_executed"
                 ),
                 "target_titles": target_titles,
                 "plan_json": plan_dict,
@@ -430,7 +443,8 @@ class InsightAgent(BaseAgent):
                 ],
                 "capability_resolution": (
                     PlannerService.resolve_plan_capabilities(spec, result.capabilities)
-                    if spec else {}
+                    if spec
+                    else {}
                 ),
             }
             title = f"{spec.description or spec.id}"
@@ -451,11 +465,7 @@ class InsightAgent(BaseAgent):
             }
             title = "Error"
 
-        report_type = (
-            "ins-plan-exe"
-            if meta.get("planner_mode") == "execute"
-            else "ins-plan-pre"
-        )
+        report_type = "ins-plan-exe" if meta.get("planner_mode") == "execute" else "ins-plan-pre"
         _, full_markdown = self._write_report(
             title,
             body,
@@ -463,9 +473,7 @@ class InsightAgent(BaseAgent):
             meta,
         )
         requested_cmd = (
-            "insight-plan-execute"
-            if report_type == "ins-plan-exe"
-            else "insight-plan-preview"
+            "insight-plan-execute" if report_type == "ins-plan-exe" else "insight-plan-preview"
         )
         self._mirror_to_insights(
             full_markdown,
@@ -497,30 +505,34 @@ class InsightAgent(BaseAgent):
             "> [!IMPORTANT]",
             (
                 "> Phase 6B execution was requested and allowed; this report includes real pipeline step results."
-                if executed else
-                "> Planner mode preview contains a validated recommended plan; no pipeline steps were executed."
+                if executed
+                else "> Planner mode preview contains a validated recommended plan; no pipeline steps were executed."
             ),
             "",
         ]
         if execute_plan and execution_blocker:
-            lines.extend([
-                "> [!WARNING]",
-                f"> `/execute` was requested, but execution was blocked: {execution_blocker}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "> [!WARNING]",
+                    f"> `/execute` was requested, but execution was blocked: {execution_blocker}",
+                    "",
+                ]
+            )
 
-        lines.extend([
-            "## Summary",
-            "",
-            summary,
-            "",
-            "## User Directive",
-            "",
-            "```",
-            user_directive,
-            "```",
-            "",
-        ])
+        lines.extend(
+            [
+                "## Summary",
+                "",
+                summary,
+                "",
+                "## User Directive",
+                "",
+                "```",
+                user_directive,
+                "```",
+                "",
+            ]
+        )
 
         if target_titles:
             lines.extend(["## Target References", ""])
@@ -531,7 +543,9 @@ class InsightAgent(BaseAgent):
         if execution_result:
             lines.extend(self._render_planner_execution_section(spec, execution_result))
         else:
-            lines.extend(self._render_preview_handoff(readiness, plan_dict, execute_plan, execution_blocker))
+            lines.extend(
+                self._render_preview_handoff(readiness, plan_dict, execute_plan, execution_blocker)
+            )
 
         lines.extend(["## Recommended Plan", ""])
         for idx, step in enumerate(spec.steps, 1):
@@ -554,23 +568,25 @@ class InsightAgent(BaseAgent):
                 lines.append(f"- **Why here**: {rationale}")
             lines.append("")
 
-        lines.extend([
-            "## Risk Notes",
-            "",
-            (
-                "- `/execute` ran only after readiness, step-count, adapter allowlist, and runner validation gates passed."
-                if executed else
-                "- Preview mode did not execute adapters, mutate files, or create child trace runs."
-            ),
-            "- Execution stays behind explicit `/execute` because planned steps may invoke high-cost capabilities.",
-            "- Any step using an unregistered adapter will fail runner validation until an allowlisted adapter exists.",
-            "",
-            "## Raw Plan JSON",
-            "",
-            "```json",
-            json.dumps(plan_dict, indent=2, ensure_ascii=False),
-            "```",
-        ])
+        lines.extend(
+            [
+                "## Risk Notes",
+                "",
+                (
+                    "- `/execute` ran only after readiness, step-count, adapter allowlist, and runner validation gates passed."
+                    if executed
+                    else "- Preview mode did not execute adapters, mutate files, or create child trace runs."
+                ),
+                "- Execution stays behind explicit `/execute` because planned steps may invoke high-cost capabilities.",
+                "- Any step using an unregistered adapter will fail runner validation until an allowlisted adapter exists.",
+                "",
+                "## Raw Plan JSON",
+                "",
+                "```json",
+                json.dumps(plan_dict, indent=2, ensure_ascii=False),
+                "```",
+            ]
+        )
         return "\n".join(lines)
 
     def _planner_execute_blocker(
@@ -590,7 +606,9 @@ class InsightAgent(BaseAgent):
             return f"plan references non-allowlisted adapters: {unknown}"
         missing_context = sorted(self._required_context_keys(spec) - set(execute_context))
         if missing_context:
-            return f"plan requires context keys not provided by Insight execution: {missing_context}"
+            return (
+                f"plan requires context keys not provided by Insight execution: {missing_context}"
+            )
 
         registry = AdapterRegistry()
         register_builtin_adapters(registry, self.llm)
@@ -605,7 +623,9 @@ class InsightAgent(BaseAgent):
             return f"runner validation failed: {e}"
         return None
 
-    def _execute_planner_spec(self, *, spec: PipelineSpec, execute_context: dict) -> PipelineRunResult:
+    def _execute_planner_spec(
+        self, *, spec: PipelineSpec, execute_context: dict
+    ) -> PipelineRunResult:
         from core.ui import ui
 
         ui.set_status(f"⚙️ Insight Planner 執行 plan：{spec.id}（{len(spec.steps)} 個步驟）")
@@ -677,11 +697,13 @@ class InsightAgent(BaseAgent):
         ]
         finality_note = InsightAgent._finality_note(spec, result)
         if finality_note:
-            lines.extend([
-                "> [!WARNING]",
-                f"> {finality_note}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "> [!WARNING]",
+                    f"> {finality_note}",
+                    "",
+                ]
+            )
         if result.error:
             lines.extend(["### Execution Error", "", f"```text\n{result.error}\n```", ""])
 
@@ -699,7 +721,9 @@ class InsightAgent(BaseAgent):
             if step_result.error:
                 lines.append(f"- **Error**: `{step_result.error}`")
             if step_result.output is not None:
-                lines.append(f"- **Output preview**: {InsightAgent._preview_value(step_result.output)}")
+                lines.append(
+                    f"- **Output preview**: {InsightAgent._preview_value(step_result.output)}"
+                )
             lines.append("")
 
         source_lines = InsightAgent._render_source_appendix(result)
@@ -708,12 +732,14 @@ class InsightAgent(BaseAgent):
 
         final_output = InsightAgent._final_step_output_text(spec, result)
         if final_output:
-            lines.extend([
-                "## Final Step Output",
-                "",
-                final_output,
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Final Step Output",
+                    "",
+                    final_output,
+                    "",
+                ]
+            )
         return lines
 
     @staticmethod
@@ -727,13 +753,13 @@ class InsightAgent(BaseAgent):
             output = step_result.output
             if not isinstance(output, dict):
                 continue
-            
+
             # Extract from load_sources step
             if "sources" in output:
                 sources.extend(output["sources"])
             if "missing_titles" in output:
                 missing.extend(output["missing_titles"])
-                
+
             # Extract from digest_sources step
             if "source_digests" in output:
                 for d in output["source_digests"]:
@@ -753,15 +779,19 @@ class InsightAgent(BaseAgent):
         if sources:
             has_any_digest = len(digests_by_title) > 0
             if has_any_digest:
-                lines.extend([
-                    "| Title | Kind | Loaded chars | Original chars | Truncated | Digest chars | Coverage Warning | Path |",
-                    "| --- | --- | ---: | ---: | --- | ---: | --- | --- |",
-                ])
+                lines.extend(
+                    [
+                        "| Title | Kind | Loaded chars | Original chars | Truncated | Digest chars | Coverage Warning | Path |",
+                        "| --- | --- | ---: | ---: | --- | ---: | --- | --- |",
+                    ]
+                )
             else:
-                lines.extend([
-                    "| Title | Kind | Loaded chars | Original chars | Truncated | Path |",
-                    "| --- | --- | ---: | ---: | --- | --- |",
-                ])
+                lines.extend(
+                    [
+                        "| Title | Kind | Loaded chars | Original chars | Truncated | Path |",
+                        "| --- | --- | ---: | ---: | --- | --- |",
+                    ]
+                )
 
             for src in sources:
                 if not isinstance(src, dict):
@@ -788,18 +818,24 @@ class InsightAgent(BaseAgent):
                     else:
                         digest_chars = "N/A"
                         cov_warning_str = "no digest"
-                    
+
                     cov_warning_str = InsightAgent._escape_table_cell(cov_warning_str)
-                    lines.append(f"| {title} | {kind} | {loaded} | {original} | {truncated} | {digest_chars} | {cov_warning_str} | `{path}` |")
+                    lines.append(
+                        f"| {title} | {kind} | {loaded} | {original} | {truncated} | {digest_chars} | {cov_warning_str} | `{path}` |"
+                    )
                 else:
-                    lines.append(f"| {title} | {kind} | {loaded} | {original} | {truncated} | `{path}` |")
+                    lines.append(
+                        f"| {title} | {kind} | {loaded} | {original} | {truncated} | `{path}` |"
+                    )
             lines.append("")
 
         if missing:
-            lines.extend([
-                "**Missing titles:**",
-                "",
-            ])
+            lines.extend(
+                [
+                    "**Missing titles:**",
+                    "",
+                ]
+            )
             lines.extend(f"- `{t}`" for t in missing)
             lines.append("")
         return lines
@@ -887,17 +923,18 @@ class InsightAgent(BaseAgent):
             "",
         ]
         if not readiness.findings:
-            lines.extend([
-                "No readiness issues detected by static checks.",
-                "",
-            ])
+            lines.extend(
+                [
+                    "No readiness issues detected by static checks.",
+                    "",
+                ]
+            )
             return lines
 
         for finding in readiness.findings:
             scope = f"step `{finding.step_id}`" if finding.step_id else "plan"
             lines.append(
-                f"- **{finding.severity.upper()} `{finding.code}`** ({scope}): "
-                f"{finding.message}"
+                f"- **{finding.severity.upper()} `{finding.code}`** ({scope}): {finding.message}"
             )
             if finding.suggestion:
                 lines.append(f"  - Suggestion: {finding.suggestion}")
@@ -915,38 +952,46 @@ class InsightAgent(BaseAgent):
         lines = ["## Preview Handoff", ""]
 
         if readiness.verdict == "ready":
-            lines.extend([
-                "This plan passed static readiness checks for guarded execution.",
-                "",
-                "- No sidecar execution plan was written by this Insight preview.",
-                "- Add `/execute` or `/execution` to the planner-mode directive to run it through the guarded Insight execution path.",
-                "- Or run the same directive through `@ling-plan`, review its readiness section, then approve with `@ling-do <plan_id>`.",
-                f"- Expected plan id if preserved by the planner: `{plan_id}`.",
-                "",
-            ])
+            lines.extend(
+                [
+                    "This plan passed static readiness checks for guarded execution.",
+                    "",
+                    "- No sidecar execution plan was written by this Insight preview.",
+                    "- Add `/execute` or `/execution` to the planner-mode directive to run it through the guarded Insight execution path.",
+                    "- Or run the same directive through `@ling-plan`, review its readiness section, then approve with `@ling-do <plan_id>`.",
+                    f"- Expected plan id if preserved by the planner: `{plan_id}`.",
+                    "",
+                ]
+            )
         elif readiness.verdict == "needs_review":
-            lines.extend([
-                "This plan needs human review before execution.",
-                "",
-                "- Address the readiness findings above, then re-run planner preview.",
-                "- Do not enable `/execute` for this plan until warnings are resolved or explicitly accepted.",
-                "",
-            ])
+            lines.extend(
+                [
+                    "This plan needs human review before execution.",
+                    "",
+                    "- Address the readiness findings above, then re-run planner preview.",
+                    "- Do not enable `/execute` for this plan until warnings are resolved or explicitly accepted.",
+                    "",
+                ]
+            )
         else:
-            lines.extend([
-                "This plan is blocked for execution.",
-                "",
-                "- Resolve error-level readiness findings first.",
-                "- Re-plan after fixing missing capabilities, adapters, or invalid execution contracts.",
-                "",
-            ])
+            lines.extend(
+                [
+                    "This plan is blocked for execution.",
+                    "",
+                    "- Resolve error-level readiness findings first.",
+                    "- Re-plan after fixing missing capabilities, adapters, or invalid execution contracts.",
+                    "",
+                ]
+            )
         if execute_plan and execution_blocker:
-            lines.extend([
-                "**Execution blocker:**",
-                "",
-                f"```text\n{execution_blocker}\n```",
-                "",
-            ])
+            lines.extend(
+                [
+                    "**Execution blocker:**",
+                    "",
+                    f"```text\n{execution_blocker}\n```",
+                    "",
+                ]
+            )
         return lines
 
     def _render_planner_preview_error(
@@ -977,12 +1022,14 @@ class InsightAgent(BaseAgent):
             "",
         ]
         if execute_plan:
-            lines.extend([
-                "## Execution Request",
-                "",
-                "`/execute` was present, but planning did not produce a valid executable plan.",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Execution Request",
+                    "",
+                    "`/execute` was present, but planning did not produce a valid executable plan.",
+                    "",
+                ]
+            )
         if target_titles:
             lines.extend(["## Target References", ""])
             lines.extend(f"- `[[{title}]]`" for title in target_titles)
@@ -998,7 +1045,9 @@ class InsightAgent(BaseAgent):
 
     # ── Pipeline: Single-Shot ────────────────────────────────────────
 
-    def _run_single(self, config: dict, user_directive: str, resolved_template: str | None = None) -> str:
+    def _run_single(
+        self, config: dict, user_directive: str, resolved_template: str | None = None
+    ) -> str:
         selection = config.get("selection", {})
         method = config.get("method") or selection.get("method", "random")
         limit = config.get("limit") or selection.get("limit", 10)
@@ -1026,7 +1075,9 @@ class InsightAgent(BaseAgent):
 
     # ── Pipeline: Monte Carlo ────────────────────────────────────────
 
-    def _run_montecarlo(self, config: dict, user_directive: str, resolved_template: str | None = None) -> str:
+    def _run_montecarlo(
+        self, config: dict, user_directive: str, resolved_template: str | None = None
+    ) -> str:
         num_sparks = config.get("num_sparks", 6)
         top_k = config.get("top_k", 3)
         num_rounds = config.get("num_rounds", 3)
@@ -1042,10 +1093,14 @@ class InsightAgent(BaseAgent):
         # same scan, which dominated runtime on large vaults.
         title_meta = self._fetch_all_title_meta()
         all_docs = self._get_all_documents(
-            limit * 5, chunks_per_book=chunks_per_book, title_meta=title_meta,
+            limit * 5,
+            chunks_per_book=chunks_per_book,
+            title_meta=title_meta,
         )
         if len(all_docs) < 2:
-            logging.warning("Monte Carlo: not enough documents for pairing, falling back to single.")
+            logging.warning(
+                "Monte Carlo: not enough documents for pairing, falling back to single."
+            )
             return self._run_single(config, user_directive, resolved_template)
 
         tried_pairs: set[tuple[str, str]] = set()
@@ -1057,8 +1112,11 @@ class InsightAgent(BaseAgent):
 
             if target_titles:
                 pairs = self._build_targeted_pairs(
-                    all_docs, target_titles, num_sparks,
-                    exclude=tried_pairs, title_meta=title_meta,
+                    all_docs,
+                    target_titles,
+                    num_sparks,
+                    exclude=tried_pairs,
+                    title_meta=title_meta,
                 )
             else:
                 pairs = self._sample_random_pairs(all_docs, num_sparks, exclude=tried_pairs)
@@ -1073,24 +1131,31 @@ class InsightAgent(BaseAgent):
             seeds = self._spark_pairs(pairs, config, round_num, ui)
             if not seeds:
                 logging.info(f"Monte Carlo round {round_num}: no seeds generated.")
-                round_results.append({
-                    "round": round_num, "pairs_tried": len(pairs),
-                    "seeds": 0, "winners": [], "expanded": [],
-                })
+                round_results.append(
+                    {
+                        "round": round_num,
+                        "pairs_tried": len(pairs),
+                        "seeds": 0,
+                        "winners": [],
+                        "expanded": [],
+                    }
+                )
                 continue
 
             seeds.sort(key=lambda s: s.get("novelty_score", 0), reverse=True)
             winners = seeds[:top_k]
             expanded = self._expand_winners(winners, config, round_num, ui)
 
-            round_results.append({
-                "round": round_num,
-                "pairs_tried": len(pairs),
-                "seeds": len(seeds),
-                "winners": winners,
-                "expanded": expanded,
-                "all_scores": [s.get("novelty_score", 0) for s in seeds],
-            })
+            round_results.append(
+                {
+                    "round": round_num,
+                    "pairs_tried": len(pairs),
+                    "seeds": len(seeds),
+                    "winners": winners,
+                    "expanded": expanded,
+                    "all_scores": [s.get("novelty_score", 0) for s in seeds],
+                }
+            )
 
             logging.info(
                 f"Monte Carlo round {round_num}: {len(pairs)} pairs → "
@@ -1103,7 +1168,9 @@ class InsightAgent(BaseAgent):
             return self._run_single(config, user_directive, resolved_template)
 
         ui.set_status("Monte Carlo: cross-round evaluation & synthesis...")
-        return self._synthesize_multi_round(round_results, config, user_directive, resolved_template)
+        return self._synthesize_multi_round(
+            round_results, config, user_directive, resolved_template
+        )
 
     def _spark_pairs(self, pairs, config, round_num, ui):
         seeds = []
@@ -1172,9 +1239,7 @@ class InsightAgent(BaseAgent):
 
         docs = []
         for book in book_roots:
-            docs.extend(
-                self._docs_from_book(book_to_titles[book], title_meta, chunks_per_book)
-            )
+            docs.extend(self._docs_from_book(book_to_titles[book], title_meta, chunks_per_book))
 
         logging.info(
             f"Monte Carlo: {len(title_meta)} titles across {len(book_to_titles)} books, "
@@ -1186,7 +1251,7 @@ class InsightAgent(BaseAgent):
     @staticmethod
     def _book_root(title: str) -> str:
         """Strip `(Part N)` / `(Stitched)` / `(Synthesis)` so book parts collapse."""
-        return _BOOK_SUFFIX_RE.sub('', title or '').strip()
+        return _BOOK_SUFFIX_RE.sub("", title or "").strip()
 
     def _docs_from_book(
         self,
@@ -1241,7 +1306,9 @@ class InsightAgent(BaseAgent):
 
     # ── Sampling ─────────────────────────────────────────────────────
 
-    def _sample_random_pairs(self, docs: list[dict], num_pairs: int, exclude: set | None = None) -> list[tuple]:
+    def _sample_random_pairs(
+        self, docs: list[dict], num_pairs: int, exclude: set | None = None
+    ) -> list[tuple]:
         pairs = []
         exclude = exclude or set()
         max_attempts = num_pairs * 4
@@ -1314,7 +1381,9 @@ class InsightAgent(BaseAgent):
                 )
 
         if best_doc:
-            logging.info(f"Monte Carlo: target '{requested_title}' resolved to '{best_doc['title']}'")
+            logging.info(
+                f"Monte Carlo: target '{requested_title}' resolved to '{best_doc['title']}'"
+            )
             return best_doc
 
         try:
@@ -1349,12 +1418,15 @@ class InsightAgent(BaseAgent):
                 seen_target_titles.add(doc["title"])
 
         if not target_docs:
-            logging.warning(f"Monte Carlo: targets {target_titles} not found, falling back to random.")
+            logging.warning(
+                f"Monte Carlo: targets {target_titles} not found, falling back to random."
+            )
             return self._sample_random_pairs(all_docs, num_pairs, exclude=exclude)
 
         target_title_set = {doc["title"] for doc in target_docs}
         other_docs = [
-            doc for doc in all_docs
+            doc
+            for doc in all_docs
             if doc["title"] not in target_title_set
             and not any(self._target_match_score(t, doc["title"]) for t in target_titles)
         ]
@@ -1463,13 +1535,16 @@ class InsightAgent(BaseAgent):
         stay cold so the echo-chamber canary has a control group. Hash-based, so
         it's reproducible and testable (not random)."""
         from core.config import CORTEX_GROUNDED_INSIGHT_ENABLED, CORTEX_GROUND_FRACTION
+
         if not CORTEX_GROUNDED_INSIGHT_ENABLED:
             return False
         # M4: the fraction may be auto-tuned against the echo canary; get_tuned
         # returns the config default unless AUTOTUNE_ENABLED has nudged it.
         from services.autotune_store import get_tuned
+
         fraction = get_tuned("CORTEX_GROUND_FRACTION", CORTEX_GROUND_FRACTION)
         import hashlib
+
         bucket = int(hashlib.sha256(idea.encode("utf-8")).hexdigest(), 16) % 100
         return bucket < int(round(fraction * 100))
 
@@ -1478,12 +1553,17 @@ class InsightAgent(BaseAgent):
         gated (defense 3): unfalsifiable beliefs can't be wrong, so they only
         self-reinforce — never let them anchor generation. Returns CortexPages."""
         from core.config import (
-            CORTEX_DIR, CORTEX_GROUND_MIN_FALSIFIABILITY, CORTEX_GROUND_TOP_K,
+            CORTEX_DIR,
+            CORTEX_GROUND_MIN_FALSIFIABILITY,
+            CORTEX_GROUND_TOP_K,
         )
         from services.cortex_store import load_all_pages
+
         falsifiable = [
-            p for p in load_all_pages(CORTEX_DIR)
-            if p.claim.strip() and p.status in ("active", "dormant")
+            p
+            for p in load_all_pages(CORTEX_DIR)
+            if p.claim.strip()
+            and p.status in ("active", "dormant")
             and p.falsifiability is not None
             and p.falsifiability >= CORTEX_GROUND_MIN_FALSIFIABILITY
         ]
@@ -1491,9 +1571,10 @@ class InsightAgent(BaseAgent):
             return falsifiable
         # Rank by relevance only when there are more than we'll use.
         from services.cortex_recall import recall_claims
-        ranked = recall_claims(self.rag, idea, cortex_dir=CORTEX_DIR,
-                               top_k=CORTEX_GROUND_TOP_K, min_score=0.0)
-        ids = {p.claim_id for _, p in ranked}
+
+        ranked = recall_claims(
+            self.rag, idea, cortex_dir=CORTEX_DIR, top_k=CORTEX_GROUND_TOP_K, min_score=0.0
+        )
         ranked_pages = [p for _, p in ranked]
         # Fall back to the unranked falsifiable set if recall returned nothing.
         return ranked_pages or falsifiable[:CORTEX_GROUND_TOP_K]
@@ -1524,7 +1605,9 @@ class InsightAgent(BaseAgent):
         except Exception as e:
             logging.debug(f"Monte Carlo: evidence search failed: {e}")
             evidence_docs = []
-        evidence_context = "\n\n".join(evidence_docs) if evidence_docs else "(No supporting evidence found.)"
+        evidence_context = (
+            "\n\n".join(evidence_docs) if evidence_docs else "(No supporting evidence found.)"
+        )
 
         system_base = self._load_prompt("system_base.md")
         agent_instruction = self._load_prompt("agent_insight.md")
@@ -1575,7 +1658,9 @@ class InsightAgent(BaseAgent):
         return {
             **seed,
             "expanded": expansion_text,
-            "evidence_sources": [doc.split("\n")[0] for doc in evidence_docs[:3]] if evidence_docs else [],
+            "evidence_sources": [doc.split("\n")[0] for doc in evidence_docs[:3]]
+            if evidence_docs
+            else [],
             "grounded_on": grounded_on,
         }
 
@@ -1607,8 +1692,7 @@ class InsightAgent(BaseAgent):
             f"---\n\n"
             f"## 🏆 Cross-Round Evaluation\n\n{evaluation}\n\n"
             f"---\n\n"
-            f"## 🔬 Per-Round Details\n\n"
-            + "\n\n---\n\n".join(round_sections)
+            f"## 🔬 Per-Round Details\n\n" + "\n\n---\n\n".join(round_sections)
         )
 
     @staticmethod
@@ -1628,8 +1712,7 @@ class InsightAgent(BaseAgent):
             )
         return (
             "| Round | Pairs | Seeds | Avg Score | Best | Top Connection |\n"
-            "|:-----:|:-----:|:-----:|:---------:|:----:|:---------------|\n"
-            + "\n".join(rows)
+            "|:-----:|:-----:|:-----:|:---------:|:----:|:---------------|\n" + "\n".join(rows)
         )
 
     @staticmethod
@@ -1639,7 +1722,9 @@ class InsightAgent(BaseAgent):
         for r in round_results:
             expanded = r.get("expanded", [])
             if not expanded:
-                round_sections.append(f"### Round {r['round']}\n\n_(No insights generated this round.)_")
+                round_sections.append(
+                    f"### Round {r['round']}\n\n_(No insights generated this round.)_"
+                )
                 continue
 
             insights = []
@@ -1697,7 +1782,7 @@ class InsightAgent(BaseAgent):
     def _extract_seeds_from_section(self, section_content: str, strategy_name: str) -> list[dict]:
         extract_prompt = (
             "Extract the 2-3 most important insight claims from this analysis section.\n"
-            "Return a JSON array of objects: [{\"claim\": \"...\", \"strategy\": \"...\"}]\n"
+            'Return a JSON array of objects: [{"claim": "...", "strategy": "..."}]\n'
             "Each claim should be a single declarative sentence."
         )
         try:
@@ -1726,8 +1811,7 @@ class InsightAgent(BaseAgent):
             return "(No cross-strategy patterns detected.)"
 
         seed_text = "\n".join(
-            f"- [{s.get('strategy', '?')}] {s.get('claim', '?')}"
-            for s in all_seeds[:15]
+            f"- [{s.get('strategy', '?')}] {s.get('claim', '?')}" for s in all_seeds[:15]
         )
         synthesis_prompt = (
             f"You have key insights extracted from {len(set(s.get('strategy') for s in all_seeds))} "
@@ -1811,7 +1895,8 @@ class InsightAgent(BaseAgent):
                 target_tag = random.choice(interesting if interesting else list(tag_books))
 
             cluster_docs = [
-                doc for doc, meta in zip(results["documents"], results["metadatas"])
+                doc
+                for doc, meta in zip(results["documents"], results["metadatas"])
                 if target_tag in self._parse_stored_tags(meta.get("tags", ""))
             ]
             if not cluster_docs:
@@ -1831,7 +1916,10 @@ class InsightAgent(BaseAgent):
                 results = {}
             docs = results.get("documents", []) if results else []
             if docs:
-                return f"Analysis target (Knowledge Island): [[{target_island}]]\n\n" + "\n---\n".join(docs)
+                return (
+                    f"Analysis target (Knowledge Island): [[{target_island}]]\n\n"
+                    + "\n---\n".join(docs)
+                )
 
         try:
             results = self.rag.all_chunks()
@@ -1870,7 +1958,9 @@ class InsightAgent(BaseAgent):
                         f"### 🏝️ [[{title}]] (connectivity: {connectivity[title]})\n"
                         f"Tags: {', '.join(tags) if tags else '(none)'}\n\n{doc}"
                     )
-            return "Knowledge Islands Detected (lowest connectivity scores):\n\n" + "\n---\n".join(island_docs)
+            return "Knowledge Islands Detected (lowest connectivity scores):\n\n" + "\n---\n".join(
+                island_docs
+            )
         except Exception as e:
             logging.debug(f"InsightAgent: island detection failed: {e}")
             return self._get_random_sample_context(limit)

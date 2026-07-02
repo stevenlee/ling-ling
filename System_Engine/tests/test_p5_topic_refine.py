@@ -15,17 +15,13 @@ The hardest phase to test because the LLM is non-deterministic. Strategy:
 The acceptance gate is: **every failure path degrades silently to the
 P3 result.** P5 must never make ingestion worse.
 """
-import json
-import os
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+import os
+
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import pytest
 
-from services.md_block_scanner import BlockKind, scan
 from services.thoughtful_splitter import (
     BoundaryKind,
     ThoughtfulSplitter,
@@ -34,6 +30,7 @@ from services.thoughtful_splitter import (
 
 
 # ─── Test helpers ─────────────────────────────────────────────────────
+
 
 class StubLLM:
     """Records every find_topic_shifts call and returns scripted answers."""
@@ -83,6 +80,7 @@ def _splitter(stub_llm=None, **kw):
 
 # ─── _TopicShiftCache ────────────────────────────────────────────────
 
+
 class TestTopicShiftCacheMemory:
     def test_round_trip(self):
         c = _TopicShiftCache()
@@ -126,6 +124,7 @@ class TestTopicShiftCacheDisk:
     def test_unparseable_disk_entry_doesnt_crash(self, tmp_path):
         """A corrupted JSON file is treated as a cache miss, not an error."""
         from hashlib import sha256
+
         key = sha256("test".encode()).hexdigest()
         (tmp_path / f"{key}.json").write_text("not valid json {{{")
         c = _TopicShiftCache(tmp_path)
@@ -143,6 +142,7 @@ class TestTopicShiftCacheDisk:
 
 # ─── No LLM configured ───────────────────────────────────────────────
 
+
 class TestNoLlmConfigured:
     def test_use_llm_true_but_no_llm_is_silent_noop(self):
         text = _long_paragraph_chunk()
@@ -155,11 +155,12 @@ class TestNoLlmConfigured:
         stub = StubLLM(responses=[{"split_after": [4]}])
         text = _long_paragraph_chunk()
         s = _splitter(stub_llm=stub)
-        chunks = s.split_thoughtful(text, use_llm=False)
+        s.split_thoughtful(text, use_llm=False)
         assert stub.calls == [], "LLM was called despite use_llm=False"
 
 
 # ─── Eligibility ──────────────────────────────────────────────────────
+
 
 class TestEligibility:
     def test_short_chunks_not_refined(self):
@@ -177,7 +178,9 @@ class TestEligibility:
         body = "Some paragraph text. " * 200
         text = f"# Top\n\n{body}\n\n## Sub\n\n{body}\n"
         stub = StubLLM(responses=[{"split_after": [1]}])
-        s = _splitter(stub_llm=stub, target_size=8000, max_size=20000, min_size=500, snap_window=1000)
+        s = _splitter(
+            stub_llm=stub, target_size=8000, max_size=20000, min_size=500, snap_window=1000
+        )
         s.split_thoughtful(text, use_llm=True)
         # The chunk spans the heading, so P5 should skip it.
         # NB: this also exercises the eligibility-2 (no heading) gate.
@@ -189,7 +192,9 @@ class TestEligibility:
         code = "```py\n" + "x = 1\n" * 50 + "```"
         text = f"{body}\n\n{code}\n\n{body}\n"
         stub = StubLLM(responses=[{"split_after": [1]}])
-        s = _splitter(stub_llm=stub, target_size=8000, max_size=20000, min_size=500, snap_window=1000)
+        s = _splitter(
+            stub_llm=stub, target_size=8000, max_size=20000, min_size=500, snap_window=1000
+        )
         s.split_thoughtful(text, use_llm=True)
         assert stub.calls == [], f"LLM called on chunk containing code fence: {stub.calls}"
 
@@ -198,7 +203,9 @@ class TestEligibility:
         stub = StubLLM(responses=[{"split_after": [4]}])
         # Make max_size big enough that the whole chunk fits in ONE P3 chunk
         # (otherwise the structural splitter beats P5 to the punch).
-        s = _splitter(stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s = _splitter(
+            stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600
+        )
         chunks = s.split_thoughtful(text, use_llm=True)
         assert len(stub.calls) >= 1, "LLM should have been called on eligible chunk"
         # And the response should have created a split.
@@ -207,11 +214,14 @@ class TestEligibility:
 
 # ─── Happy paths ─────────────────────────────────────────────────────
 
+
 class TestHappyPath:
     def test_single_split_applied(self):
         text = _long_paragraph_chunk(n_paragraphs=8)
         stub = StubLLM(responses=[{"split_after": [4]}])
-        s = _splitter(stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s = _splitter(
+            stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600
+        )
         chunks = s.split_thoughtful(text, use_llm=True)
         topic_chunks = [c for c in chunks if c.boundary_type == BoundaryKind.LLM_TOPIC_SHIFT]
         assert len(topic_chunks) == 1
@@ -223,7 +233,9 @@ class TestHappyPath:
     def test_two_splits_applied(self):
         text = _long_paragraph_chunk(n_paragraphs=12)
         stub = StubLLM(responses=[{"split_after": [4, 8]}])
-        s = _splitter(stub_llm=stub, target_size=4000, max_size=20000, min_size=400, snap_window=600)
+        s = _splitter(
+            stub_llm=stub, target_size=4000, max_size=20000, min_size=400, snap_window=600
+        )
         chunks = s.split_thoughtful(text, use_llm=True)
         # Should have inserted 2 LLM_TOPIC_SHIFT boundaries → 3 segments from this chunk.
         topic_chunks = [c for c in chunks if c.boundary_type == BoundaryKind.LLM_TOPIC_SHIFT]
@@ -232,14 +244,18 @@ class TestHappyPath:
     def test_empty_response_means_no_split(self):
         text = _long_paragraph_chunk(n_paragraphs=8)
         stub = StubLLM(responses=[{"split_after": []}])
-        s = _splitter(stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s = _splitter(
+            stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600
+        )
         chunks = s.split_thoughtful(text, use_llm=True)
         assert not any(c.boundary_type == BoundaryKind.LLM_TOPIC_SHIFT for c in chunks)
 
     def test_chunks_remain_contiguous_after_split(self):
         text = _long_paragraph_chunk(n_paragraphs=8)
         stub = StubLLM(responses=[{"split_after": [4]}])
-        s = _splitter(stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s = _splitter(
+            stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600
+        )
         chunks = s.split_thoughtful(text, use_llm=True)
         cursor = 0
         for c in chunks:
@@ -250,11 +266,14 @@ class TestHappyPath:
 
 # ─── Failure modes ───────────────────────────────────────────────────
 
+
 class TestFailureModes:
     def test_llm_raises_falls_back_silently(self, caplog):
         text = _long_paragraph_chunk(n_paragraphs=8)
         stub = StubLLM(raises=[RuntimeError("LLM unreachable")])
-        s = _splitter(stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s = _splitter(
+            stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600
+        )
         chunks = s.split_thoughtful(text, use_llm=True)
         # No LLM_TOPIC_SHIFT boundary; the chunks are whatever P3 produced.
         assert not any(c.boundary_type == BoundaryKind.LLM_TOPIC_SHIFT for c in chunks)
@@ -265,7 +284,9 @@ class TestFailureModes:
         """LLM returns a non-dict (e.g. just a string) — should be no-op."""
         text = _long_paragraph_chunk(n_paragraphs=8)
         stub = StubLLM(responses=["not a dict"])
-        s = _splitter(stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s = _splitter(
+            stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600
+        )
         chunks = s.split_thoughtful(text, use_llm=True)
         assert not any(c.boundary_type == BoundaryKind.LLM_TOPIC_SHIFT for c in chunks)
 
@@ -274,7 +295,9 @@ class TestFailureModes:
         text = _long_paragraph_chunk(n_paragraphs=6)
         # All indices are out of [1, 5].
         stub = StubLLM(responses=[{"split_after": [0, 6, 99]}])
-        s = _splitter(stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s = _splitter(
+            stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600
+        )
         chunks = s.split_thoughtful(text, use_llm=True)
         assert not any(c.boundary_type == BoundaryKind.LLM_TOPIC_SHIFT for c in chunks)
 
@@ -288,8 +311,10 @@ class TestFailureModes:
         stub = StubLLM(responses=[{"split_after": [1]}])
         s = _splitter(
             stub_llm=stub,
-            target_size=4000, max_size=20000,
-            min_size=1000, snap_window=1000,
+            target_size=4000,
+            max_size=20000,
+            min_size=1000,
+            snap_window=1000,
         )
         chunks = s.split_thoughtful(text, use_llm=True)
         assert not any(c.boundary_type == BoundaryKind.LLM_TOPIC_SHIFT for c in chunks)
@@ -297,11 +322,14 @@ class TestFailureModes:
 
 # ─── Cache integration ────────────────────────────────────────────────
 
+
 class TestCacheIntegration:
     def test_repeated_chunk_hits_cache(self):
         text = _long_paragraph_chunk(n_paragraphs=8)
         stub = StubLLM(responses=[{"split_after": [4]}])
-        s = _splitter(stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s = _splitter(
+            stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600
+        )
         s.split_thoughtful(text, use_llm=True)
         first_calls = len(stub.calls)
         # Run again with the same text — second call should NOT increment.
@@ -310,7 +338,9 @@ class TestCacheIntegration:
 
     def test_different_text_misses_cache(self):
         stub = StubLLM(responses=[{"split_after": [4]}])
-        s = _splitter(stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s = _splitter(
+            stub_llm=stub, target_size=2000, max_size=10000, min_size=400, snap_window=600
+        )
         s.split_thoughtful(_long_paragraph_chunk(n_paragraphs=8), use_llm=True)
         s.split_thoughtful(_long_paragraph_chunk(n_paragraphs=10), use_llm=True)
         assert len(stub.calls) == 2, "different chunk text must miss cache"
@@ -318,15 +348,27 @@ class TestCacheIntegration:
     def test_disk_cache_persists_across_splitter_instances(self, tmp_path):
         text = _long_paragraph_chunk(n_paragraphs=8)
         stub1 = StubLLM(responses=[{"split_after": [4]}])
-        s1 = _splitter(stub_llm=stub1, cache_dir=tmp_path,
-                       target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s1 = _splitter(
+            stub_llm=stub1,
+            cache_dir=tmp_path,
+            target_size=2000,
+            max_size=10000,
+            min_size=400,
+            snap_window=600,
+        )
         s1.split_thoughtful(text, use_llm=True)
         assert len(stub1.calls) == 1
 
         # Fresh splitter, fresh stub — should not call the LLM because disk cache hits.
         stub2 = StubLLM(responses=[{"split_after": [4]}])
-        s2 = _splitter(stub_llm=stub2, cache_dir=tmp_path,
-                       target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s2 = _splitter(
+            stub_llm=stub2,
+            cache_dir=tmp_path,
+            target_size=2000,
+            max_size=10000,
+            min_size=400,
+            snap_window=600,
+        )
         chunks = s2.split_thoughtful(text, use_llm=True)
         assert stub2.calls == [], "second splitter should hit disk cache, not call LLM"
         assert any(c.boundary_type == BoundaryKind.LLM_TOPIC_SHIFT for c in chunks)
@@ -334,9 +376,11 @@ class TestCacheIntegration:
 
 # ─── find_topic_shifts contract (lightweight, no real LLM) ────────────
 
+
 class TestFindTopicShiftsContract:
     def setup_method(self):
         from services.llm_client import LLMClient
+
         self.client = LLMClient.__new__(LLMClient)
 
     def test_too_few_paragraphs_returns_empty_without_llm_call(self):
@@ -352,8 +396,10 @@ class TestFindTopicShiftsContract:
 
     def test_llm_failure_returns_empty(self, caplog):
         """If the underlying _complete_text raises, no crash."""
+
         def boom(**kw):
             raise RuntimeError("dead")
+
         self.client._complete_text = boom
         result = self.client.find_topic_shifts(["p1", "p2", "p3"])
         assert result["split_after"] == []
@@ -385,19 +431,22 @@ class TestFindTopicShiftsContract:
 
 # ─── End-to-end via injected stub (sanity) ────────────────────────────
 
+
 class TestEndToEndWithStub:
     def test_p5_runs_when_enabled_and_skips_when_disabled(self):
         """A single corpus document; same content, P5 on vs off."""
         text = _long_paragraph_chunk(n_paragraphs=10, words_per_paragraph=40)
 
         stub_on = StubLLM(responses=[{"split_after": [5]}])
-        s_on = _splitter(stub_llm=stub_on,
-                         target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s_on = _splitter(
+            stub_llm=stub_on, target_size=2000, max_size=10000, min_size=400, snap_window=600
+        )
         chunks_on = s_on.split_thoughtful(text, use_llm=True)
 
         stub_off = StubLLM(responses=[{"split_after": [5]}])
-        s_off = _splitter(stub_llm=stub_off,
-                          target_size=2000, max_size=10000, min_size=400, snap_window=600)
+        s_off = _splitter(
+            stub_llm=stub_off, target_size=2000, max_size=10000, min_size=400, snap_window=600
+        )
         chunks_off = s_off.split_thoughtful(text, use_llm=False)
 
         assert stub_off.calls == []

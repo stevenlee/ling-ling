@@ -1,8 +1,6 @@
 import os
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 from services.capability_manager import CapabilitySpec
@@ -58,10 +56,18 @@ def test_readiness_flags_semantic_execution_risks():
         spec=spec,
         plan_dict=plan,
         capabilities=[
-            _cap("critique", expected_inputs=("candidate", "sources"),
-                 expected_context=("focus",), produces=("critique_findings",)),
-            _cap("synthesize", expected_inputs=("part_digests",),
-                 expected_context=("title", "final_concepts"), produces=("synthesis_text",)),
+            _cap(
+                "critique",
+                expected_inputs=("candidate", "sources"),
+                expected_context=("focus",),
+                produces=("critique_findings",),
+            ),
+            _cap(
+                "synthesize",
+                expected_inputs=("part_digests",),
+                expected_context=("title", "final_concepts"),
+                produces=("synthesis_text",),
+            ),
         ],
     )
 
@@ -106,10 +112,18 @@ def test_readiness_ready_when_schema_and_contracts_align():
         spec=spec,
         plan_dict=plan,
         capabilities=[
-            _cap("synthesize", expected_inputs=("part_digests",),
-                 expected_context=("title", "final_concepts"), produces=("synthesis_text",)),
-            _cap("critique", expected_inputs=("candidate", "sources"),
-                 expected_context=("focus",), produces=("critique_findings",)),
+            _cap(
+                "synthesize",
+                expected_inputs=("part_digests",),
+                expected_context=("title", "final_concepts"),
+                produces=("synthesis_text",),
+            ),
+            _cap(
+                "critique",
+                expected_inputs=("candidate", "sources"),
+                expected_context=("focus",),
+                produces=("critique_findings",),
+            ),
         ],
     )
 
@@ -148,10 +162,17 @@ def test_readiness_accepts_load_sources_to_critique_pattern():
         spec=spec,
         plan_dict=plan,
         capabilities=[
-            _cap("load_sources", expected_inputs=("titles",),
-                 produces=("source_text", "sources", "missing_titles")),
-            _cap("critique", expected_inputs=("candidate", "sources"),
-                 expected_context=("focus",), produces=("critique_findings",)),
+            _cap(
+                "load_sources",
+                expected_inputs=("titles",),
+                produces=("source_text", "sources", "missing_titles"),
+            ),
+            _cap(
+                "critique",
+                expected_inputs=("candidate", "sources"),
+                expected_context=("focus",),
+                produces=("critique_findings",),
+            ),
         ],
     )
 
@@ -185,15 +206,23 @@ def test_readiness_warns_when_critique_candidate_is_instruction():
         spec=spec,
         plan_dict=plan,
         capabilities=[
-            _cap("load_sources", expected_inputs=("titles",),
-                 produces=("source_text", "sources", "missing_titles")),
-            _cap("critique", expected_inputs=("candidate", "sources"),
-                 produces=("critique_findings",)),
+            _cap(
+                "load_sources",
+                expected_inputs=("titles",),
+                produces=("source_text", "sources", "missing_titles"),
+            ),
+            _cap(
+                "critique",
+                expected_inputs=("candidate", "sources"),
+                produces=("critique_findings",),
+            ),
         ],
     )
 
     assert report.verdict == "needs_review"
-    finding = next(f for f in report.findings if f.code == "critique_candidate_looks_like_instruction")
+    finding = next(
+        f for f in report.findings if f.code == "critique_candidate_looks_like_instruction"
+    )
     assert "answer_from_sources" in finding.suggestion
 
 
@@ -224,10 +253,17 @@ def test_readiness_warns_when_source_text_feeds_part_digests():
         spec=spec,
         plan_dict=plan,
         capabilities=[
-            _cap("load_sources", expected_inputs=("titles",),
-                 produces=("source_text", "sources", "missing_titles")),
-            _cap("synthesize", expected_inputs=("part_digests",),
-                 expected_context=("title", "final_concepts"), produces=("synthesis_text")),
+            _cap(
+                "load_sources",
+                expected_inputs=("titles",),
+                produces=("source_text", "sources", "missing_titles"),
+            ),
+            _cap(
+                "synthesize",
+                expected_inputs=("part_digests",),
+                expected_context=("title", "final_concepts"),
+                produces=("synthesis_text"),
+            ),
         ],
     )
 
@@ -286,4 +322,3 @@ def test_readiness_warns_on_multi_source_no_digest():
     codes = {f.code for f in report_with_digest_cap.findings}
     assert "multi_source_no_digest" in codes
     assert "digest_skipped" in codes
-

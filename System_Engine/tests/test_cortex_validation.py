@@ -1,8 +1,4 @@
 """Validation harness tools: signals backfill + the three-tier report."""
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 from core.parser import parse_markdown_metadata
 from maintenance.cortex_validation import run_validation
@@ -32,6 +28,7 @@ class FakeLLM:
 class TestBackfill:
     def test_unsigned_insight_gains_signals_body_preserved(self, tmp_path, monkeypatch):
         import services.insight_signals as sig
+
         monkeypatch.setattr(sig, "INSIGHT_SIGNALS_ENABLED", True)
         monkeypatch.setattr(sig, "INSIGHT_REFUTE_ENABLED", True)
         monkeypatch.setattr(sig, "INSIGHT_SIGNALS_FILE", tmp_path / "db" / "sig.json")
@@ -47,37 +44,46 @@ class TestBackfill:
         body = "# 洞察\n\n本文主張 X 與 Y 相關。\n"
         # Vault-wide insight: no source pages → refute skips (M4 behavior).
         (insights / "[20260601-010101][Vault][full-insight].md").write_text(
-            f"---\ntitle: old insight\n---\n\n{body}", encoding="utf-8",
+            f"---\ntitle: old insight\n---\n\n{body}",
+            encoding="utf-8",
         )
         # Doc-anchored insight: source content exists → refute runs.
         (insights / "[20260601-020202][Doc A][insight-recency].md").write_text(
-            f"---\ntitle: doc insight\n---\n\n{body}", encoding="utf-8",
+            f"---\ntitle: doc insight\n---\n\n{body}",
+            encoding="utf-8",
         )
         (insights / "[20260602-010101][Vault][full-insight].md").write_text(
-            "---\nsignals:\n  groundedness: 1.0\n---\n\nalready signed\n", encoding="utf-8",
+            "---\nsignals:\n  groundedness: 1.0\n---\n\nalready signed\n",
+            encoding="utf-8",
         )
 
         result = backfill_signals(FakeRAG(), FakeLLM(), insights_dir=insights)
 
         assert result.backfilled == 2 and result.skipped_signed == 1
         vault_meta = parse_markdown_metadata(
-            (insights / "[20260601-010101][Vault][full-insight].md").read_text(encoding="utf-8"))
-        assert vault_meta["signals"]["refute_verdict"] is None     # no sources → skip
+            (insights / "[20260601-010101][Vault][full-insight].md").read_text(encoding="utf-8")
+        )
+        assert vault_meta["signals"]["refute_verdict"] is None  # no sources → skip
         assert vault_meta["signals_backfilled"] is True
 
-        doc_text = (insights / "[20260601-020202][Doc A][insight-recency].md").read_text(encoding="utf-8")
+        doc_text = (insights / "[20260601-020202][Doc A][insight-recency].md").read_text(
+            encoding="utf-8"
+        )
         doc_meta = parse_markdown_metadata(doc_text)
         assert doc_meta["signals"]["refute_verdict"] == "survived"  # sources loaded from filename
-        assert body.strip() in doc_text                             # body preserved
+        assert body.strip() in doc_text  # body preserved
 
 
 class TestValidationReport:
     def _page(self, cortex_dir, claim):
         claim_id = make_claim_id(claim)
         page = CortexPage(
-            claim_id=claim_id, path=cortex_dir / f"{claim[:20]}.md", claim=claim,
+            claim_id=claim_id,
+            path=cortex_dir / f"{claim[:20]}.md",
+            claim=claim,
             last_reinforced_at="2026-06-11T03:00:00",
-            created="2026-06-11T03:00:00", updated="2026-06-11T03:00:00",
+            created="2026-06-11T03:00:00",
+            updated="2026-06-11T03:00:00",
         )
         save_cortex_page(page)
         return page
@@ -89,15 +95,18 @@ class TestValidationReport:
         rag = FakeRAG(facet_titles=[p1.claim_id, p2.claim_id])
 
         report = run_validation(
-            rag, cortex_dir=cortex, insights_dir=tmp_path / "Insights",
-            state_file=tmp_path / "state.json", bench_history=tmp_path / "bench.json",
+            rag,
+            cortex_dir=cortex,
+            insights_dir=tmp_path / "Insights",
+            state_file=tmp_path / "state.json",
+            bench_history=tmp_path / "bench.json",
             report_dir=tmp_path / "out",
         )
 
         assert report.verdict == "GREEN"
         assert report.stats["pages_total"] == 2
         text = report.report_path.read_text(encoding="utf-8")
-        assert "Claim one stands alone fine." in text     # human review list
+        assert "Claim one stands alone fine." in text  # human review list
 
     def test_red_on_missing_facet_and_unparseable(self, tmp_path):
         cortex = tmp_path / "Cortex"
@@ -105,9 +114,12 @@ class TestValidationReport:
         (cortex / "broken.md").write_text("no frontmatter", encoding="utf-8")
 
         report = run_validation(
-            FakeRAG(facet_titles=[]), cortex_dir=cortex,
-            insights_dir=tmp_path / "Insights", state_file=tmp_path / "state.json",
-            bench_history=tmp_path / "bench.json", report_dir=tmp_path / "out",
+            FakeRAG(facet_titles=[]),
+            cortex_dir=cortex,
+            insights_dir=tmp_path / "Insights",
+            state_file=tmp_path / "state.json",
+            bench_history=tmp_path / "bench.json",
+            report_dir=tmp_path / "out",
         )
 
         assert report.verdict == "RED"
@@ -116,17 +128,26 @@ class TestValidationReport:
 
     def test_yellow_on_negative_facet_lift(self, tmp_path):
         import json
+
         cortex = tmp_path / "Cortex"
         p = self._page(cortex, "Healthy page with facet present.")
         bench = tmp_path / "bench.json"
-        bench.write_text(json.dumps([
-            {"pass_rate": 0.8, "facet_lift": -1},
-        ]), encoding="utf-8")
+        bench.write_text(
+            json.dumps(
+                [
+                    {"pass_rate": 0.8, "facet_lift": -1},
+                ]
+            ),
+            encoding="utf-8",
+        )
 
         report = run_validation(
-            FakeRAG(facet_titles=[p.claim_id]), cortex_dir=cortex,
-            insights_dir=tmp_path / "Insights", state_file=tmp_path / "state.json",
-            bench_history=bench, report_dir=tmp_path / "out",
+            FakeRAG(facet_titles=[p.claim_id]),
+            cortex_dir=cortex,
+            insights_dir=tmp_path / "Insights",
+            state_file=tmp_path / "state.json",
+            bench_history=bench,
+            report_dir=tmp_path / "out",
         )
 
         assert report.verdict == "YELLOW"
@@ -134,6 +155,7 @@ class TestValidationReport:
 
 
 # ── Phase 2.5: gauge fixes + falsifiability backfill ──────────────────
+
 
 def _signed_insight(insights_dir, name, *, groundedness, refute="survived"):
     insights_dir.mkdir(parents=True, exist_ok=True)
@@ -150,16 +172,24 @@ class TestReportScores:
         cortex = tmp_path / "Cortex"
         claim = "Scored claim with falsifier."
         page = CortexPage(
-            claim_id=make_claim_id(claim), path=cortex / "c.md", claim=claim,
-            falsifiability=0.5, falsifier="EN text（中文輔助）", confidence=0.5,
+            claim_id=make_claim_id(claim),
+            path=cortex / "c.md",
+            claim=claim,
+            falsifiability=0.5,
+            falsifier="EN text（中文輔助）",
+            confidence=0.5,
             last_reinforced_at="2026-06-12T03:00:00",
-            created="2026-06-12T03:00:00", updated="2026-06-12T03:00:00",
+            created="2026-06-12T03:00:00",
+            updated="2026-06-12T03:00:00",
         )
         save_cortex_page(page)
         report = run_validation(
-            FakeRAG(facet_titles=[page.claim_id]), cortex_dir=cortex,
-            insights_dir=tmp_path / "Insights", state_file=tmp_path / "s.json",
-            bench_history=tmp_path / "b.json", report_dir=tmp_path / "out",
+            FakeRAG(facet_titles=[page.claim_id]),
+            cortex_dir=cortex,
+            insights_dir=tmp_path / "Insights",
+            state_file=tmp_path / "s.json",
+            bench_history=tmp_path / "b.json",
+            report_dir=tmp_path / "out",
         )
         text = report.report_path.read_text(encoding="utf-8")
         assert "證偽：EN text（中文輔助）" in text
@@ -169,9 +199,12 @@ class TestReportScores:
 class TestGaugeFixes:
     def _run(self, tmp_path, rag=None):
         return run_validation(
-            rag or FakeRAG(), cortex_dir=tmp_path / "Cortex",
-            insights_dir=tmp_path / "Insights", state_file=tmp_path / "state.json",
-            bench_history=tmp_path / "bench.json", report_dir=tmp_path / "out",
+            rag or FakeRAG(),
+            cortex_dir=tmp_path / "Cortex",
+            insights_dir=tmp_path / "Insights",
+            state_file=tmp_path / "state.json",
+            bench_history=tmp_path / "bench.json",
+            report_dir=tmp_path / "out",
         )
 
     def test_broken_rate_scoped_to_gate_passers(self, tmp_path):
@@ -199,15 +232,22 @@ class TestGaugeFixes:
         cortex = tmp_path / "Cortex"
         cortex.mkdir()
         from services.cortex_store import CortexPage, make_claim_id, save_cortex_page
+
         for i, score in enumerate((0.0, 0.0, 1.0)):
             claim = f"Claim number {i} for the gauge."
             page = CortexPage(
-                claim_id=make_claim_id(claim), path=cortex / f"c{i}.md", claim=claim,
-                falsifiability=score, last_reinforced_at="2026-06-11T03:00:00",
-                created="2026-06-11T03:00:00", updated="2026-06-11T03:00:00",
+                claim_id=make_claim_id(claim),
+                path=cortex / f"c{i}.md",
+                claim=claim,
+                falsifiability=score,
+                last_reinforced_at="2026-06-11T03:00:00",
+                created="2026-06-11T03:00:00",
+                updated="2026-06-11T03:00:00",
             )
             save_cortex_page(page)
-        rag = FakeRAG(facet_titles=[make_claim_id(f"Claim number {i} for the gauge.") for i in range(3)])
+        rag = FakeRAG(
+            facet_titles=[make_claim_id(f"Claim number {i} for the gauge.") for i in range(3)]
+        )
 
         report = self._run(tmp_path, rag=rag)
 
@@ -220,23 +260,35 @@ class TestFalsifiabilityBackfill:
     def test_backfills_without_touching_history(self, tmp_path):
         from maintenance.backfill_falsifiability import backfill_falsifiability
         from services.cortex_store import (
-            CortexPage, load_all_pages, make_claim_id, save_cortex_page,
+            CortexPage,
+            load_all_pages,
+            make_claim_id,
+            save_cortex_page,
         )
 
         cortex = tmp_path / "Cortex"
         claim_old = "Old page lacking the fifth signal."
         old = CortexPage(
-            claim_id=make_claim_id(claim_old), path=cortex / "old.md", claim=claim_old,
-            confidence=0.7, S=3, last_reinforced_at="2026-06-10T03:00:00",
-            created="2026-06-09T03:00:00", updated="2026-06-10T03:00:00",
+            claim_id=make_claim_id(claim_old),
+            path=cortex / "old.md",
+            claim=claim_old,
+            confidence=0.7,
+            S=3,
+            last_reinforced_at="2026-06-10T03:00:00",
+            created="2026-06-09T03:00:00",
+            updated="2026-06-10T03:00:00",
         )
         save_cortex_page(old)
         claim_done = "Already measured page."
         done = CortexPage(
-            claim_id=make_claim_id(claim_done), path=cortex / "done.md", claim=claim_done,
-            falsifiability=0.9, falsifier="existing",
+            claim_id=make_claim_id(claim_done),
+            path=cortex / "done.md",
+            claim=claim_done,
+            falsifiability=0.9,
+            falsifier="existing",
             last_reinforced_at="2026-06-10T03:00:00",
-            created="2026-06-10T03:00:00", updated="2026-06-10T03:00:00",
+            created="2026-06-10T03:00:00",
+            updated="2026-06-10T03:00:00",
         )
         save_cortex_page(done)
 
@@ -249,7 +301,7 @@ class TestFalsifiabilityBackfill:
         assert result.backfilled == 1 and result.skipped == 1 and not result.failed
         pages = {p.claim_id: p for p in load_all_pages(cortex)}
         refreshed = pages[old.claim_id]
-        assert refreshed.falsifiability == 1.0           # clamp 生效
+        assert refreshed.falsifiability == 1.0  # clamp 生效
         assert refreshed.falsifier == "observable refutation"
         # 測量不得改寫歷史
         assert refreshed.confidence == 0.7
@@ -263,10 +315,16 @@ class TestFalsifiabilityBackfill:
 
         cortex = tmp_path / "Cortex"
         claim = "Page whose assessment crashes."
-        save_cortex_page(CortexPage(
-            claim_id=make_claim_id(claim), path=cortex / "x.md", claim=claim,
-            last_reinforced_at="t", created="t", updated="t",
-        ))
+        save_cortex_page(
+            CortexPage(
+                claim_id=make_claim_id(claim),
+                path=cortex / "x.md",
+                claim=claim,
+                last_reinforced_at="t",
+                created="t",
+                updated="t",
+            )
+        )
 
         class CrashLLM:
             def assess_falsifiability(self, claim):
@@ -288,7 +346,9 @@ class TestCortexAgent:
             report_path = tmp_path / "[report] cortex validation x.md"
 
         calls = []
-        monkeypatch.setattr(agent_mod, "run_validation", lambda rag: calls.append(rag) or FakeReport())
+        monkeypatch.setattr(
+            agent_mod, "run_validation", lambda rag: calls.append(rag) or FakeReport()
+        )
 
         agent = CortexAgent.__new__(CortexAgent)
         agent.llm = None
@@ -304,6 +364,7 @@ class TestCortexAgent:
         from watchers.prompt_watcher import INTENT_ROUTES
         from agents.registry import AgentRegistry
         from unittest.mock import MagicMock
+
         assert any(key == "cortex" for _, _, key in INTENT_ROUTES)
         registry = AgentRegistry(MagicMock(), MagicMock())
         assert registry.get_agent("cortex") is not None

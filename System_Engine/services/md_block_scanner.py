@@ -26,33 +26,33 @@ Public API
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 
 class BlockKind(Enum):
     FRONTMATTER = "frontmatter"
-    HEADING     = "heading"
-    PARAGRAPH   = "paragraph"
-    LIST        = "list"        # Virtual container, not atomic.
-    LIST_ITEM   = "list_item"   # Top-level item with its sub-items, atomic.
-    CODE_FENCE  = "code_fence"
-    TABLE       = "table"
-    BLOCKQUOTE  = "blockquote"
-    CALLOUT     = "callout"     # Obsidian `> [!type]`.
-    MATH_BLOCK  = "math_block"
-    HR          = "hr"
-    BLANK       = "blank"
+    HEADING = "heading"
+    PARAGRAPH = "paragraph"
+    LIST = "list"  # Virtual container, not atomic.
+    LIST_ITEM = "list_item"  # Top-level item with its sub-items, atomic.
+    CODE_FENCE = "code_fence"
+    TABLE = "table"
+    BLOCKQUOTE = "blockquote"
+    CALLOUT = "callout"  # Obsidian `> [!type]`.
+    MATH_BLOCK = "math_block"
+    HR = "hr"
+    BLANK = "blank"
 
 
 @dataclass(frozen=True)
 class Block:
     kind: BlockKind
     text: str
-    start: int                # char offset of first char in source text
-    end: int                  # char offset one past last char
-    level: int = 0            # heading: 1-6; list nesting depth; else 0
-    heading_text: str = ""    # heading only: text without # markers
+    start: int  # char offset of first char in source text
+    end: int  # char offset one past last char
+    level: int = 0  # heading: 1-6; list nesting depth; else 0
+    heading_text: str = ""  # heading only: text without # markers
     atomic: bool = False
     parent_kind: BlockKind | None = None
 
@@ -62,21 +62,22 @@ class Block:
 # CommonMark allows up to 3 leading spaces of indent on most block markers.
 _LEAD = r"^( {0,3})"
 
-_HEADING_RE     = re.compile(_LEAD + r"(#{1,6})\s+(.+?)\s*#*\s*$")
-_HR_DASH_RE     = re.compile(_LEAD + r"-{3,}\s*$")
-_HR_UNDER_RE    = re.compile(_LEAD + r"_{3,}\s*$")
-_HR_STAR_RE     = re.compile(_LEAD + r"\*{3,}\s*$")
-_CODE_FENCE_RE  = re.compile(_LEAD + r"(`{3,}|~{3,})(.*)$")
-_MATH_OPEN_RE   = re.compile(_LEAD + r"\$\$")
-_LIST_ITEM_RE   = re.compile(r"^( *)([-*+]|\d+[.)])\s")
-_BLOCKQUOTE_RE  = re.compile(r"^( {0,3})>")
-_CALLOUT_RE     = re.compile(r"^( {0,3})>\s*\[!\w+\][+-]?")
-_SETEXT_H1_RE   = re.compile(_LEAD + r"=+\s*$")
-_SETEXT_H2_RE   = re.compile(_LEAD + r"-+\s*$")
-_TABLE_SEP_RE   = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+_HEADING_RE = re.compile(_LEAD + r"(#{1,6})\s+(.+?)\s*#*\s*$")
+_HR_DASH_RE = re.compile(_LEAD + r"-{3,}\s*$")
+_HR_UNDER_RE = re.compile(_LEAD + r"_{3,}\s*$")
+_HR_STAR_RE = re.compile(_LEAD + r"\*{3,}\s*$")
+_CODE_FENCE_RE = re.compile(_LEAD + r"(`{3,}|~{3,})(.*)$")
+_MATH_OPEN_RE = re.compile(_LEAD + r"\$\$")
+_LIST_ITEM_RE = re.compile(r"^( *)([-*+]|\d+[.)])\s")
+_BLOCKQUOTE_RE = re.compile(r"^( {0,3})>")
+_CALLOUT_RE = re.compile(r"^( {0,3})>\s*\[!\w+\][+-]?")
+_SETEXT_H1_RE = re.compile(_LEAD + r"=+\s*$")
+_SETEXT_H2_RE = re.compile(_LEAD + r"-+\s*$")
+_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
 
 
 # ─── Public entry point ────────────────────────────────────────────────
+
 
 def scan(text: str) -> list[Block]:
     """Parse `text` into a flat sequence of `Block` objects."""
@@ -86,6 +87,7 @@ def scan(text: str) -> list[Block]:
 
 
 # ─── Implementation ────────────────────────────────────────────────────
+
 
 class _Scanner:
     """Stateful line-driven scanner. One instance per call to scan()."""
@@ -164,7 +166,6 @@ class _Scanner:
         m = _CODE_FENCE_RE.match(stripped)
         if not m:
             return False
-        indent = m.group(1)
         fence_marker = m.group(2)
         fence_char = fence_marker[0]
         fence_len = len(fence_marker)
@@ -173,7 +174,9 @@ class _Scanner:
         j = self.i + 1
         while j < self.n:
             jline = self.lines[j].rstrip("\n")
-            close_match = re.match(rf"^( {{0,3}}){re.escape(fence_char)}{{{fence_len},}}\s*$", jline)
+            close_match = re.match(
+                rf"^( {{0,3}}){re.escape(fence_char)}{{{fence_len},}}\s*$", jline
+            )
             if close_match:
                 j += 1
                 break
@@ -209,14 +212,16 @@ class _Scanner:
             return False
         level = len(m.group(2))
         heading_text = m.group(3).strip()
-        self.blocks.append(Block(
-            kind=BlockKind.HEADING,
-            text=line,
-            start=self.offsets[self.i],
-            end=self.offsets[self.i + 1],
-            level=level,
-            heading_text=heading_text,
-        ))
+        self.blocks.append(
+            Block(
+                kind=BlockKind.HEADING,
+                text=line,
+                start=self.offsets[self.i],
+                end=self.offsets[self.i + 1],
+                level=level,
+                heading_text=heading_text,
+            )
+        )
         self.i += 1
         return True
 
@@ -235,9 +240,9 @@ class _Scanner:
         """
         is_setext_h1 = bool(_SETEXT_H1_RE.match(stripped))
         is_setext_h2 = bool(_SETEXT_H2_RE.match(stripped))
-        is_hr_dash   = bool(_HR_DASH_RE.match(stripped))
-        is_hr_under  = bool(_HR_UNDER_RE.match(stripped))
-        is_hr_star   = bool(_HR_STAR_RE.match(stripped))
+        is_hr_dash = bool(_HR_DASH_RE.match(stripped))
+        is_hr_under = bool(_HR_UNDER_RE.match(stripped))
+        is_hr_star = bool(_HR_STAR_RE.match(stripped))
 
         if not (is_setext_h1 or is_setext_h2 or is_hr_dash or is_hr_under or is_hr_star):
             return False
@@ -252,14 +257,16 @@ class _Scanner:
         if adjacent_paragraph and (is_setext_h1 or is_setext_h2):
             last = self.blocks.pop()
             level = 1 if is_setext_h1 else 2
-            self.blocks.append(Block(
-                kind=BlockKind.HEADING,
-                text=last.text + self.lines[self.i],
-                start=last.start,
-                end=self.offsets[self.i + 1],
-                level=level,
-                heading_text=last.text.strip(),
-            ))
+            self.blocks.append(
+                Block(
+                    kind=BlockKind.HEADING,
+                    text=last.text + self.lines[self.i],
+                    start=last.start,
+                    end=self.offsets[self.i + 1],
+                    level=level,
+                    heading_text=last.text.strip(),
+                )
+            )
             self.i += 1
             return True
 
@@ -382,14 +389,16 @@ class _Scanner:
 
         for idx, item_start in enumerate(item_starts):
             item_end = item_starts[idx + 1] if idx + 1 < len(item_starts) else list_end_i
-            self.blocks.append(Block(
-                kind=BlockKind.LIST_ITEM,
-                text=self.text[self.offsets[item_start]:self.offsets[item_end]],
-                start=self.offsets[item_start],
-                end=self.offsets[item_end],
-                atomic=True,
-                parent_kind=BlockKind.LIST,
-            ))
+            self.blocks.append(
+                Block(
+                    kind=BlockKind.LIST_ITEM,
+                    text=self.text[self.offsets[item_start] : self.offsets[item_end]],
+                    start=self.offsets[item_start],
+                    end=self.offsets[item_end],
+                    atomic=True,
+                    parent_kind=BlockKind.LIST,
+                )
+            )
 
         self.i = list_end_i
         return True
@@ -433,26 +442,35 @@ class _Scanner:
 
     # ── Emit helpers ───────────────────────────────────────────────────
 
-    def _emit_simple(self, kind: BlockKind, start_i: int, end_i: int, *, atomic: bool = False) -> None:
-        self.blocks.append(Block(
-            kind=kind,
-            text=self.text[self.offsets[start_i]:self.offsets[end_i]],
-            start=self.offsets[start_i],
-            end=self.offsets[end_i],
-            atomic=atomic,
-        ))
+    def _emit_simple(
+        self, kind: BlockKind, start_i: int, end_i: int, *, atomic: bool = False
+    ) -> None:
+        self.blocks.append(
+            Block(
+                kind=kind,
+                text=self.text[self.offsets[start_i] : self.offsets[end_i]],
+                start=self.offsets[start_i],
+                end=self.offsets[end_i],
+                atomic=atomic,
+            )
+        )
 
-    def _emit_range(self, kind: BlockKind, start_i: int, end_i: int, *, atomic: bool = False) -> None:
-        self.blocks.append(Block(
-            kind=kind,
-            text=self.text[self.offsets[start_i]:self.offsets[end_i]],
-            start=self.offsets[start_i],
-            end=self.offsets[end_i],
-            atomic=atomic,
-        ))
+    def _emit_range(
+        self, kind: BlockKind, start_i: int, end_i: int, *, atomic: bool = False
+    ) -> None:
+        self.blocks.append(
+            Block(
+                kind=kind,
+                text=self.text[self.offsets[start_i] : self.offsets[end_i]],
+                start=self.offsets[start_i],
+                end=self.offsets[end_i],
+                atomic=atomic,
+            )
+        )
 
 
 # ─── Convenience helpers (used by tests + Phase 2) ─────────────────────
+
 
 def leaf_blocks(blocks: list[Block]) -> list[Block]:
     """Drop virtual containers (LIST), keep everything else.

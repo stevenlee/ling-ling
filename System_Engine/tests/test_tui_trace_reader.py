@@ -1,10 +1,9 @@
 """The TUI reads daemon state strictly read-only (no ChromaDB, no writes)."""
+
 import os
 import sqlite3
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import tui.trace_reader as tr
@@ -19,8 +18,22 @@ def _make_db(path: Path):
     con.executemany(
         "INSERT INTO runs VALUES (?,?,?,?,?,?)",
         [
-            ("r1", "insight", "InsightAgent", "succeeded", "2026-06-19T01:00:00", "2026-06-19T01:01:00"),
-            ("r2", "maintenance.cortex_consolidation", "CortexConsolidation", "running", "2026-06-19T02:00:00", None),
+            (
+                "r1",
+                "insight",
+                "InsightAgent",
+                "succeeded",
+                "2026-06-19T01:00:00",
+                "2026-06-19T01:01:00",
+            ),
+            (
+                "r2",
+                "maintenance.cortex_consolidation",
+                "CortexConsolidation",
+                "running",
+                "2026-06-19T02:00:00",
+                None,
+            ),
         ],
     )
     con.commit()
@@ -32,7 +45,7 @@ def test_recent_runs_reads_readonly(tmp_path, monkeypatch):
     _make_db(db)
     monkeypatch.setattr(tr, "TRACE_DB", db)
     runs = tr.recent_runs(5)
-    assert [r["run_id"] for r in runs] == ["r2", "r1"]   # newest first
+    assert [r["run_id"] for r in runs] == ["r2", "r1"]  # newest first
     assert runs[0]["status"] == "running"
 
 
@@ -78,6 +91,7 @@ def test_daemon_alive_false_for_dead_pid(tmp_path, monkeypatch):
 
 def test_daemon_alive_true_for_self(tmp_path, monkeypatch):
     import os
+
     pid_file = tmp_path / "daemon.pid"
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
     monkeypatch.setattr(tr, "PID_FILE", pid_file)
@@ -86,6 +100,7 @@ def test_daemon_alive_true_for_self(tmp_path, monkeypatch):
 
 def test_status_summary_busy_only_when_alive(tmp_path, monkeypatch):
     import os
+
     pid_file = tmp_path / "daemon.pid"
     status = tmp_path / "daemon_status.json"
     status.write_text('{"busy": true, "message": "Maintenance: dream"}', encoding="utf-8")

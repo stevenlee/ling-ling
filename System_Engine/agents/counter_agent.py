@@ -11,16 +11,18 @@ from core.ui import ui
 from services.text_splitter import TextSplitter
 
 
-_CONCEPT_INLINE_RE = re.compile(r'(?:Count|計算|算)\s*[:：]\s*(.+)', re.IGNORECASE)
-_CONCEPT_BLOCK_RE = re.compile(r'(?:Count|計算|算)\s*[:：]\s*\n((?:\s*[-•]\s+.+\n?)+)', re.IGNORECASE)
-_BULLET_RE = re.compile(r'[-•]\s+(.+)')
-_CMD_TOKEN_RE = re.compile(r'(?:@ling-lens|@ling-count|/lens|/count)\b', re.IGNORECASE)
-_WIKILINK_RE = re.compile(r'\[\[.*?\]\]')
-_CONFIDENCE_TOKEN_RE = re.compile(r'(?:Confidence|信心)\s*[:：]\s*\S+', re.IGNORECASE)
-_HEADING_RE = re.compile(r'^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$', re.MULTILINE)
-_PART_HEADING_RE = re.compile(r'^\s{0,3}##\s+(Part\s+\d+)(?::.*?)?\s*#*\s*$', re.MULTILINE)
-_PART_ANY_RE = re.compile(r'^\s{0,3}##\s+Part\s+\d+(?::.*?)?\s*#*\s*$', re.MULTILINE)
-_WS_RE = re.compile(r'\s+')
+_CONCEPT_INLINE_RE = re.compile(r"(?:Count|計算|算)\s*[:：]\s*(.+)", re.IGNORECASE)
+_CONCEPT_BLOCK_RE = re.compile(
+    r"(?:Count|計算|算)\s*[:：]\s*\n((?:\s*[-•]\s+.+\n?)+)", re.IGNORECASE
+)
+_BULLET_RE = re.compile(r"[-•]\s+(.+)")
+_CMD_TOKEN_RE = re.compile(r"(?:@ling-lens|@ling-count|/lens|/count)\b", re.IGNORECASE)
+_WIKILINK_RE = re.compile(r"\[\[.*?\]\]")
+_CONFIDENCE_TOKEN_RE = re.compile(r"(?:Confidence|信心)\s*[:：]\s*\S+", re.IGNORECASE)
+_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
+_PART_HEADING_RE = re.compile(r"^\s{0,3}##\s+(Part\s+\d+)(?::.*?)?\s*#*\s*$", re.MULTILINE)
+_PART_ANY_RE = re.compile(r"^\s{0,3}##\s+Part\s+\d+(?::.*?)?\s*#*\s*$", re.MULTILINE)
+_WS_RE = re.compile(r"\s+")
 
 
 class CounterAgent(BaseAgent):
@@ -35,6 +37,7 @@ class CounterAgent(BaseAgent):
     def __init__(self, llm, rag=None):
         super().__init__(llm, rag)
         from core.config import THOUGHTFUL_USE_LLM_FOR_COUNTER, USE_THOUGHTFUL_SPLITTER
+
         # LingLens scans for concept instances per-chunk; the chunk's
         # "self-containedness" is not the quality metric we care about,
         # and adding extra boundaries can slightly hurt recall around
@@ -42,6 +45,7 @@ class CounterAgent(BaseAgent):
         # when it's ON for ingestion.
         if USE_THOUGHTFUL_SPLITTER:
             from services.thoughtful_splitter import ThoughtfulSplitter
+
             self.splitter = ThoughtfulSplitter(
                 default_use_llm=THOUGHTFUL_USE_LLM_FOR_COUNTER,
                 # Pass llm regardless — counter's `default_use_llm=False` is
@@ -123,7 +127,7 @@ class CounterAgent(BaseAgent):
         return report
 
     def _show_job_summary(self, concepts, articles, confidence):
-        ui.info(f"🔎 LingLens 啟動")
+        ui.info("🔎 LingLens 啟動")
         ui.info(f"   📌 計算目標 ({len(concepts)} 個概念):")
         for c in concepts:
             ui.info(f"      • [bold yellow]{c}[/bold yellow]")
@@ -142,7 +146,9 @@ class CounterAgent(BaseAgent):
             results_matrix[article_title] = {}
             chunks = self.splitter.split_text(article_text)
             total_parts = len(chunks)
-            ui.info(f"\n   📄 [{article_title}] — {len(article_text):,} chars → {total_parts} chunks")
+            ui.info(
+                f"\n   📄 [{article_title}] — {len(article_text):,} chars → {total_parts} chunks"
+            )
 
             # Precompute heading & part-anchor offsets once per article — N
             # instances would otherwise each re-scan from start of file.
@@ -154,7 +160,9 @@ class CounterAgent(BaseAgent):
                     f"\n   ── 任務 {job_idx}/{total_jobs}: "
                     f"[yellow]{concept}[/yellow] × [green]{article_title}[/green] ──"
                 )
-                tally = self._run_single_count(concept, chunks, total_parts, confidence, job_idx, total_jobs)
+                tally = self._run_single_count(
+                    concept, chunks, total_parts, confidence, job_idx, total_jobs
+                )
                 self._ground_tally_locations(tally, article_text, location_index)
                 results_matrix[article_title][concept] = tally
 
@@ -223,7 +231,9 @@ class CounterAgent(BaseAgent):
         cleaned = cleaned.strip("?？\n\r\t ")
         return [cleaned] if len(cleaned) > 3 else []
 
-    def _resolve_articles(self, target_titles: list[str], user_directive: str) -> list[tuple[str, str, str]]:
+    def _resolve_articles(
+        self, target_titles: list[str], user_directive: str
+    ) -> list[tuple[str, str, str]]:
         results: list[tuple[str, str, str]] = []
         seen: set[str] = set()
 
@@ -478,12 +488,14 @@ class CounterAgent(BaseAgent):
                     if inst.get("source_offset") is not None:
                         grounded += 1
                     else:
-                        ungrounded.append({
-                            "article": article_title,
-                            "concept": concept,
-                            "id": inst.get("id"),
-                            "quote": (inst.get("quote") or "").strip()[:120],
-                        })
+                        ungrounded.append(
+                            {
+                                "article": article_title,
+                                "concept": concept,
+                                "id": inst.get("id"),
+                                "quote": (inst.get("quote") or "").strip()[:120],
+                            }
+                        )
         ratio = (grounded / total) if total else None
         verdict = None
         if total:
@@ -511,14 +523,18 @@ class CounterAgent(BaseAgent):
             f"（{ratio:.0%}）— verdict: **{verification['verdict']}**"
         )
         if verification["ungrounded"]:
-            lines.extend([
-                "",
-                "以下引文無法在原文中定位（可能是改寫、翻譯，或模型虛構——請人工抽查）：",
-                "",
-            ])
+            lines.extend(
+                [
+                    "",
+                    "以下引文無法在原文中定位（可能是改寫、翻譯，或模型虛構——請人工抽查）：",
+                    "",
+                ]
+            )
             for item in verification["ungrounded"][:10]:
                 label = f"#{item['id']}" if item.get("id") is not None else "#?"
-                lines.append(f"- {label}（{item['concept']} @ [[{item['article']}]]）：「{item['quote']}」")
+                lines.append(
+                    f"- {label}（{item['concept']} @ [[{item['article']}]]）：「{item['quote']}」"
+                )
             hidden = len(verification["ungrounded"]) - 10
             if hidden > 0:
                 lines.append(f"- ……及其他 {hidden} 條")
@@ -539,23 +555,23 @@ class CounterAgent(BaseAgent):
             return -1
 
         needle = re.escape(normalized_quote[:80])
-        flexible = re.sub(r'\\ ', r'\\s+', needle)
+        flexible = re.sub(r"\\ ", r"\\s+", needle)
         match = re.search(flexible, article_text, flags=re.DOTALL)
         return match.start() if match else -1
 
     @staticmethod
     def _part_source_range_for_anchor(article_text, part_anchor):
-        pattern = rf'^\s{{0,3}}##\s+{re.escape(part_anchor)}(?::.*?)?\s*#*\s*$'
+        pattern = rf"^\s{{0,3}}##\s+{re.escape(part_anchor)}(?::.*?)?\s*#*\s*$"
         match = re.search(pattern, article_text, flags=re.MULTILINE)
         if not match:
             return {}
 
         next_part = _PART_ANY_RE.search(article_text, match.end())
         section_end = next_part.start() if next_part else len(article_text)
-        section = article_text[match.end():section_end]
+        section = article_text[match.end() : section_end]
 
-        line_match = re.search(r'Original range:\s*lines\s*(\d+)\s*-\s*(\d+)', section)
-        char_match = re.search(r'Original chars:\s*(\d+)\s*-\s*(\d+)', section)
+        line_match = re.search(r"Original range:\s*lines\s*(\d+)\s*-\s*(\d+)", section)
+        char_match = re.search(r"Original chars:\s*(\d+)\s*-\s*(\d+)", section)
         source_range = {}
         if line_match:
             source_range["start_line"] = int(line_match.group(1))
@@ -599,9 +615,7 @@ class CounterAgent(BaseAgent):
             col_totals.append(str(col_sum))
             grand_total += col_sum
         lines.append(
-            "| **Total** |"
-            + "|".join(f" **{c}** " for c in col_totals)
-            + f"| **{grand_total}** |"
+            "| **Total** |" + "|".join(f" **{c}** " for c in col_totals) + f"| **{grand_total}** |"
         )
         lines.append("")
 
@@ -622,7 +636,9 @@ class CounterAgent(BaseAgent):
                 lines.append("| # | Confidence | Quote | Reasoning | Reference |")
                 lines.append("|---|------------|-------|-----------|--------|")
                 for inst in instances:
-                    lines.append(self._matrix_row(inst, article_title, reference_title, resolved_path))
+                    lines.append(
+                        self._matrix_row(inst, article_title, reference_title, resolved_path)
+                    )
                 lines.append("")
 
         lines.append("---")
@@ -647,7 +663,9 @@ class CounterAgent(BaseAgent):
         quote = self._table_cell(inst.get("quote", ""), 80)
         reasoning = self._table_cell(inst.get("reasoning", ""), 80)
         heading = self._instance_anchor(inst)
-        reference = self._reference_cell(article_title, reference_title, resolved_path, heading, inst)
+        reference = self._reference_cell(
+            article_title, reference_title, resolved_path, heading, inst
+        )
         return f"| {iid} | {emoji} {conf} | {quote} | {reasoning} | {reference} |"
 
     # ── Report: Single article × single concept ────────────────────────
@@ -663,13 +681,18 @@ class CounterAgent(BaseAgent):
         instances = tally.get("instances", [])
 
         lines = [
-            f"# 🔎 LingLens: {concept}", "",
-            f"> {reference_label}: [[{reference_title}]] | Total instances found: **{total}**", "",
-            "## 📊 Summary", "",
-            "| Confidence | Count |", "|------------|-------|",
+            f"# 🔎 LingLens: {concept}",
+            "",
+            f"> {reference_label}: [[{reference_title}]] | Total instances found: **{total}**",
+            "",
+            "## 📊 Summary",
+            "",
+            "| Confidence | Count |",
+            "|------------|-------|",
             f"| 🌸 High   | {high}     |",
             f"| 🌼 Medium | {medium}     |",
-            f"| 🥀 Low    | {low}     |", "",
+            f"| 🥀 Low    | {low}     |",
+            "",
         ]
         if methodology:
             lines.extend(["## 📝 Methodology", "", methodology, ""])
@@ -677,7 +700,9 @@ class CounterAgent(BaseAgent):
         lines.extend(["## 📋 Evidence", ""])
         original_title = self._original_source_title(article_title)
         for inst in instances:
-            lines.extend(self._format_instance(inst, reference_title, original_title, resolved_path))
+            lines.extend(
+                self._format_instance(inst, reference_title, original_title, resolved_path)
+            )
 
         lines.extend(["---", "## 🔗 Navigation", f"- [[{reference_title}|查看分析來源]]"])
         if original_title != reference_title:
@@ -701,8 +726,14 @@ class CounterAgent(BaseAgent):
         heading = self._instance_anchor(inst)
         original_link = self._source_link(original_title, "", "🔗 查看原始檔")
         if heading:
-            alias = "🔗 點擊查看分析錨點" if self._is_stitched_path(resolved_path) else "🔗 點擊查看原文錨點"
-            lines.append(f"**Analysis Reference**: {self._source_link(reference_title, heading, alias)}")
+            alias = (
+                "🔗 點擊查看分析錨點"
+                if self._is_stitched_path(resolved_path)
+                else "🔗 點擊查看原文錨點"
+            )
+            lines.append(
+                f"**Analysis Reference**: {self._source_link(reference_title, heading, alias)}"
+            )
         else:
             alias = "🔗 查看分析來源" if self._is_stitched_path(resolved_path) else "🔗 查看原文"
             lines.append(f"**Analysis Reference**: {self._source_link(reference_title, '', alias)}")

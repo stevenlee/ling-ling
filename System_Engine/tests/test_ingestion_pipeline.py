@@ -8,11 +8,9 @@ We don't mock LLM or RAG here — only exercise the pure helpers:
   - _demote_headings
   - _source_span_for_chunk / _format_source_range
 """
-import os
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+import os
+
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import pytest
@@ -27,6 +25,7 @@ def pipeline():
 
 
 # ── _build_navigation ──────────────────────────────────────────────
+
 
 class TestBuildNavigation:
     def test_single_page_links_to_original(self):
@@ -62,6 +61,7 @@ class TestBuildNavigation:
 
 
 # ── _build_part_metadata ───────────────────────────────────────────
+
 
 class TestBuildPartMetadata:
     def test_single_page_omits_part_fields(self):
@@ -105,21 +105,26 @@ class TestBuildPartMetadata:
 
 # ── format_digest_appendix ─────────────────────────────────────────
 
+
 class TestFormatDigestAppendix:
     def test_empty_returns_empty(self, pipeline):
         assert pipeline.format_digest_appendix([]) == ""
 
     def test_dict_digest_renders_sections(self, pipeline):
-        out = pipeline.format_digest_appendix([{
-            "part": 1,
-            "title": "Intro",
-            "thesis": "Central claim.",
-            "key_points": ["one", "two"],
-            "evidence": ["e"],
-            "terms": [],
-            "open_questions": [],
-            "handoff": "next",
-        }])
+        out = pipeline.format_digest_appendix(
+            [
+                {
+                    "part": 1,
+                    "title": "Intro",
+                    "thesis": "Central claim.",
+                    "key_points": ["one", "two"],
+                    "evidence": ["e"],
+                    "terms": [],
+                    "open_questions": [],
+                    "handoff": "next",
+                }
+            ]
+        )
         assert "## 🧩 Part Digest Appendix" in out
         assert "### Part 1: Intro" in out
         assert "**Thesis**: Central claim." in out
@@ -135,15 +140,20 @@ class TestFormatDigestAppendix:
 
     def test_string_value_in_list_field(self, pipeline):
         """If `key_points` arrives as a string (not a list), it should still render."""
-        out = pipeline.format_digest_appendix([{
-            "part": 1,
-            "thesis": "T",
-            "key_points": "single point",
-        }])
+        out = pipeline.format_digest_appendix(
+            [
+                {
+                    "part": 1,
+                    "thesis": "T",
+                    "key_points": "single point",
+                }
+            ]
+        )
         assert "  - single point" in out
 
 
 # ── _extract_stitchable_body ───────────────────────────────────────
+
 
 class TestExtractStitchableBody:
     def test_strips_frontmatter_and_navigation(self, pipeline):
@@ -158,10 +168,7 @@ class TestExtractStitchableBody:
         assert "Body text here." in body
 
     def test_strips_digest_appendix(self, pipeline):
-        content = (
-            "---\ntitle: X\n---\n\n# Main\n\nBody.\n\n"
-            "## 🧩 Part Digest Appendix\n\nstuff\n"
-        )
+        content = "---\ntitle: X\n---\n\n# Main\n\nBody.\n\n## 🧩 Part Digest Appendix\n\nstuff\n"
         body = pipeline._extract_stitchable_body(content)
         assert "Part Digest Appendix" not in body
         assert "stuff" not in body
@@ -205,6 +212,7 @@ class TestExtractStitchableBody:
 
 # ── _demote_headings ───────────────────────────────────────────────
 
+
 class TestDemoteHeadings:
     def test_caps_at_h6(self):
         # ##### + 2 = ####### → capped at ######
@@ -222,11 +230,14 @@ class TestDemoteHeadings:
 
 # ── _source_span_for_chunk ─────────────────────────────────────────
 
+
 class TestSourceSpanForChunk:
     def test_lines_one_indexed(self):
         text = "line1\nline2\nline3\nline4"
         span = IngestionPipeline._source_span_for_chunk(
-            text, {"start": 0, "end": 11}, 1,
+            text,
+            {"start": 0, "end": 11},
+            1,
         )
         assert span["part"] == 1
         assert span["source_start_line"] == 1  # start of line1
@@ -242,14 +253,17 @@ class TestSourceSpanForChunk:
 
 # ── _format_source_range ───────────────────────────────────────────
 
+
 class TestFormatSourceRange:
     def test_both_line_and_char(self):
-        out = IngestionPipeline._format_source_range({
-            "source_start_line": 1,
-            "source_end_line": 10,
-            "source_start_char": 0,
-            "source_end_char": 200,
-        })
+        out = IngestionPipeline._format_source_range(
+            {
+                "source_start_line": 1,
+                "source_end_line": 10,
+                "source_start_char": 0,
+                "source_end_char": 200,
+            }
+        )
         assert "lines 1-10" in out
         assert "Original chars: 0-200" in out
         assert out.endswith("\n\n")
@@ -287,23 +301,30 @@ class _StubLLM:
 
 class TestParseVerdict:
     def test_english_revise(self):
-        assert IngestionPipeline._parse_verdict(
-            "* [major] foo\n\n**Overall Verdict**: revise. Some reason."
-        ) == "revise"
+        assert (
+            IngestionPipeline._parse_verdict(
+                "* [major] foo\n\n**Overall Verdict**: revise. Some reason."
+            )
+            == "revise"
+        )
 
     def test_english_keep_no_emphasis(self):
         assert IngestionPipeline._parse_verdict("Overall Verdict: keep") == "keep"
 
     def test_zh_revise(self):
-        assert IngestionPipeline._parse_verdict(
-            "**Overall Verdict**：修訂。需要補充某些細節。"
-        ) == "revise"
+        assert (
+            IngestionPipeline._parse_verdict("**Overall Verdict**：修訂。需要補充某些細節。")
+            == "revise"
+        )
 
     def test_zh_keep(self):
         assert IngestionPipeline._parse_verdict("Overall Verdict: 保留") == "keep"
 
     def test_reject(self):
-        assert IngestionPipeline._parse_verdict("**Overall Verdict**: reject — fundamentally off.") == "reject"
+        assert (
+            IngestionPipeline._parse_verdict("**Overall Verdict**: reject — fundamentally off.")
+            == "reject"
+        )
 
     def test_unparseable_returns_none(self):
         assert IngestionPipeline._parse_verdict("No verdict line here.") is None

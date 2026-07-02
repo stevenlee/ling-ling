@@ -1,0 +1,151 @@
+# ling-ling System_Engine — packaging + tooling config (P0 of the refactor roadmap).
+#
+# The real "version" of the engine is core/version.py's BUILD_DATE (git commit
+# date); the static version below is a packaging placeholder only.
+#
+# Install for development:
+#   venv/bin/pip install -e ".[tui,reranker,dev]"
+# The three requirements-*.txt files remain as thin pointers for one release.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ling-ling-system-engine"
+version = "0.0.0"
+description = "Ling-Ling second-brain daemon: vault watchers, RAG, agents, Cortex memory."
+requires-python = ">=3.12"
+dependencies = [
+    "watchdog",
+    "openai",
+    "google-genai",
+    "pydantic",
+    "python-dotenv",
+    "chromadb",
+    "PyYAML",
+    "rank_bm25",
+    "beautifulsoup4",
+    "lxml",
+    # Used directly by the daemon but previously missing from requirements.txt:
+    "rich",       # core/ui.py terminal UI
+    "requests",   # services/research_pipeline.py
+    "numpy",
+]
+
+[project.optional-dependencies]
+# TUI cockpit (separate process; never imports the daemon's RAG/LLM stack).
+tui = [
+    "textual>=0.60",
+    "psutil>=5.0.0",
+]
+# Cross-encoder reranker (BAAI/bge-reranker-v2-m3) — the main cross-lingual
+# retrieval lever (golden bench 0.867 -> 0.933). Pulls torch (several hundred MB).
+# Requires RERANKER_ENABLED=true; without this extra it silently disables.
+reranker = [
+    "sentence-transformers",
+]
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
+    "pre-commit",
+    "types-PyYAML",
+    "types-requests",
+]
+
+[tool.setuptools]
+package-dir = {"" = "System_Engine"}
+packages = ["core", "services", "agents", "watchers", "maintenance", "tui"]
+
+# ── pytest ────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["System_Engine/tests"]
+# Makes `from core... / services...` imports work without per-file sys.path hacks.
+pythonpath = ["System_Engine"]
+markers = [
+    "live_llm: makes real LLM API calls (skipped unless --run-live-llm)",
+    "slow: long-running test (deselect with -m 'not slow')",
+]
+
+# ── ruff ──────────────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["venv", "lings-desktop", "release_note", "Backups"]
+
+[tool.ruff.lint]
+# Start from ruff's defaults (E4/E7/E9 + F): catches real defects (undefined
+# names, unused imports, syntax-level issues) without forcing style churn on
+# the existing codebase. Tighten gradually as modules get refactored (P1+).
+# E701/E702 (one-line compound statements) and E741 (ambiguous names like `l`)
+# are pre-existing style debt — re-enable per-module as P2 rewrites land.
+ignore = ["E701", "E702", "E741"]
+
+# ── mypy ──────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "System_Engine"
+explicit_package_bases = true
+files = [
+    "System_Engine/core",
+    "System_Engine/services",
+    "System_Engine/agents",
+    "System_Engine/watchers",
+    "System_Engine/maintenance",
+]
+# Gradual adoption: no strictness flags yet; the gate exists so new/refactored
+# modules can opt in. Third-party stubs are mostly absent.
+ignore_missing_imports = true
+check_untyped_defs = false
+
+# Legacy exemption list (2026-07 baseline: 235 errors in these 43 modules).
+# Contract: this list only SHRINKS. When a P2 refactor touches a module,
+# remove it here and fix what mypy reports. Never add new modules.
+[[tool.mypy.overrides]]
+module = [
+    "agents.counter_agent",
+    "agents.insight_agent",
+    "agents.linter_agent",
+    "agents.planner_agent",
+    "agents.tag_patrol_agent",
+    "agents.tension_agent",
+    "core.parser",
+    "core.vault_utils",
+    "maintenance.autotune",
+    "maintenance.backfill_falsifiability",
+    "maintenance.bench_builder",
+    "maintenance.cortex_consolidation",
+    "maintenance.cortex_decay_pass",
+    "maintenance.cortex_ledger",
+    "maintenance.cortex_validation",
+    "maintenance.daydream",
+    "maintenance.decay_simulation",
+    "maintenance.echo_canary",
+    "maintenance.insight_signals_backfill",
+    "maintenance.kb_manager",
+    "maintenance.release_helper",
+    "maintenance.routing_report",
+    "maintenance.self_assessment",
+    "maintenance.self_improve",
+    "maintenance.spaced_review",
+    "maintenance.template_audit",
+    "maintenance.weekly_memoir",
+    "services.autotune_store",
+    "services.cortex_decay",
+    "services.cortex_store",
+    "services.embedding_cache",
+    "services.ingestion_pipeline",
+    "services.insight_signals",
+    "services.learning_artifacts",
+    "services.llm_client",
+    "services.media_processor",
+    "services.rag_manager",
+    "services.research_pipeline",
+    "services.seed_sampler",
+    "services.thoughtful_splitter",
+    "services.trace_store",
+    "watchers.prompt_watcher",
+    "watchers.vault_watcher",
+]
+ignore_errors = true

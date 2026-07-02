@@ -1,9 +1,5 @@
 """Batch-2 T3: select_profile menu fix + single-name salvage parsing."""
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
-
 from unittest.mock import MagicMock, patch
 import pytest
 

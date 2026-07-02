@@ -1,10 +1,7 @@
 import os
-import sys
 import time
 import pytest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 # Ensure environment is set
 os.environ.setdefault("LLM_PROVIDER", "vllm")
@@ -76,7 +73,7 @@ def test_transient_retry_success(tmp_path, monkeypatch):
     monkeypatch.setattr(LLMClient, "_complete_provider_text_once", mock_complete_once)
 
     # Execute
-    with client.trace_run(intent="test", agent="TestAgent") as run_id:
+    with client.trace_run(intent="test", agent="TestAgent"):
         res = client._complete_text("system", "user")
 
     assert res == "success response"
@@ -98,6 +95,7 @@ def test_transient_retry_success(tmp_path, monkeypatch):
     assert call["total_tokens"] == 15
 
     import json
+
     metadata = json.loads(call["metadata_json"])
     assert metadata["retry_attempts"] == 2
     assert metadata["retry_transient"] is True
@@ -143,6 +141,7 @@ def test_non_transient_fails_immediately(tmp_path, monkeypatch):
     assert "Invalid API Key" in call["error"]
 
     import json
+
     metadata = json.loads(call["metadata_json"])
     assert metadata["retry_attempts"] == 1
     assert metadata["retry_transient"] is False
@@ -188,6 +187,7 @@ def test_exhausted_transient_retries(tmp_path, monkeypatch):
     assert "Service unavailable" in call["error"]
 
     import json
+
     metadata = json.loads(call["metadata_json"])
     assert metadata["retry_attempts"] == 3
     assert metadata["retry_transient"] is True

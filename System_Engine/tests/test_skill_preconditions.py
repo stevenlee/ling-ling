@@ -1,11 +1,9 @@
 """Skills declare `applicable_when` preconditions (database_populated,
 min_documents, has_tag_graph); InsightAgent must refuse to run a skill
 whose conditions the live vault doesn't meet, with a clear message."""
-import os
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+import os
+
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 from agents.insight_agent import InsightAgent
@@ -34,7 +32,7 @@ def _agent(rag) -> InsightAgent:
 
 class TestSkillPreconditions:
     def test_no_conditions_always_runnable(self):
-        assert _agent(FakeRag()). _check_skill_preconditions({}) == []
+        assert _agent(FakeRag())._check_skill_preconditions({}) == []
         assert _agent(None)._check_skill_preconditions({"min_documents": 5}) == []
 
     def test_database_populated_blocks_empty_vault(self):
@@ -58,9 +56,7 @@ class TestSkillPreconditions:
             def get_total_chunks_count(self):
                 raise RuntimeError("chroma down")
 
-        blockers = _agent(BrokenRag())._check_skill_preconditions(
-            {"database_populated": True}
-        )
+        blockers = _agent(BrokenRag())._check_skill_preconditions({"database_populated": True})
         assert blockers == []
 
     def test_generate_insight_skips_blocked_skill(self, monkeypatch):

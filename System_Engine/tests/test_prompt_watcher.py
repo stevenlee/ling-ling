@@ -1,32 +1,27 @@
 import os
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
+
+import threading
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from watchers.prompt_watcher import PromptWatcher
 
 
 class TestPromptWatcherPlannerFlags:
     def test_planner_mode_keyword_sets_preview_flag(self):
-        flags = PromptWatcher._detect_planner_flags(
-            "@ling-insight planner-mode compare notes"
-        )
+        flags = PromptWatcher._detect_planner_flags("@ling-insight planner-mode compare notes")
         assert flags["planner_mode"] is True
         assert flags["execute_plan"] is False
 
     def test_planner_slash_alias_sets_preview_flag(self):
-        flags = PromptWatcher._detect_planner_flags(
-            "@ling-insight /planner compare notes"
-        )
+        flags = PromptWatcher._detect_planner_flags("@ling-insight /planner compare notes")
         assert flags["planner_mode"] is True
         assert flags["execute_plan"] is False
 
     def test_execute_flag_is_detected_but_does_not_imply_planner(self):
-        flags = PromptWatcher._detect_planner_flags(
-            "@ling-insight /execute compare notes"
-        )
+        flags = PromptWatcher._detect_planner_flags("@ling-insight /execute compare notes")
         assert flags["planner_mode"] is False
         assert flags["execute_plan"] is True
 
@@ -67,10 +62,10 @@ class TestPromptWatcherProcessPrompt:
 
         # 5. Instantiate PromptWatcher
         watcher = PromptWatcher(mock_llm, mock_rag)
-        
+
         # Patch output path writing & archiving to avoid side effects
         monkeypatch.setattr(watcher, "_archive_raw", MagicMock())
-        
+
         # Mock FROM_LLM_DIR
         mock_from_llm = tmp_path / "from_llm"
         mock_from_llm.mkdir()
@@ -81,12 +76,12 @@ class TestPromptWatcherProcessPrompt:
 
         # 7. Assertions
         mock_resolve.assert_called_once_with("MyDoc")
-        
+
         # Check context argument passed to answer_query
         assert mock_llm.answer_query.call_count == 1
         called_args = mock_llm.answer_query.call_args
         query_content, context = called_args[0]
-        
+
         assert "Hello, what is in [[MyDoc]]?" in query_content
         assert "## Source: MyDoc" in context
         assert "referenced file content" in context
@@ -173,10 +168,7 @@ class TestPromptWatcherProcessPrompt:
 
         # The parsed /template name is forwarded as forced_template.
         assert mock_llm.answer_query.call_count == 1
-        assert (
-            mock_llm.answer_query.call_args.kwargs["forced_template"]
-            == "sw-inv-disclosure-rpt"
-        )
+        assert mock_llm.answer_query.call_args.kwargs["forced_template"] == "sw-inv-disclosure-rpt"
 
         # Output is the template document verbatim — no chat envelope, no
         # blockquoted query, no double frontmatter.
@@ -190,11 +182,6 @@ class TestPromptWatcherProcessPrompt:
 
 
 # ── R7-G: processing runs on a worker, not the watchdog dispatch thread ──
-
-import threading
-import time
-from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 
 class TestPromptWatcherBrainOps:
@@ -213,6 +200,7 @@ class TestPromptWatcherBrainOps:
 
     def test_consolidate_command_invokes_run_consolidation(self, monkeypatch, tmp_path):
         import maintenance.cortex_consolidation as cc
+
         calls = []
 
         def fake(llm, rag, **kw):
@@ -221,16 +209,20 @@ class TestPromptWatcherBrainOps:
 
         monkeypatch.setattr(cc, "run_consolidation", fake)
 
-        mock_llm = MagicMock(); mock_llm.provider = "vllm"; mock_llm.model = "m"
+        mock_llm = MagicMock()
+        mock_llm.provider = "vllm"
+        mock_llm.model = "m"
         w = PromptWatcher(mock_llm, MagicMock())
         monkeypatch.setattr(w, "_archive_raw", MagicMock())
-        out = tmp_path / "from"; out.mkdir()
+        out = tmp_path / "from"
+        out.mkdir()
         monkeypatch.setattr("watchers.prompt_watcher.FROM_LLM_DIR", out)
 
-        f = tmp_path / "@ling-consolidate.md"; f.write_text("go", encoding="utf-8")
+        f = tmp_path / "@ling-consolidate.md"
+        f.write_text("go", encoding="utf-8")
         w.process_prompt(f)
 
-        assert len(calls) == 1                      # ran the real maintenance fn
+        assert len(calls) == 1  # ran the real maintenance fn
         reports = list(out.iterdir())
         assert reports and "admin-rpt" in reports[0].name
         assert "2 new claim(s)" in reports[0].read_text(encoding="utf-8")
@@ -247,12 +239,13 @@ class TestPromptWatcherBrainOps:
         w = PromptWatcher(MagicMock(), MagicMock())
         msg = w._resynthesize(["MyDoc"])
 
-        assert (cons / "MyDoc.md").exists()                       # source re-queued
-        assert (cons / "images" / "MyDoc" / "a.jpeg").exists()    # sidecar restored
+        assert (cons / "MyDoc.md").exists()  # source re-queued
+        assert (cons / "images" / "MyDoc" / "a.jpeg").exists()  # sidecar restored
         assert "MyDoc" in msg
 
     def test_resynthesize_reports_missing_source(self, monkeypatch, tmp_path):
-        raw = tmp_path / "raw_consolidate"; raw.mkdir()
+        raw = tmp_path / "raw_consolidate"
+        raw.mkdir()
         monkeypatch.setattr("core.config.RAW_CONSOLIDATE_DIR", raw)
         monkeypatch.setattr("core.config.CONSOLIDATE_DIR", tmp_path / "Consolidate")
         w = PromptWatcher(MagicMock(), MagicMock())
@@ -273,9 +266,9 @@ class TestPromptWatcherWorker:
 
         w._handle_event(SimpleNamespace(is_directory=False, src_path=str(f)))
 
-        assert str(f) in w._queued_paths   # enqueued
-        assert w._wake.is_set()            # worker signaled
-        assert drained == []               # NOT processed on the dispatch thread
+        assert str(f) in w._queued_paths  # enqueued
+        assert w._wake.is_set()  # worker signaled
+        assert drained == []  # NOT processed on the dispatch thread
 
     def test_non_prompt_suffix_ignored(self, tmp_path):
         w = self._watcher()
@@ -295,7 +288,7 @@ class TestPromptWatcherWorker:
             f = tmp_path / "cmd.md"
             f.write_text("hi", encoding="utf-8")
             w._handle_event(SimpleNamespace(is_directory=False, src_path=str(f)))
-            assert drained.wait(timeout=3)   # worker picked it up and drained
+            assert drained.wait(timeout=3)  # worker picked it up and drained
         finally:
             w.stop()
-        assert not w._worker.is_alive()      # stop() joined the worker
+        assert not w._worker.is_alive()  # stop() joined the worker

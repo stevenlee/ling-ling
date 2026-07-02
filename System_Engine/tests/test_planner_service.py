@@ -1,8 +1,6 @@
 import os
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 from services.capability_manager import CapabilitySpec
@@ -20,29 +18,33 @@ class _CapMgr:
 class _LLM:
     def __init__(self, response, specs=None):
         self.response = response
-        self.capability_manager = _CapMgr(specs if specs is not None else [
-            CapabilitySpec(
-                name="critique",
-                type="operation",
-                source_path=Path("/fake/critique.md"),
-                description="critique candidate",
-                cost_class="low",
-            ),
-            CapabilitySpec(
-                name="load_sources",
-                type="operation",
-                source_path=Path("/fake/load_sources.md"),
-                description="load source text",
-                cost_class="low",
-            ),
-            CapabilitySpec(
-                name="answer_from_sources",
-                type="operation",
-                source_path=Path("/fake/answer_from_sources.md"),
-                description="final answer",
-                cost_class="medium",
-            )
-        ])
+        self.capability_manager = _CapMgr(
+            specs
+            if specs is not None
+            else [
+                CapabilitySpec(
+                    name="critique",
+                    type="operation",
+                    source_path=Path("/fake/critique.md"),
+                    description="critique candidate",
+                    cost_class="low",
+                ),
+                CapabilitySpec(
+                    name="load_sources",
+                    type="operation",
+                    source_path=Path("/fake/load_sources.md"),
+                    description="load source text",
+                    cost_class="low",
+                ),
+                CapabilitySpec(
+                    name="answer_from_sources",
+                    type="operation",
+                    source_path=Path("/fake/answer_from_sources.md"),
+                    description="final answer",
+                    cost_class="medium",
+                ),
+            ]
+        )
         self.calls = []
 
     def answer_query(self, query_content, wiki_context="", **kwargs):
@@ -82,9 +84,7 @@ def test_generate_plan_validates_pipeline_spec():
 
 
 def test_generate_plan_reports_no_json():
-    result = PlannerService(_LLM("no json here")).generate_plan(
-        user_directive="make a plan"
-    )
+    result = PlannerService(_LLM("no json here")).generate_plan(user_directive="make a plan")
 
     assert result.ok is False
     assert result.status == "no_json"
@@ -92,9 +92,11 @@ def test_generate_plan_reports_no_json():
 
 
 def test_generate_plan_reports_invalid_schema():
-    result = PlannerService(_LLM("""```json
+    result = PlannerService(
+        _LLM("""```json
 {"id": "broken", "steps": [{"id": "x"}]}
-```""")).generate_plan(user_directive="make a plan")
+```""")
+    ).generate_plan(user_directive="make a plan")
 
     assert result.ok is False
     assert result.status == "invalid_schema"
@@ -123,7 +125,7 @@ def test_canonical_pattern_recommends_digest_for_multi_target():
             source_path=Path("/fake/answer_from_sources.md"),
             description="answer from sources",
             cost_class="medium",
-        )
+        ),
     ]
     # We can invoke canonical_planning_patterns directly
     patterns = PlannerService.canonical_planning_patterns(specs, target_titles=["BookA", "BookB"])
@@ -136,4 +138,3 @@ def test_canonical_pattern_recommends_digest_for_multi_target():
     assert "Pattern: load vault sources before final answer" in patterns_single
     assert "load_sources_then_answer" in patterns_single
     assert "load_digest_answer" not in patterns_single
-

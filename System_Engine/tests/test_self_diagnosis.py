@@ -1,9 +1,7 @@
 """Metacognition M2: self-diagnosis over the M1 scorecard."""
-import os
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+import os
+
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 from maintenance.self_assessment import Axis, SelfAssessmentResult, GREEN, RED, YELLOW
@@ -12,9 +10,14 @@ from maintenance.self_diagnosis import run_self_diagnosis
 
 class FakeLLM:
     """Returns a canned diagnosis; records how many axes it was asked about."""
+
     def __init__(self, ret=None, boom=False):
-        self._ret = ret or {"root_cause": "rc", "candidate_fixes": ["fix A", "fix B"],
-                            "confidence": 0.7, "needs": ""}
+        self._ret = ret or {
+            "root_cause": "rc",
+            "candidate_fixes": ["fix A", "fix B"],
+            "confidence": 0.7,
+            "needs": "",
+        }
         self._boom = boom
         self.calls = []
 
@@ -30,9 +33,11 @@ def _assessment(axes, trend=None):
 
 
 def _paths(tmp_path):
-    return dict(cortex_dir=tmp_path / "cortex",
-                report_dir=tmp_path / "out",
-                log_path=tmp_path / "maint.log.md")
+    return dict(
+        cortex_dir=tmp_path / "cortex",
+        report_dir=tmp_path / "out",
+        log_path=tmp_path / "maint.log.md",
+    )
 
 
 def test_skips_when_all_green(tmp_path):

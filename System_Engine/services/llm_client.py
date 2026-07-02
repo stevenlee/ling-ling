@@ -39,7 +39,13 @@ from core.config import (
     TEMPLATES_DIR,
     settings,
 )
-from core.parser import extract_json_array, extract_json_object, is_empty_json_literal, strip_body_frontmatter, clean_llm_response
+from core.parser import (
+    extract_json_array,
+    extract_json_object,
+    is_empty_json_literal,
+    strip_body_frontmatter,
+    clean_llm_response,
+)
 from core.utils import MtimeCache, digest_value_to_text
 from services.capability_manager import CapabilityManager
 from services.trace_store import TraceStore, elapsed_ms, usage_to_counts
@@ -59,13 +65,15 @@ _LABELS_BY_SUFFIX = {
 }
 _DEFAULT_LABELS = {"file": "Filename", "content": "Content"}
 
-_FENCED_MARKDOWN_RE = re.compile(r'^```(?:markdown|md)?\s*\n(.*?)\n```$', re.DOTALL | re.IGNORECASE)
-_YAML_HEADER_RE = re.compile(r'(?:^|\n)(?:---|```yaml)\s*\n(.*?)\n(?:---|```)\s*(?:\n|$)', re.DOTALL)
+_FENCED_MARKDOWN_RE = re.compile(r"^```(?:markdown|md)?\s*\n(.*?)\n```$", re.DOTALL | re.IGNORECASE)
+_YAML_HEADER_RE = re.compile(
+    r"(?:^|\n)(?:---|```yaml)\s*\n(.*?)\n(?:---|```)\s*(?:\n|$)", re.DOTALL
+)
 _YAML_MARKDOWN_CLEANUP_RE = re.compile(
-    r'(^|[:\[,\s])[\*\_]{1,2}(.*?)[\*\_]{1,2}(?=[\]\s,:]|$)',
+    r"(^|[:\[,\s])[\*\_]{1,2}(.*?)[\*\_]{1,2}(?=[\]\s,:]|$)",
     re.MULTILINE,
 )
-_H1_TITLE_RE = re.compile(r'^#\s+(.*)', re.MULTILINE)
+_H1_TITLE_RE = re.compile(r"^#\s+(.*)", re.MULTILINE)
 
 _PROJECT_IDENTITY_FILES = ("README.md", "SCHEMA.md")
 _PROJECT_IDENTITY_TRUNCATE = 4000
@@ -116,7 +124,7 @@ _SUMMARY_PROMPTS: dict[str, str] = {
         "Rules:\n"
         "- 1 to 2 sentences, total length ≤ 200 characters.\n"
         "- Match the INPUT LANGUAGE exactly (Chinese in → Chinese out; English in → English out).\n"
-        "- Write declarative facts. No \"As we saw...\", \"This passage discusses...\", or other meta framing.\n"
+        '- Write declarative facts. No "As we saw...", "This passage discusses...", or other meta framing.\n'
         "- Preserve key proper nouns, names, terms, and the conclusion.\n"
         "- Do not invent facts that the input doesn't support.\n\n"
         "Return ONLY a JSON object with this exact schema:\n"
@@ -159,6 +167,7 @@ def _genai():
     global _GENAI_MOD
     if _GENAI_MOD is None:
         from google import genai as _g
+
         _GENAI_MOD = _g
     return _GENAI_MOD
 
@@ -234,6 +243,7 @@ def _is_transient_llm_error(exc: Exception) -> bool:
 
 # ─── Client ────────────────────────────────────────────────────────────
 
+
 class LLMClient:
     def __init__(self):
         self.provider = LLM_PROVIDER
@@ -258,8 +268,7 @@ class LLMClient:
             self.model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
         else:
             raise ValueError(
-                f"Unknown LLM_PROVIDER {self.provider!r}. "
-                f"Expected one of: vllm, gemini, ollama."
+                f"Unknown LLM_PROVIDER {self.provider!r}. Expected one of: vllm, gemini, ollama."
             )
 
     @staticmethod
@@ -387,8 +396,8 @@ class LLMClient:
         retry_meta: dict,
     ) -> tuple[str, int | None, int | None, int | None]:
         import random
+
         attempts = 0
-        last_error = None
 
         while attempts < retries:
             attempts += 1
@@ -398,7 +407,6 @@ class LLMClient:
                     system_prompt, user_msg, temperature, max_tokens
                 )
             except Exception as e:
-                last_error = e
                 retry_meta["retry_last_error"] = str(e)
                 if _is_transient_llm_error(e):
                     retry_meta["retry_transient"] = True
@@ -424,7 +432,9 @@ class LLMClient:
         total = getattr(usage, "total_token_count", None)
         return prompt, completion, total
 
-    def _openai_chat(self, system_prompt: str, user_msg: Any, temperature: float, max_tokens: int) -> tuple[str, Any]:
+    def _openai_chat(
+        self, system_prompt: str, user_msg: Any, temperature: float, max_tokens: int
+    ) -> tuple[str, Any]:
         extra_body = {"num_ctx": settings.MEMORY_LIMIT} if self.provider == "ollama" else {}
         response = self.client.chat.completions.create(
             model=self.model,
@@ -470,9 +480,13 @@ class LLMClient:
     def _get_lang_hint(self) -> str:
         lang = settings.OUTPUT_LANGUAGE.lower()
         if "simplified" in lang or "簡體" in lang or "简体" in lang or "zh-cn" in lang:
-            return "Simplified Chinese (zh-CN, 简体中文). MUST NOT use Traditional Chinese (繁體中文)."
+            return (
+                "Simplified Chinese (zh-CN, 简体中文). MUST NOT use Traditional Chinese (繁體中文)."
+            )
         if "traditional" in lang or "繁體" in lang or "繁体" in lang or "zh-tw" in lang:
-            return "Traditional Chinese (zh-TW, 繁體中文). MUST NOT use Simplified Chinese (简体中文)."
+            return (
+                "Traditional Chinese (zh-TW, 繁體中文). MUST NOT use Simplified Chinese (简体中文)."
+            )
         if "chinese" in lang or "中文" in lang:
             return f"{settings.OUTPUT_LANGUAGE}. Please be consistent and do NOT mix Simplified and Traditional characters."
         if "japanese" in lang or "日本語" in lang:
@@ -557,8 +571,14 @@ class LLMClient:
             template_instructions = ""
             template_resolved = "none"
         else:
-            template_resolved = (forced_template or default_template) or settings.USE_TEMPLATE or "wiki-note"
-            template_name = template_resolved if template_resolved.endswith(".md") else f"{template_resolved}.md"
+            template_resolved = (
+                (forced_template or default_template) or settings.USE_TEMPLATE or "wiki-note"
+            )
+            template_name = (
+                template_resolved
+                if template_resolved.endswith(".md")
+                else f"{template_resolved}.md"
+            )
             template_instructions = self._load_capability_body(TEMPLATES_DIR / template_name)
 
         viz_instructions = self._load_localized_content(GUIDELINES_DIR / "Visualization.md")
@@ -569,7 +589,8 @@ class LLMClient:
             "You MUST follow the provided Markdown template exactly. "
             "Do NOT add conversational fillers, greetings, or meta-comments. "
             "Focus exclusively on structured content."
-            if settings.STRICT_MODE else ""
+            if settings.STRICT_MODE
+            else ""
         )
         yaml_rule = (
             "Use the standard YAML header (--- title: ... ---) at the beginning of your response."
@@ -593,7 +614,9 @@ class LLMClient:
             f"never reproduce them in English.{strict_hint}\n\n"
             f"## Task\n{instruction_type}\n\n{viz_instructions}\n\n{yaml_rule}"
         )
-        sections = [s for s in (role_instructions, operation_instructions, template_instructions) if s]
+        sections = [
+            s for s in (role_instructions, operation_instructions, template_instructions) if s
+        ]
         sections.append(common_rules)
         prompt = lang_banner + "\n\n" + "\n\n".join(sections)
 
@@ -611,7 +634,7 @@ class LLMClient:
         if not text:
             return ""
         text = text.strip()
-        text = _FENCED_MARKDOWN_RE.sub(r'\1', text).strip()
+        text = _FENCED_MARKDOWN_RE.sub(r"\1", text).strip()
         text, _ = strip_body_frontmatter(text)
         return text.strip()
 
@@ -640,7 +663,7 @@ class LLMClient:
                 for key in ("title", "tags", "type", "pending_concepts"):
                     if key in metadata:
                         result[key] = str(metadata[key]) if key == "title" else metadata[key]
-                result["content"] = clean_llm_response(text[yaml_match.end():].strip())
+                result["content"] = clean_llm_response(text[yaml_match.end() :].strip())
                 return result
 
         title_match = _H1_TITLE_RE.search(text)
@@ -709,7 +732,9 @@ class LLMClient:
             logging.error(f"LLM Error in generate_entity_page: {e}")
             return None
 
-    def _build_multimodal_user_msg(self, image_path: Path, filename: str | None, labels: dict) -> Any:
+    def _build_multimodal_user_msg(
+        self, image_path: Path, filename: str | None, labels: dict
+    ) -> Any:
         mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
         raw_bytes = Path(image_path).read_bytes()
 
@@ -762,10 +787,7 @@ class LLMClient:
                 operation=operation,
             )
             ctx = wiki_context if wiki_context.strip() else "(No relevant context retrieved.)"
-            user_msg = (
-                f"## User Directive\n{query_content}\n\n"
-                f"## Provided Source Text\n{ctx}\n"
-            )
+            user_msg = f"## User Directive\n{query_content}\n\n## Provided Source Text\n{ctx}\n"
         else:
             lang_hint = self._get_lang_hint()
             system_prompt = (
@@ -864,7 +886,9 @@ class LLMClient:
             try:
                 raw = self._complete_text(trace_context=trace, **complete_kwargs)
             except Exception as e:
-                logging.warning(f"_complete_json({kind}) call failed (attempt {attempt + 1}/2): {e}")
+                logging.warning(
+                    f"_complete_json({kind}) call failed (attempt {attempt + 1}/2): {e}"
+                )
                 continue
             parsed = parse(raw)
             if parsed:
@@ -875,8 +899,12 @@ class LLMClient:
         return empty
 
     _LANG_NAMES = {
-        "en": "English", "zh": "Traditional Chinese", "de": "German",
-        "ja": "Japanese", "fr": "French", "es": "Spanish",
+        "en": "English",
+        "zh": "Traditional Chinese",
+        "de": "German",
+        "ja": "Japanese",
+        "fr": "French",
+        "es": "Spanish",
     }
 
     def translate_query(self, text: str, target_langs: list[str]) -> dict:
@@ -907,7 +935,10 @@ class LLMClient:
             system_prompt=system_prompt,
             user_msg=f"Query: {text}",
             temperature=0.1,
-            trace_context={"stage": "translate_query", "metadata": {"target_langs": list(target_langs)}},
+            trace_context={
+                "stage": "translate_query",
+                "metadata": {"target_langs": list(target_langs)},
+            },
         )
         # Keep only requested codes with non-empty string values.
         cleaned = {
@@ -1063,7 +1094,9 @@ class LLMClient:
         parsed.setdefault("highlights", [])
         return parsed
 
-    def _part_digest_fallback(self, title: str, part_number: int, part_note: str, pending_concepts: str) -> dict:
+    def _part_digest_fallback(
+        self, title: str, part_number: int, part_note: str, pending_concepts: str
+    ) -> dict:
         cleaned = self._strip_accidental_frontmatter(part_note).strip().splitlines()
         lines = [line.strip("#- * \t") for line in cleaned if line.strip()][:6]
         return {
@@ -1236,12 +1269,9 @@ class LLMClient:
                 forced_template="none",
                 require_yaml_header=False,
             )
-            sources_text = "\n\n".join(f"[{i+1}] {s}" for i, s in enumerate(sources))
-            user_msg = (
-                f"## Candidate Insight\n{candidate}\n\n"
-                f"## Source Materials\n{sources_text}\n"
-            )
-            
+            sources_text = "\n\n".join(f"[{i + 1}] {s}" for i, s in enumerate(sources))
+            user_msg = f"## Candidate Insight\n{candidate}\n\n## Source Materials\n{sources_text}\n"
+
             raw = self._complete_text(
                 system_prompt,
                 user_msg,
@@ -1254,24 +1284,20 @@ class LLMClient:
                     },
                 },
             )
-            
+
             response_text = clean_llm_response(raw)
             verdict = None
-            verdict_match = re.search(r'(?im)^\**\s*Verdict\**\s*[:：]\s*[*_`]*\s*(survived|refuted)', response_text)
+            verdict_match = re.search(
+                r"(?im)^\**\s*Verdict\**\s*[:：]\s*[*_`]*\s*(survived|refuted)", response_text
+            )
             if verdict_match:
                 verdict = verdict_match.group(1).lower()
-            
-            return {
-                "verdict": verdict,
-                "notes": response_text[:500]
-            }
-            
+
+            return {"verdict": verdict, "notes": response_text[:500]}
+
         except Exception as e:
             logging.error(f"LLM Error in refute_insight: {e}")
-            return {
-                "verdict": None,
-                "notes": str(e)[:500]
-            }
+            return {"verdict": None, "notes": str(e)[:500]}
 
     # ─── Quality scoring (P0) ───────────────────────────────────────────
 
@@ -1371,8 +1397,7 @@ class LLMClient:
         # LLM doesn't see ragged spacing.
         user_msg_parts = [f"[P{i + 1}]\n{p.strip()}" for i, p in enumerate(paragraphs)]
         user_msg = (
-            "Number of paragraphs: " + str(len(paragraphs)) + "\n\n"
-            + "\n\n".join(user_msg_parts)
+            "Number of paragraphs: " + str(len(paragraphs)) + "\n\n" + "\n\n".join(user_msg_parts)
         )
 
         parsed = self._complete_json(
@@ -1493,7 +1518,7 @@ class LLMClient:
             )
             # Clean response to ensure only lowercase alphanumeric characters (and hyphen) are returned.
             category = raw.strip().lower()
-            category = re.sub(r'[^a-z0-9\-]', '', category)
+            category = re.sub(r"[^a-z0-9\-]", "", category)
             return category or "default"
         except Exception as e:
             logging.warning(f"classify_document LLM call failed: {e}")
@@ -1532,7 +1557,7 @@ class LLMClient:
                     "metadata": {"filename": filename, "options": sorted(valid_names)},
                 },
             )
-            choice = re.sub(r'[^a-z0-9\-]', '', raw.strip().lower())
+            choice = re.sub(r"[^a-z0-9\-]", "", raw.strip().lower())
             if choice in valid_names:
                 return choice
             # Salvage: the model wrapped the name in prose ("I choose academic.").
@@ -1586,11 +1611,13 @@ class LLMClient:
                     continue
                 claim = item.get("claim")
                 if isinstance(claim, str) and len(claim.strip()) >= 8:
-                    out.append({
-                        "claim": claim.strip(),
-                        "summary": str(item.get("summary") or "").strip()[:200],
-                        "applies_when": str(item.get("applies_when") or "").strip(),
-                    })
+                    out.append(
+                        {
+                            "claim": claim.strip(),
+                            "summary": str(item.get("summary") or "").strip()[:200],
+                            "applies_when": str(item.get("applies_when") or "").strip(),
+                        }
+                    )
             return out[:3]
         except Exception as e:
             logging.warning(f"extract_claims failed: {e}")
@@ -1598,6 +1625,7 @@ class LLMClient:
 
     def generate_structured(self, prompt: str, schema: dict) -> dict:
         import json
+
         system_prompt = "You are a helpful assistant. Output strictly valid JSON that matches the provided schema."
         user_msg = f"{prompt}\n\nSchema:\n{json.dumps(schema, ensure_ascii=False)}"
         try:
@@ -1607,7 +1635,7 @@ class LLMClient:
                 user_msg=user_msg,
                 temperature=0.2,
                 max_tokens=1000,
-                trace_context={"stage": "generate_structured"}
+                trace_context={"stage": "generate_structured"},
             )
             return parsed if isinstance(parsed, dict) else {}
         except Exception as e:
@@ -1638,7 +1666,10 @@ class LLMClient:
                     user_msg=f"Claim: {claim}",
                     temperature=0.1,
                     max_tokens=None,  # reasoning models need thinking room
-                    trace_context={"stage": "assess_falsifiability", "metadata": {"attempt": attempt + 1}},
+                    trace_context={
+                        "stage": "assess_falsifiability",
+                        "metadata": {"attempt": attempt + 1},
+                    },
                 )
                 parsed = extract_json_object(raw)
                 if isinstance(parsed, dict):
@@ -1656,7 +1687,9 @@ class LLMClient:
                             "score": max(0.0, min(1.0, float(score))),
                             "falsifier": falsifier,
                         }
-                logging.warning(f"assess_falsifiability: unparseable output (attempt {attempt + 1})")
+                logging.warning(
+                    f"assess_falsifiability: unparseable output (attempt {attempt + 1})"
+                )
             except Exception as e:
                 logging.warning(f"assess_falsifiability failed (attempt {attempt + 1}): {e}")
         return fallback
@@ -1688,10 +1721,7 @@ class LLMClient:
         median_score = max(0.0, min(1.0, round(median_score, 4)))
 
         best_result = min(results, key=lambda r: abs(r["score"] - median_score))
-        return {
-            "score": median_score,
-            "falsifier": best_result["falsifier"]
-        }
+        return {"score": median_score, "falsifier": best_result["falsifier"]}
 
     def adjudicate_claims(self, claim_a: str, claim_b: str) -> dict:
         """Closed-choice relation verdict between two atomic claims.
@@ -1715,8 +1745,18 @@ class LLMClient:
             "Return ONLY a JSON object:\n"
             '{"verdict": "<one of the six>", "rationale": "<=200 chars>"}'
         )
-        valid = {"equivalent", "entails", "entailed_by", "complementary", "contradicts", "unrelated"}
-        fallback = {"verdict": "unrelated", "rationale": "adjudication failed; conservative default"}
+        valid = {
+            "equivalent",
+            "entails",
+            "entailed_by",
+            "complementary",
+            "contradicts",
+            "unrelated",
+        }
+        fallback = {
+            "verdict": "unrelated",
+            "rationale": "adjudication failed; conservative default",
+        }
         try:
             parsed = self._complete_json(
                 kind="object",
@@ -1732,7 +1772,9 @@ class LLMClient:
                     "verdict": verdict.strip().lower(),
                     "rationale": str(parsed.get("rationale") or "").strip()[:200],
                 }
-            logging.warning(f"adjudicate_claims: illegal verdict {verdict!r}; defaulting to unrelated")
+            logging.warning(
+                f"adjudicate_claims: illegal verdict {verdict!r}; defaulting to unrelated"
+            )
             return fallback
         except Exception as e:
             logging.warning(f"adjudicate_claims failed: {e}")
@@ -1781,15 +1823,15 @@ class LLMClient:
             A dict with 'persona_name', 'persona_content', 'template_name', and 'template_content'.
         """
         system_prompt = (
-            "We need to dynamically generate a Persona note and a Markdown Template for a new document category: \"{category}\".\n\n"
+            'We need to dynamically generate a Persona note and a Markdown Template for a new document category: "{category}".\n\n'
             "1. Persona: A markdown document defining the role, traits, and guidelines for an AI agent handling this type of document.\n"
             "2. Template: A markdown template detailing the structure, sections, and layout of the synthesized output for this type of document.\n\n"
             "Generate BOTH. Output MUST be valid JSON with the following structure:\n"
             "{{\n"
-            "    \"persona_name\": \"Suggested filename for persona, e.g., 'novel-assistant' (use lowercase-hyphenated slug)\",\n"
-            "    \"persona_content\": \"Markdown content for the persona file\",\n"
-            "    \"template_name\": \"Suggested filename for template, e.g., 'novel-summary' (use lowercase-hyphenated slug)\",\n"
-            "    \"template_content\": \"Markdown content for the template file\"\n"
+            '    "persona_name": "Suggested filename for persona, e.g., \'novel-assistant\' (use lowercase-hyphenated slug)",\n'
+            '    "persona_content": "Markdown content for the persona file",\n'
+            '    "template_name": "Suggested filename for template, e.g., \'novel-summary\' (use lowercase-hyphenated slug)",\n'
+            '    "template_content": "Markdown content for the template file"\n'
             "}}\n\n"
             "Ensure the response is raw JSON."
         ).format(category=category)
@@ -1812,7 +1854,6 @@ class LLMClient:
             logging.warning(f"generate_persona_and_template LLM call failed: {e}")
             return {}
 
-
     def generate_research_keywords(self, content: str, instruction: str) -> list[str]:
         prompt = f"""
 請根據以下內容與使用者的指示，生成 3 到 5 個適合用於學術與專利搜尋引擎（如 arXiv, Wikipedia, EuropePMC）的英文搜尋關鍵字。
@@ -1831,12 +1872,16 @@ class LLMClient:
                 user_msg=prompt,
                 temperature=0.3,
             )
-            import json, re
-            match = re.search(r'\[.*\]', res, re.DOTALL)
+            import json
+            import re
+
+            match = re.search(r"\[.*\]", res, re.DOTALL)
             if match:
                 parsed = json.loads(match.group(0))
                 if isinstance(parsed, list):
-                    keywords = [str(x).strip() for x in parsed if isinstance(x, str) and str(x).strip()]
+                    keywords = [
+                        str(x).strip() for x in parsed if isinstance(x, str) and str(x).strip()
+                    ]
                     if keywords:
                         return keywords
             return ["General Topic"]
@@ -1855,8 +1900,10 @@ class LLMClient:
         discard the entire list (the old behaviour — a single glitch anywhere
         returned [], which then looked like "the LLM produced nothing").
         """
-        import json, re
-        match = re.search(r'\[.*\]', text, re.DOTALL)
+        import json
+        import re
+
+        match = re.search(r"\[.*\]", text, re.DOTALL)
         if match:
             try:
                 parsed = json.loads(match.group(0))
@@ -1866,7 +1913,7 @@ class LLMClient:
                 pass
         # Salvage: parse each flat {...} object independently, keeping successes.
         objs = []
-        for om in re.finditer(r'\{[^{}]*\}', text, re.DOTALL):
+        for om in re.finditer(r"\{[^{}]*\}", text, re.DOTALL):
             try:
                 obj = json.loads(om.group(0))
                 if isinstance(obj, dict):
@@ -1881,12 +1928,20 @@ class LLMClient:
         s = str(text if text is not None else "").replace("\n", " ").replace("|", "\\|").strip()
         return s or "—"
 
-    def generate_elite_digest(self, arxiv_wiki_results: list[dict], source_name: str, topic: str = "") -> str:
+    def generate_elite_digest(
+        self, arxiv_wiki_results: list[dict], source_name: str, topic: str = ""
+    ) -> str:
         # The LLM only selects and translates; URLs are rendered from our own data
         # to avoid the model corrupting links by copying them verbatim.
         import json
+
         indexed = [
-            {"idx": i, "title": r.get("title", ""), "summary": r.get("summary", ""), "source": r.get("source", "")}
+            {
+                "idx": i,
+                "title": r.get("title", ""),
+                "summary": r.get("summary", ""),
+                "source": r.get("source", ""),
+            }
             for i, r in enumerate(arxiv_wiki_results)
         ]
         data_str = json.dumps(indexed, ensure_ascii=False, indent=2)
@@ -1938,8 +1993,7 @@ class LLMClient:
         return header + "\n\n".join(items)
 
     _PATENT_TABLE_HEADER = (
-        "| 專利編號 | 關聯性 | 主旨 | 摘要 | 全文連結 |\n"
-        "| :--- | :---: | :--- | :--- | :--- |\n"
+        "| 專利編號 | 關聯性 | 主旨 | 摘要 | 全文連結 |\n| :--- | :---: | :--- | :--- | :--- |\n"
     )
 
     def generate_patent_table(self, patent_results: list[dict], topic: str = "") -> str:
@@ -1950,12 +2004,18 @@ class LLMClient:
         and their translation — from being lost to a flaky ranking step:
         rank+translate → translate-only → raw source text (last resort)."""
         import json
+
         if not patent_results:
             return "> 查無符合的專利（此主題可能較少出現在專利，或關鍵字過於限縮）。"
 
         lang = self._get_lang_hint()
         indexed = [
-            {"idx": i, "id": p.get("id", ""), "title": p.get("title", ""), "summary": p.get("summary", "")}
+            {
+                "idx": i,
+                "id": p.get("id", ""),
+                "title": p.get("title", ""),
+                "summary": p.get("summary", ""),
+            }
             for i, p in enumerate(patent_results)
         ]
         data_str = json.dumps(indexed, ensure_ascii=False, indent=2)
@@ -2006,8 +2066,10 @@ class LLMClient:
             f"{('[連結](' + p.get('url', '') + ')') if p.get('url') else '—'} |"
             for p in patent_results
         ]
-        note = ("> ⚠️ 排序與翻譯這次都無法產生（LLM 格式化失敗），"
-                f"以下為抓到的 {len(raw)} 筆原始專利（未排序、原文）：\n\n")
+        note = (
+            "> ⚠️ 排序與翻譯這次都無法產生（LLM 格式化失敗），"
+            f"以下為抓到的 {len(raw)} 筆原始專利（未排序、原文）：\n\n"
+        )
         return note + self._PATENT_TABLE_HEADER + "\n".join(raw)
 
     def _safe_json_rows(self, prompt: str) -> list:
@@ -2023,8 +2085,9 @@ class LLMClient:
             logging.error(f"Patent JSON step failed: {e}")
             return []
 
-    def _patent_rows_to_lines(self, rows: list[dict], patent_results: list[dict],
-                              default_relevance: str = "") -> list[str]:
+    def _patent_rows_to_lines(
+        self, rows: list[dict], patent_results: list[dict], default_relevance: str = ""
+    ) -> list[str]:
         """Map LLM rows (idx/relevance/subject/summary) back onto our patent
         data, skipping any row with a bad/out-of-range idx."""
         lines = []

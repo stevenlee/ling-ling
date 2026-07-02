@@ -1,11 +1,9 @@
 """Facet backfill pump: low-priority idle work that yields to user work,
 derives its queue from the DB, and goes silent when everything is done."""
-import sys
+
 import time
-from pathlib import Path
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import pytest
 
@@ -84,8 +82,11 @@ def env(tmp_path, monkeypatch):
 
 def _pump(llm, rag, tmp_path, **kw):
     defaults = dict(
-        state_file=tmp_path / "state.json", enabled=True,
-        grace_seconds=180, step_gap_seconds=30, daily_budget=1000,
+        state_file=tmp_path / "state.json",
+        enabled=True,
+        grace_seconds=180,
+        step_gap_seconds=30,
+        daily_budget=1000,
     )
     defaults.update(kw)
     pump = FacetBackfillPump(llm, rag, **defaults)
@@ -118,11 +119,11 @@ class TestQueue:
         tmp_path, pages, notes, *_ = env
         _page(pages, "Book (Synthesis)")
         _page(pages, "Book (Part 1)")
-        _page(pages, "Book (Stitched)")          # excluded: stitched
+        _page(pages, "Book (Stitched)")  # excluded: stitched
         _page(notes, "My Note")
-        _page(pages, "Covered (Synthesis)")       # excluded: already has facets
-        _page(pages, "_tagScrapbook")             # excluded: underscore
-        _page(pages, "Stub", content="tiny")      # excluded: too small
+        _page(pages, "Covered (Synthesis)")  # excluded: already has facets
+        _page(pages, "_tagScrapbook")  # excluded: underscore
+        _page(pages, "Stub", content="tiny")  # excluded: too small
 
         rag = FakeRAG(facet_titles=["Covered (Synthesis)"])
         pump = _pump(FakeLLM(), rag, tmp_path)
@@ -144,7 +145,7 @@ class TestQueue:
 
 class TestYielding:
     def test_busy_means_no_work(self, env):
-        tmp_path, pages, *_ , busy = env
+        tmp_path, pages, *_, busy = env
         _page(pages, "A (Synthesis)")
         busy.is_busy.return_value = True
         pump = _pump(FakeLLM(), FakeRAG(), tmp_path)
@@ -165,6 +166,7 @@ class TestYielding:
         stuck = to_llm / "broken.md"
         stuck.write_text("x", encoding="utf-8")
         import os
+
         old = time.time() - 3600
         os.utime(stuck, (old, old))
 
@@ -182,11 +184,11 @@ class TestStep:
         pump = _pump(llm, rag, tmp_path)
         pump._run_step()
 
-        assert llm.digest_calls == []                 # zero LLM cost
+        assert llm.digest_calls == []  # zero LLM cost
         title, facets = rag.added[0]
         assert title == "Book (Part 3)"
         assert "The chapter argues that memory is reconstructive." in facets
-        assert pump._ledger["budget"]["used"] == 0    # nothing charged
+        assert pump._ledger["budget"]["used"] == 0  # nothing charged
 
     def test_plain_page_uses_one_llm_call_and_charges_budget(self, env):
         tmp_path, _, notes, *_ = env
@@ -221,10 +223,11 @@ class TestFailureHandling:
             pump._run_step()
 
         assert "Cursed Note" in pump._ledger["quarantine"]
-        assert pump._build_queue() == []              # quarantined → excluded
+        assert pump._build_queue() == []  # quarantined → excluded
 
         # Editing the file requalifies it.
         import os
+
         future = time.time() + 10
         os.utime(page, (future, future))
         assert [t for _, _, t in pump._build_queue()] == ["Cursed Note"]
@@ -245,19 +248,19 @@ class TestFailureHandling:
         _page(notes, "Plain Note")
         pump = _pump(FakeLLM(), FakeRAG(), tmp_path, daily_budget=0)
         pump._run_step()
-        assert pump._kicks and pump._kicks[0] > 0     # resume scheduled
+        assert pump._kicks and pump._kicks[0] > 0  # resume scheduled
         assert FakeRAG().added == []
 
 
 class TestCompletion:
     def test_empty_queue_logs_once_then_silent(self, env):
-        tmp_path, *_ , busy = env
+        tmp_path, *_, busy = env
         pump = _pump(FakeLLM(), FakeRAG(), tmp_path)
         pump._run_step()
         assert pump._ledger["completed_logged"] is True
         log = (tmp_path / "maintenance.log.md").read_text(encoding="utf-8")
         assert "Facet Backfill" in log
 
-        pump._run_step()                              # second time: silent
+        pump._run_step()  # second time: silent
         assert log == (tmp_path / "maintenance.log.md").read_text(encoding="utf-8")
-        busy.try_set_busy.assert_not_called()         # never grabbed the lock
+        busy.try_set_busy.assert_not_called()  # never grabbed the lock

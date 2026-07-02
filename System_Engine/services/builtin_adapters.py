@@ -257,7 +257,6 @@ def _make_load_sources(_llm: "LLMClient"):
                 text = text[:max_chars] + "\n\n<!-- truncated by vault.load_sources -->"
 
             # Determine source_kind from resolved entries.
-            kinds = {kind for _, kind in resolved}
             if len(resolved) > 1:
                 source_kind = "parts_aggregated"
             else:
@@ -319,7 +318,7 @@ def _split_source_sections(source_text: str) -> list[tuple[str, str]]:
         m = _SOURCE_SECTION_RE.match(part)
         if m:
             title = m.group(1).strip()
-            body = part[m.end():].strip()
+            body = part[m.end() :].strip()
         else:
             title = f"source_{len(result) + 1}"
             body = part
@@ -360,9 +359,7 @@ def _make_digest_sources(llm: "LLMClient"):
             truncated_for_digest = original_chars > max_chars
             if truncated_for_digest:
                 text = text[:max_chars]
-                warnings.append(
-                    f"Source '{title}' truncated to {max_chars} chars for digest."
-                )
+                warnings.append(f"Source '{title}' truncated to {max_chars} chars for digest.")
             try:
                 digest_text = llm.digest_sources(
                     query=query,
@@ -375,14 +372,16 @@ def _make_digest_sources(llm: "LLMClient"):
                 digest_text = ""
                 warnings.append(f"Source '{title}' digest failed: {e}")
 
-            digests.append({
-                "title": title,
-                "digest": digest_text,
-                "original_chars": original_chars,
-                "digested_chars": len(text),
-                "digest_chars": len(digest_text),
-                "truncated_for_digest": truncated_for_digest,
-            })
+            digests.append(
+                {
+                    "title": title,
+                    "digest": digest_text,
+                    "original_chars": original_chars,
+                    "digested_chars": len(text),
+                    "digest_chars": len(digest_text),
+                    "truncated_for_digest": truncated_for_digest,
+                }
+            )
 
         digest_merged = _merge_digests_to_text(digests)
         coverage = [
@@ -414,7 +413,7 @@ _BUILTIN_FACTORIES = {
     "llm.digest_sources": _make_digest_sources,
     "llm.answer_from_sources": _make_answer_from_sources,
     "llm.synthesize": _make_synthesize,
-    "llm.critique":   _make_critique,
+    "llm.critique": _make_critique,
 }
 
 

@@ -1,11 +1,9 @@
 """Orphan chunk cleanup: ChromaDB must not retain chunks for deleted,
 renamed, or moved files. Covers RAGManager.prune_orphan_chunks and the
 VaultWatcher events that trigger it (folder deletion, rename/move)."""
-import sys
-from pathlib import Path
+
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 from services.rag_manager import RAGManager
 from watchers.vault_watcher import VaultWatcher
@@ -41,11 +39,13 @@ class TestPruneOrphanChunks:
         alive.write_text("x", encoding="utf-8")
 
         alive_id = RAGManager._get_doc_id(alive)
-        rag = _rag_with({
-            "a_1": {"doc_id": alive_id, "title": "Alive (Synthesis)"},
-            "d_1": {"doc_id": "deadbeef" * 8, "title": "Deleted Article"},
-            "d_2": {"doc_id": "deadbeef" * 8, "title": "Deleted Article"},
-        })
+        rag = _rag_with(
+            {
+                "a_1": {"doc_id": alive_id, "title": "Alive (Synthesis)"},
+                "d_1": {"doc_id": "deadbeef" * 8, "title": "Deleted Article"},
+                "d_2": {"doc_id": "deadbeef" * 8, "title": "Deleted Article"},
+            }
+        )
 
         result = rag.prune_orphan_chunks(roots=[pages])
 
@@ -91,6 +91,7 @@ class TestVaultWatcherOrphanTriggers:
         pages.mkdir()
         notes.mkdir()
         from core import config
+
         monkeypatch.setattr(config, "PAGES_DIR", pages)
         monkeypatch.setattr(config, "NOTES_DIR", notes)
         watcher = VaultWatcher(MagicMock())
@@ -117,15 +118,22 @@ class TestVaultWatcherOrphanTriggers:
     def test_file_rename_deletes_old_and_indexes_new(self, monkeypatch, tmp_path):
         watcher, pages = self._watcher(monkeypatch, tmp_path)
         deletions, indexed = [], []
-        monkeypatch.setattr(watcher, "_process_deletion", lambda title, **k: deletions.append(title))
         monkeypatch.setattr(
-            watcher, "_schedule_process",
+            watcher, "_process_deletion", lambda title, **k: deletions.append(title)
+        )
+        monkeypatch.setattr(
+            watcher,
+            "_schedule_process",
             lambda fp, title, delay: indexed.append(title),
         )
 
-        watcher.on_moved(FakeDirEvent(
-            pages / "Old Name.md", dest=pages / "New Name.md", is_directory=False,
-        ))
+        watcher.on_moved(
+            FakeDirEvent(
+                pages / "Old Name.md",
+                dest=pages / "New Name.md",
+                is_directory=False,
+            )
+        )
 
         assert deletions == ["Old Name"]
         assert indexed == ["New Name"]
@@ -133,7 +141,10 @@ class TestVaultWatcherOrphanTriggers:
     def test_sweep_runs_prune_under_busy_lock(self, monkeypatch, tmp_path):
         watcher, _ = self._watcher(monkeypatch, tmp_path)
         watcher.rag.prune_orphan_chunks.return_value = {
-            "scanned": 5, "orphan_docs": 1, "deleted_chunks": 2, "titles": ["X"],
+            "scanned": 5,
+            "orphan_docs": 1,
+            "deleted_chunks": 2,
+            "titles": ["X"],
         }
         monkeypatch.setattr("core.vault_utils.update_wiki_index", MagicMock())
 
@@ -141,13 +152,12 @@ class TestVaultWatcherOrphanTriggers:
 
         watcher.rag.prune_orphan_chunks.assert_called_once()
         from core.state import global_busy_state
+
         assert not global_busy_state.is_busy()
 
     def test_sweep_retries_when_busy(self, monkeypatch, tmp_path):
         watcher, _ = self._watcher(monkeypatch, tmp_path)
-        monkeypatch.setattr(
-            "watchers.vault_watcher.global_busy_state.try_set_busy", lambda: False
-        )
+        monkeypatch.setattr("watchers.vault_watcher.global_busy_state.try_set_busy", lambda: False)
         try:
             watcher._process_orphan_sweep()
             watcher.rag.prune_orphan_chunks.assert_not_called()

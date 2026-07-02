@@ -11,10 +11,7 @@ import watchdog.events
 from core.state import global_busy_state
 from services.media_processor import process_image
 from services.ingestion_pipeline import IngestionPipeline
-from core.config import (
-    INDEX_FILE, PAGES_DIR,
-    RAW_CONSOLIDATE_DIR, RAW_ASSETS_DIR, ASSETS_DIR
-)
+from core.config import INDEX_FILE, RAW_CONSOLIDATE_DIR, RAW_ASSETS_DIR, ASSETS_DIR
 from core.ui import ui
 
 
@@ -27,8 +24,8 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
     ``scan_existing`` idle callback) or the next time ``_drain_queue`` runs.
     """
 
-    _SUPPORTED_EXTENSIONS = {'.md', '.png', '.jpg', '.jpeg'}
-    _IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.tiff'}
+    _SUPPORTED_EXTENSIONS = {".md", ".png", ".jpg", ".jpeg"}
+    _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".tiff"}
 
     def __init__(self, llm_client, rag_manager):
         super().__init__()
@@ -55,6 +52,7 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
         if not event.is_directory:
             # ONLY handle if the file is being moved INTO the monitored directory
             from core.config import CONSOLIDATE_DIR
+
             dest_path = Path(event.dest_path)
             if CONSOLIDATE_DIR in dest_path.parents:
                 self._handle_event(event, is_move=True)
@@ -188,6 +186,7 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
         to decide whether to re-scan).
         """
         from core.config import CONSOLIDATE_DIR
+
         if CONSOLIDATE_DIR.exists():
             for f in sorted(CONSOLIDATE_DIR.iterdir()):
                 if (
@@ -216,14 +215,14 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
         )
         with run_context:
             ext = filepath.suffix.lower()
-            if ext == '.md':
+            if ext == ".md":
                 self._handle_markdown(filepath)
-            elif ext in ['.png', '.jpg', '.jpeg']:
+            elif ext in [".png", ".jpg", ".jpeg"]:
                 self._handle_image(filepath)
 
     def _handle_markdown(self, filepath: Path):
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
 
             self.pipeline.ingest_markdown(content, filepath)
@@ -237,7 +236,7 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
             ui.error(f"Clipping 處理失敗：{filepath.name}（{e}）— 檔案留在原處，修正後會重試")
 
     def _handle_image(self, filepath: Path):
-        index_content = INDEX_FILE.read_text('utf-8') if INDEX_FILE.exists() else ""
+        index_content = INDEX_FILE.read_text("utf-8") if INDEX_FILE.exists() else ""
         result = process_image(filepath, self.llm, index_content, ASSETS_DIR)
         if result:
             ingested = self.pipeline.ingest_to_wiki(None, filepath, llm_result=result)
@@ -253,7 +252,10 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
         archive_dir.mkdir(parents=True, exist_ok=True)
         dest = archive_dir / filepath.name
         if dest.exists():
-            dest = archive_dir / f"{filepath.stem}_{datetime.now().strftime('%Y%m%d-%H%M%S')}{filepath.suffix}"
+            dest = (
+                archive_dir
+                / f"{filepath.stem}_{datetime.now().strftime('%Y%m%d-%H%M%S')}{filepath.suffix}"
+            )
         shutil.move(str(filepath), str(dest))
 
     def _is_image_only_dir(self, d: Path) -> bool:

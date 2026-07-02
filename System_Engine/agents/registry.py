@@ -1,4 +1,3 @@
-import logging
 from agents.merge_agent import MergeAgent
 from agents.tag_patrol_agent import TagPatrolAgent
 from agents.insight_agent import InsightAgent
@@ -15,6 +14,7 @@ from agents.improve_agent import ImproveAgent
 from agents.review_agent import ReviewAgent
 from agents.blog_agent import BlogAgent
 
+
 class AgentRegistry:
     def __init__(self, llm, rag):
         self.llm = llm
@@ -22,13 +22,10 @@ class AgentRegistry:
         self._registry = {
             "merge": MergeAgent,
             "patrol_tags": TagPatrolAgent,
-            "tag_patrol": TagPatrolAgent,
             "insight": InsightAgent,
             "patrol": LinterAgent,
             "linter": LinterAgent,
             "lens": CounterAgent,
-            "count": CounterAgent,
-            "counter": CounterAgent,
             "plan": PlannerAgent,
             "do": ExecutorAgent,
             "profiles": ProfilesAgent,

@@ -10,18 +10,16 @@ Three layers of testing:
 3. **Snapshot tests** for the 8-file corpus. Snapshots live in
    `tests/snapshots/`. To regenerate: `pytest --update-snapshots`.
 """
+
 import json
-import sys
 from hashlib import sha256
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import pytest
 
 from services.md_block_scanner import BlockKind, scan
 from services.thoughtful_splitter import (
-    Boundary,
     BoundaryKind,
     Chunk,
     ThoughtfulSplitter,
@@ -47,14 +45,21 @@ def _small_splitter(**overrides) -> ThoughtfulSplitter:
 
 # ─── BoundaryKind / Chunk dataclass ───────────────────────────────────
 
+
 class TestBoundaryKind:
     def test_weights_monotonic(self):
         ranked = [
-            BoundaryKind.H1, BoundaryKind.H2, BoundaryKind.HR,
-            BoundaryKind.H3, BoundaryKind.LLM_TOPIC_SHIFT,
-            BoundaryKind.H4_PLUS, BoundaryKind.LIST_END,
-            BoundaryKind.PARAGRAPH, BoundaryKind.LIST_ITEM_END,
-            BoundaryKind.BLOCKQUOTE_END, BoundaryKind.SENTENCE,
+            BoundaryKind.H1,
+            BoundaryKind.H2,
+            BoundaryKind.HR,
+            BoundaryKind.H3,
+            BoundaryKind.LLM_TOPIC_SHIFT,
+            BoundaryKind.H4_PLUS,
+            BoundaryKind.LIST_END,
+            BoundaryKind.PARAGRAPH,
+            BoundaryKind.LIST_ITEM_END,
+            BoundaryKind.BLOCKQUOTE_END,
+            BoundaryKind.SENTENCE,
             BoundaryKind.FORCED,
         ]
         weights = [k.weight for k in ranked]
@@ -87,7 +92,9 @@ class TestChunkToDict:
 
     def test_to_dict_is_json_serializable(self):
         c = Chunk(
-            text="x", start=0, end=1,
+            text="x",
+            start=0,
+            end=1,
             section_path=("a",),
             boundary_type=BoundaryKind.FORCED,
             atomic_kinds=(BlockKind.LIST_ITEM,),
@@ -97,6 +104,7 @@ class TestChunkToDict:
 
 
 # ─── Splitter init ────────────────────────────────────────────────────
+
 
 class TestInit:
     def test_default_uses_settings(self):
@@ -114,6 +122,7 @@ class TestInit:
 
 # ─── Empty / short inputs ─────────────────────────────────────────────
 
+
 class TestSpecialInputs:
     def test_empty_returns_empty(self):
         assert _small_splitter().split_thoughtful("") == []
@@ -129,6 +138,7 @@ class TestSpecialInputs:
 
 
 # ─── Phase 2: boundary computation ────────────────────────────────────
+
 
 class TestBoundaries:
     def test_h1_boundary_at_heading_start(self):
@@ -188,14 +198,19 @@ class TestBoundaries:
 
 # ─── Phase 3: atomic-intersect guard (Codex P1 + Gemini Issue B) ──────
 
+
 class TestAtomicGuard:
     def test_cuts_inside_atomic_detection(self):
         """`_cuts_inside_atomic` returns True only if position is strictly inside."""
         from services.md_block_scanner import Block
+
         s = _small_splitter()
         atomic = Block(
-            kind=BlockKind.CODE_FENCE, text="```\nx\n```",
-            start=10, end=20, atomic=True,
+            kind=BlockKind.CODE_FENCE,
+            text="```\nx\n```",
+            start=10,
+            end=20,
+            atomic=True,
         )
         atomic_starts = [atomic.start]
         # Strictly inside:
@@ -221,6 +236,7 @@ class TestAtomicGuard:
     def test_cross_boundary_atomic_emits_oversize_warning(self, caplog):
         """If an atomic block is larger than max_size, we MUST emit it whole and warn."""
         import logging
+
         big_code = "```\n" + "x" * 5000 + "\n```\n"
         text = "Short intro.\n\n" + big_code + "Short outro.\n"
         splitter = _small_splitter(target_size=800, max_size=1500, min_size=200)
@@ -233,6 +249,7 @@ class TestAtomicGuard:
 
 
 # ─── Phase 3: reverse sentence search (Gemini Issue C) ────────────────
+
 
 class TestReverseSentenceSearch:
     def test_latest_sentence_end_picked_not_first(self):
@@ -252,13 +269,16 @@ class TestReverseSentenceSearch:
 
 # ─── Gemini Issue A: long outline doesn't become single chunk ─────────
 
+
 class TestLongOutline:
     def test_50_item_outline_splits_into_multiple_chunks(self):
         items = "\n".join(f"- Item {i} with some descriptive content here" for i in range(50))
         text = f"# An outline\n\n{items}\n"
         s = _small_splitter(target_size=600, max_size=1200, min_size=150, snap_window=300)
         chunks = s.split_thoughtful(text, use_llm=False)
-        assert len(chunks) >= 3, f"expected outline to split into multiple chunks, got {len(chunks)}"
+        assert len(chunks) >= 3, (
+            f"expected outline to split into multiple chunks, got {len(chunks)}"
+        )
         # Some of the chunks should have ended at a LIST_ITEM_END boundary.
         bts = {c.boundary_type for c in chunks}
         assert BoundaryKind.LIST_ITEM_END in bts, f"expected LIST_ITEM_END boundary, got {bts}"
@@ -266,18 +286,27 @@ class TestLongOutline:
 
 # ─── Phase 3b: structural overlap ─────────────────────────────────────
 
+
 class TestStructuralOverlap:
     def test_overlap_zero_no_ctx_block(self):
         text = "A.\n\n" + ". ".join(f"Sentence {i}" for i in range(100)) + ".\n"
-        s = _small_splitter(target_size=400, max_size=700, min_size=100, snap_window=150, overlap_chars=0)
+        s = _small_splitter(
+            target_size=400, max_size=700, min_size=100, snap_window=150, overlap_chars=0
+        )
         chunks = s.split_thoughtful(text, use_llm=False)
         for c in chunks:
             assert "<!-- ctx:" not in c.text
             assert c.overlap_chars == 0
 
     def test_overlap_default_inserts_ctx_block_in_later_chunks(self):
-        text = "A.\n\n" + ". ".join(f"Sentence {i} with enough text to be meaningful" for i in range(50)) + ".\n"
-        s = _small_splitter(target_size=500, max_size=900, min_size=150, snap_window=200, overlap_chars=200)
+        text = (
+            "A.\n\n"
+            + ". ".join(f"Sentence {i} with enough text to be meaningful" for i in range(50))
+            + ".\n"
+        )
+        s = _small_splitter(
+            target_size=500, max_size=900, min_size=150, snap_window=200, overlap_chars=200
+        )
         chunks = s.split_thoughtful(text, use_llm=False)
         assert len(chunks) >= 2
         # First chunk: no overlap.
@@ -292,7 +321,9 @@ class TestStructuralOverlap:
 
     def test_emit_summary_disables_overlap(self):
         text = ". ".join(f"Sentence {i}" for i in range(50)) + "."
-        s = _small_splitter(target_size=300, max_size=500, min_size=100, snap_window=150, overlap_chars=200)
+        s = _small_splitter(
+            target_size=300, max_size=500, min_size=100, snap_window=150, overlap_chars=200
+        )
         chunks = s.split_thoughtful(text, use_llm=False, emit_summary=True)
         for c in chunks:
             assert "<!-- ctx:" not in c.text
@@ -300,6 +331,7 @@ class TestStructuralOverlap:
 
 
 # ─── Codex P1: API back-compat ────────────────────────────────────────
+
 
 class TestApiBackCompat:
     def test_split_text_returns_list_of_strings(self):
@@ -323,6 +355,7 @@ class TestApiBackCompat:
 
 # ─── Corpus snapshot regression ───────────────────────────────────────
 
+
 @pytest.fixture(autouse=True, scope="module")
 def _ensure_snapshot_dir():
     SNAPSHOT_DIR.mkdir(exist_ok=True)
@@ -332,15 +365,17 @@ def _serialize_for_snapshot(text: str, chunks: list[Chunk]) -> dict:
     """Stable, text-light snapshot — excludes chunk body to keep diff readable."""
     chunk_dicts = []
     for i, c in enumerate(chunks):
-        chunk_dicts.append({
-            "index": i,
-            "char_range": [c.start, c.end],
-            "size": c.end - c.start,
-            "section_path": list(c.section_path),
-            "boundary_type": c.boundary_type.label,
-            "atomic_kinds": [k.value for k in c.atomic_kinds],
-            "overlap_chars": c.overlap_chars,
-        })
+        chunk_dicts.append(
+            {
+                "index": i,
+                "char_range": [c.start, c.end],
+                "size": c.end - c.start,
+                "section_path": list(c.section_path),
+                "boundary_type": c.boundary_type.label,
+                "atomic_kinds": [k.value for k in c.atomic_kinds],
+                "overlap_chars": c.overlap_chars,
+            }
+        )
     sizes = [c.end - c.start for c in chunks]
     bt_counts: dict[str, int] = {}
     for c in chunks:
@@ -377,7 +412,11 @@ def test_corpus_snapshot_stable(corpus_file, update_snapshots):
     # Snapshots are taken with default-ish settings, use_llm=False (the LLM
     # path is non-deterministic and validated separately via §7.2).
     splitter = ThoughtfulSplitter(
-        target_size=1500, max_size=2500, min_size=400, snap_window=600, overlap_chars=200,
+        target_size=1500,
+        max_size=2500,
+        min_size=400,
+        snap_window=600,
+        overlap_chars=200,
     )
     chunks = splitter.split_thoughtful(text, use_llm=False)
     actual = _serialize_for_snapshot(text, chunks)
@@ -395,12 +434,12 @@ def test_corpus_snapshot_stable(corpus_file, update_snapshots):
 
     expected = json.loads(snapshot_path.read_text(encoding="utf-8"))
     assert actual == expected, (
-        f"Snapshot mismatch for {corpus_file}.\n"
-        f"If intentional, rerun with --update-snapshots."
+        f"Snapshot mismatch for {corpus_file}.\nIf intentional, rerun with --update-snapshots."
     )
 
 
 # ─── Coverage invariant (each chunk's text == source[start:end] minus overlap) ─
+
 
 @pytest.mark.parametrize(
     "corpus_file",
@@ -409,7 +448,11 @@ def test_corpus_snapshot_stable(corpus_file, update_snapshots):
 def test_chunk_start_end_corresponds_to_source(corpus_file):
     text = (CORPUS_DIR / corpus_file).read_text(encoding="utf-8")
     splitter = ThoughtfulSplitter(
-        target_size=1500, max_size=2500, min_size=400, snap_window=600, overlap_chars=200,
+        target_size=1500,
+        max_size=2500,
+        min_size=400,
+        snap_window=600,
+        overlap_chars=200,
     )
     chunks = splitter.split_thoughtful(text, use_llm=False)
     # Chunks (excluding overlap prefix) cover the source contiguously.
@@ -424,13 +467,16 @@ def test_chunk_start_end_corresponds_to_source(corpus_file):
             ctx_close = "<!-- /ctx -->\n\n"
             idx = body.index(ctx_close) + len(ctx_close)
             body = body[idx:]
-        assert body == text[c.start:c.end], (
+        assert body == text[c.start : c.end], (
             f"Chunk body doesn't match source[{c.start}:{c.end}] in {corpus_file}"
         )
-    assert cursor == len(text), f"chunks don't cover full text of {corpus_file}: stopped at {cursor}/{len(text)}"
+    assert cursor == len(text), (
+        f"chunks don't cover full text of {corpus_file}: stopped at {cursor}/{len(text)}"
+    )
 
 
 # ─── P3: Metadata field correctness ───────────────────────────────────
+
 
 class TestSectionPath:
     """section_path accuracy across heading hierarchies."""
@@ -454,12 +500,7 @@ class TestSectionPath:
         pytest.fail("expected H3 boundary")
 
     def test_h2_after_h3_truncates(self):
-        text = (
-            "# Top\n\npara\n\n"
-            "## Sub A\n\npara\n\n"
-            "### Sub A1\n\npara\n\n"
-            "## Sub B\n\npara\n"
-        )
+        text = "# Top\n\npara\n\n## Sub A\n\npara\n\n### Sub A1\n\npara\n\n## Sub B\n\npara\n"
         boundaries = _small_splitter()._build_boundaries(scan(text))
         # The boundary BEFORE `## Sub B` should be section_path = ("Top", "Sub B"),
         # NOT carrying "Sub A1" forward.
@@ -472,12 +513,12 @@ class TestSectionPath:
         # Force a chunk break at a heading.
         text = (
             "# Chapter\n\n"
-            "## Intro\n\n"
-            + ("Some content. " * 200) + "\n\n"
-            "## Methods\n\n"
-            + ("More content. " * 200) + "\n"
+            "## Intro\n\n" + ("Some content. " * 200) + "\n\n"
+            "## Methods\n\n" + ("More content. " * 200) + "\n"
         )
-        s = _small_splitter(target_size=800, max_size=1500, min_size=200, snap_window=300, overlap_chars=0)
+        s = _small_splitter(
+            target_size=800, max_size=1500, min_size=200, snap_window=300, overlap_chars=0
+        )
         chunks = s.split_thoughtful(text, use_llm=False)
         assert len(chunks) >= 2
         paths = {tuple(c.section_path) for c in chunks}
@@ -490,12 +531,12 @@ class TestAtomicKinds:
 
     def test_chunk_with_code_fence_records_it(self):
         text = (
-            "# Doc\n\n"
-            + ("Some prose. " * 100) + "\n\n"
-            "```python\nx = 1\ny = 2\n```\n\n"
-            + ("More prose. " * 100) + "\n"
+            "# Doc\n\n" + ("Some prose. " * 100) + "\n\n"
+            "```python\nx = 1\ny = 2\n```\n\n" + ("More prose. " * 100) + "\n"
         )
-        s = _small_splitter(target_size=400, max_size=2000, min_size=100, snap_window=200, overlap_chars=0)
+        s = _small_splitter(
+            target_size=400, max_size=2000, min_size=100, snap_window=200, overlap_chars=0
+        )
         chunks = s.split_thoughtful(text, use_llm=False)
         # Some chunk must record CODE_FENCE in atomic_kinds.
         all_kinds: set = set()

@@ -1,12 +1,9 @@
 """Batch-3 D2: LingLens quote verification — pure-helper tests, no LLM."""
-import os
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+import os
+
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
-import pytest
 
 from agents.counter_agent import CounterAgent
 
@@ -38,9 +35,11 @@ class TestVerifyQuoteGrounding:
 
     def test_below_ratio_is_revise(self, monkeypatch):
         monkeypatch.setattr("core.config.LENS_QUOTE_MIN_GROUNDED_RATIO", 0.8)
-        matrix = _matrix({
-            ("A", "c"): [_inst(1, "found", True), _inst(2, "missing", False)],
-        })
+        matrix = _matrix(
+            {
+                ("A", "c"): [_inst(1, "found", True), _inst(2, "missing", False)],
+            }
+        )
         v = CounterAgent._verify_quote_grounding(matrix)
         assert (v["total"], v["grounded"]) == (2, 1)
         assert v["verdict"] == "revise"
@@ -62,11 +61,13 @@ class TestVerifyQuoteGrounding:
 
     def test_counts_span_articles_and_concepts(self, monkeypatch):
         monkeypatch.setattr("core.config.LENS_QUOTE_MIN_GROUNDED_RATIO", 0.5)
-        matrix = _matrix({
-            ("A", "c1"): [_inst(1, "x", True)],
-            ("A", "c2"): [_inst(1, "y", False)],
-            ("B", "c1"): [_inst(1, "z", True)],
-        })
+        matrix = _matrix(
+            {
+                ("A", "c1"): [_inst(1, "x", True)],
+                ("A", "c2"): [_inst(1, "y", False)],
+                ("B", "c1"): [_inst(1, "z", True)],
+            }
+        )
         v = CounterAgent._verify_quote_grounding(matrix)
         assert (v["total"], v["grounded"]) == (3, 2)
         assert v["verdict"] == "keep"
@@ -113,10 +114,12 @@ class TestJsonCallsOptOutOfTemplateAxis:
     def test_extract_from_chunk_retries_once_on_no_array(self, monkeypatch):
         # Reasoning-channel miss (no JSON) on attempt 1, recovers on attempt 2.
         monkeypatch.setattr(CounterAgent, "_load_prompt", lambda self, name: "")
-        llm = self._CapturingLLM(replies=[
-            "thinking out loud, no array here",
-            '[{"quote": "found", "confidence": "high"}]',
-        ])
+        llm = self._CapturingLLM(
+            replies=[
+                "thinking out loud, no array here",
+                '[{"quote": "found", "confidence": "high"}]',
+            ]
+        )
         out = self._agent(llm)._extract_from_chunk("c", "chunk", 1, 1, "medium")
         assert len(llm.calls) == 2
         assert len(out) == 1 and out[0]["quote"] == "found"
@@ -131,10 +134,12 @@ class TestJsonCallsOptOutOfTemplateAxis:
 
     def test_tally_retries_once_then_recovers(self):
         # >3 instances → LLM tally path; first reply has no object, second works.
-        llm = self._CapturingLLM(replies=[
-            "no json object here",
-            '{"total_count": 2, "instances": [{"id": 1, "quote": "a"}, {"id": 2, "quote": "b"}]}',
-        ])
+        llm = self._CapturingLLM(
+            replies=[
+                "no json object here",
+                '{"total_count": 2, "instances": [{"id": 1, "quote": "a"}, {"id": 2, "quote": "b"}]}',
+            ]
+        )
         instances = [{"quote": f"q{i}"} for i in range(4)]
         tally = self._agent(llm)._tally_instances("c", instances, 1)
         assert len(llm.calls) == 2
@@ -179,7 +184,13 @@ class TestFormatQuoteVerification:
         ungrounded = [
             {"article": "A", "concept": "c", "id": i, "quote": f"q{i}"} for i in range(15)
         ]
-        v = {"total": 15, "grounded": 0, "ratio": 0.0, "verdict": "revise", "ungrounded": ungrounded}
+        v = {
+            "total": 15,
+            "grounded": 0,
+            "ratio": 0.0,
+            "verdict": "revise",
+            "ungrounded": ungrounded,
+        }
         section = CounterAgent._format_quote_verification(v)
         assert "q9" in section
         assert "q10" not in section

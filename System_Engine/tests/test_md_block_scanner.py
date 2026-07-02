@@ -4,16 +4,14 @@ We test the scanner's structural correctness on synthetic minimal inputs
 (one behaviour per test) and then run it against the corpus to verify the
 coverage invariant.
 """
-import sys
+
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import pytest
 
 from services.md_block_scanner import (
-    Block,
     BlockKind,
     covers_all,
     leaf_blocks,
@@ -30,6 +28,7 @@ def _kinds(blocks):
 
 
 # ── Empty / trivial input ──────────────────────────────────────────
+
 
 class TestEmptyAndTrivial:
     def test_empty_returns_empty(self):
@@ -53,6 +52,7 @@ class TestEmptyAndTrivial:
 
 
 # ── Frontmatter ────────────────────────────────────────────────────
+
 
 class TestFrontmatter:
     def test_basic_frontmatter(self):
@@ -83,6 +83,7 @@ class TestFrontmatter:
 
 # ── ATX heading ────────────────────────────────────────────────────
 
+
 class TestAtxHeading:
     def test_h1(self):
         blocks = scan("# Title\n")
@@ -109,6 +110,7 @@ class TestAtxHeading:
 
 # ── Setext heading ─────────────────────────────────────────────────
 
+
 class TestSetextHeading:
     def test_setext_h1(self):
         text = "Title here\n===\n"
@@ -133,6 +135,7 @@ class TestSetextHeading:
 
 # ── HR ─────────────────────────────────────────────────────────────
 
+
 class TestHr:
     def test_dash_hr(self):
         blocks = scan("para.\n\n---\n\nmore.\n")
@@ -148,6 +151,7 @@ class TestHr:
 
 
 # ── Code fence ─────────────────────────────────────────────────────
+
 
 class TestCodeFence:
     def test_basic_fence(self):
@@ -181,6 +185,7 @@ class TestCodeFence:
 
 # ── Math block ─────────────────────────────────────────────────────
 
+
 class TestMathBlock:
     def test_basic_math(self):
         text = "$$\nx = y + z\n$$\n"
@@ -190,6 +195,7 @@ class TestMathBlock:
 
 
 # ── Blockquote vs callout ─────────────────────────────────────────
+
 
 class TestBlockquoteVsCallout:
     def test_plain_blockquote(self):
@@ -212,6 +218,7 @@ class TestBlockquoteVsCallout:
 
 # ── Tables ─────────────────────────────────────────────────────────
 
+
 class TestTable:
     def test_basic_table(self):
         text = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n"
@@ -232,6 +239,7 @@ class TestTable:
 
 
 # ── Lists ──────────────────────────────────────────────────────────
+
 
 class TestList:
     def test_simple_bullet_list(self):
@@ -255,14 +263,7 @@ class TestList:
         """Sub-items belong to their parent top-level item, not as separate
         LIST_ITEMs. This is the Gemini Issue A fix — top-level items are
         the splittable unit."""
-        text = (
-            "- Top one\n"
-            "    - Sub 1a\n"
-            "    - Sub 1b\n"
-            "- Top two\n"
-            "    - Sub 2a\n"
-            "- Top three\n"
-        )
+        text = "- Top one\n    - Sub 1a\n    - Sub 1b\n- Top two\n    - Sub 2a\n- Top three\n"
         items = [b for b in scan(text) if b.kind == BlockKind.LIST_ITEM]
         assert len(items) == 3
         # First item must contain its sub-items.
@@ -290,7 +291,10 @@ class TestList:
 
 # ── Block.start/end coverage on corpus ─────────────────────────────
 
-@pytest.mark.parametrize("corpus_file", sorted(p.name for p in CORPUS_DIR.glob("*.md") if p.name != "README.md"))
+
+@pytest.mark.parametrize(
+    "corpus_file", sorted(p.name for p in CORPUS_DIR.glob("*.md") if p.name != "README.md")
+)
 class TestCorpusCoverage:
     """For every corpus file, scanner output must cover the source exactly."""
 
@@ -319,7 +323,11 @@ class TestCorpusCoverage:
             # Find subsequent contiguous LIST_ITEMs
             j = i + 1
             items_total_end = b.start
-            while j < len(blocks) and blocks[j].kind == BlockKind.LIST_ITEM and blocks[j].parent_kind == BlockKind.LIST:
+            while (
+                j < len(blocks)
+                and blocks[j].kind == BlockKind.LIST_ITEM
+                and blocks[j].parent_kind == BlockKind.LIST
+            ):
                 assert b.start <= blocks[j].start
                 assert blocks[j].end <= b.end
                 items_total_end = blocks[j].end
@@ -334,12 +342,13 @@ class TestCorpusCoverage:
         """Every atomic block's text must equal `text[start:end]` — no off-by-one."""
         text = (CORPUS_DIR / corpus_file).read_text(encoding="utf-8")
         for b in scan(text):
-            assert b.text == text[b.start:b.end], (
+            assert b.text == text[b.start : b.end], (
                 f"text/offset mismatch in {corpus_file} for {b.kind.value} at {b.start}-{b.end}"
             )
 
 
 # ── Perf budget ───────────────────────────────────────────────────
+
 
 def test_corpus_scan_under_50ms_each():
     """P1 acceptance: scanner runs each corpus file in < 50ms."""
@@ -357,6 +366,7 @@ def test_corpus_scan_under_50ms_each():
 
 
 # ── Specific corpus expectations ──────────────────────────────────
+
 
 class TestCorpusSpecifics:
     """A few hand-curated assertions to catch regression on specific files."""

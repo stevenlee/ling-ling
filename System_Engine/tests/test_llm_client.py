@@ -4,13 +4,10 @@ We don't mock the actual provider here — we only exercise the pure helpers
 (YAML parsing, file caching, digest formatting, fallbacks) that run alongside
 the LLM call but don't require one.
 """
+
 import json
 import os
-import sys
-import tempfile
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 # Set provider before importing so __init__ doesn't trip on unknown provider.
 os.environ.setdefault("LLM_PROVIDER", "vllm")
@@ -23,6 +20,7 @@ from services.trace_store import TraceStore
 
 
 # ── MtimeCache ──────────────────────────────────────────────────────
+
 
 class TestMtimeCache:
     def test_caches_and_returns_content(self, tmp_path):
@@ -63,6 +61,7 @@ class TestMtimeCache:
 
 # ── _hybrid_parse ───────────────────────────────────────────────────
 
+
 class TestHybridParse:
     def test_yaml_frontmatter(self):
         r = LLMClient._hybrid_parse(
@@ -74,9 +73,7 @@ class TestHybridParse:
         assert r["content"] == "Body content"
 
     def test_yaml_fenced(self):
-        r = LLMClient._hybrid_parse(
-            "```yaml\ntitle: Wrapped\ntags: [x]\n```\n\nBody"
-        )
+        r = LLMClient._hybrid_parse("```yaml\ntitle: Wrapped\ntags: [x]\n```\n\nBody")
         assert r["title"] == "Wrapped"
         assert r["tags"] == ["x"]
 
@@ -95,9 +92,7 @@ class TestHybridParse:
         assert r["content"] == ""
 
     def test_yaml_with_pending_concepts(self):
-        r = LLMClient._hybrid_parse(
-            "---\ntitle: T\npending_concepts: [unfinished]\n---\nBody"
-        )
+        r = LLMClient._hybrid_parse("---\ntitle: T\npending_concepts: [unfinished]\n---\nBody")
         assert r.get("pending_concepts") == ["unfinished"]
 
     def test_outer_fence_wrap(self):
@@ -116,6 +111,7 @@ class TestHybridParse:
 
 
 # ── _strip_accidental_frontmatter ────────────────────────────────────
+
 
 class TestStripAccidentalFrontmatter:
     def test_strips_markdown_fence(self):
@@ -139,6 +135,7 @@ class TestStripAccidentalFrontmatter:
 
 
 # ── Part digest helpers ─────────────────────────────────────────────
+
 
 class TestPartDigest:
     def test_apply_defaults_fills_missing_keys(self):
@@ -186,6 +183,7 @@ class TestPartDigest:
 
 # ── Language hint ───────────────────────────────────────────────────
 
+
 class TestLanguageHint:
     def test_traditional_chinese_hint_is_explicit(self, monkeypatch):
         import services.llm_client as llm_mod
@@ -215,6 +213,7 @@ class TestLanguageHint:
 
     def test_localized_suffix_maps_language(self, monkeypatch):
         import services.llm_client as llm_mod
+
         client = LLMClient.__new__(LLMClient)
         monkeypatch.setattr(llm_mod.settings, "OUTPUT_LANGUAGE", "Traditional Chinese")
         assert client._localized_suffix() == ".zh"
@@ -227,6 +226,7 @@ class TestLanguageHint:
         # Regression: labels used to fall back to English because the map was
         # keyed on _get_lang_hint()'s long string. Now keyed on the suffix.
         import services.llm_client as llm_mod
+
         client = LLMClient.__new__(LLMClient)
         monkeypatch.setattr(llm_mod.settings, "OUTPUT_LANGUAGE", "Traditional Chinese")
         labels = llm_mod._LABELS_BY_SUFFIX.get(client._localized_suffix(), llm_mod._DEFAULT_LABELS)
@@ -234,6 +234,7 @@ class TestLanguageHint:
 
 
 # ── answer_query prompt assembly ────────────────────────────────────
+
 
 class TestAnswerQuery:
     def test_custom_instruction_includes_provided_context(self):
@@ -306,6 +307,7 @@ class TestAnswerQuery:
 
 
 # ── LLM tracing ─────────────────────────────────────────────────────
+
 
 class _FakeUsage:
     prompt_tokens = 3
@@ -397,8 +399,10 @@ class TestAssessFalsifiability:
         assert res["falsifier"] == "find X"
 
     def test_bilingual_falsifier_combined(self, monkeypatch):
-        response = ('{"score": 1.0, "falsifier": "A documented counter-case.", '
-                    '"falsifier_zh": "一個有紀錄的反例。"}')
+        response = (
+            '{"score": 1.0, "falsifier": "A documented counter-case.", '
+            '"falsifier_zh": "一個有紀錄的反例。"}'
+        )
         res = self._client(monkeypatch, response).assess_falsifiability("claim")
         assert res["falsifier"] == "A documented counter-case.（一個有紀錄的反例。）"
 
@@ -408,12 +412,12 @@ class TestAssessFalsifiability:
         assert res["falsifier"] == "English only."
 
     def test_handles_missing_keys(self, monkeypatch):
-        res = self._client(monkeypatch, '{}').assess_falsifiability("claim")
+        res = self._client(monkeypatch, "{}").assess_falsifiability("claim")
         assert res["score"] is None
         assert res["falsifier"] == ""
 
     def test_handles_invalid_json(self, monkeypatch):
-        res = self._client(monkeypatch, 'garbage').assess_falsifiability("claim")
+        res = self._client(monkeypatch, "garbage").assess_falsifiability("claim")
         assert res["score"] is None
         assert res["falsifier"] == ""
 
@@ -505,11 +509,15 @@ class TestExtractClaimsAppliesWhen:
         return client
 
     def test_parses_applies_when(self, monkeypatch):
-        response = json.dumps([{
-            "claim": "This claim is definitely long enough to pass.",
-            "summary": "s",
-            "applies_when": "condition A"
-        }])
+        response = json.dumps(
+            [
+                {
+                    "claim": "This claim is definitely long enough to pass.",
+                    "summary": "s",
+                    "applies_when": "condition A",
+                }
+            ]
+        )
         res = self._client(monkeypatch, response).extract_claims("text")
         assert res[0]["applies_when"] == "condition A"
 
@@ -519,6 +527,7 @@ if __name__ == "__main__":
 
 
 # ── patent table: language + three-tier robustness ──────────────────
+
 
 class TestPatentTable:
     _PATENTS = [
@@ -535,7 +544,7 @@ class TestPatentTable:
         rows = [
             {"idx": 1, "relevance": "高", "subject": "主旨", "summary": "摘要"},
             {"idx": 9, "relevance": "低", "subject": "x", "summary": "y"},  # out of range
-            {"idx": "nope"},                                               # bad idx
+            {"idx": "nope"},  # bad idx
         ]
         lines = c._patent_rows_to_lines(rows, self._PATENTS)
         assert len(lines) == 1
@@ -545,36 +554,47 @@ class TestPatentTable:
     def test_tier1_ranked_translated_table(self, monkeypatch):
         c = self._client()
         monkeypatch.setattr(c, "_get_lang_hint", lambda: "Japanese (日本語)")
-        monkeypatch.setattr(c, "_safe_json_rows",
-                            lambda prompt: [{"idx": 0, "relevance": "高", "subject": "アルファ", "summary": "要約"}])
+        monkeypatch.setattr(
+            c,
+            "_safe_json_rows",
+            lambda prompt: [
+                {"idx": 0, "relevance": "高", "subject": "アルファ", "summary": "要約"}
+            ],
+        )
         out = c.generate_patent_table(self._PATENTS, topic="t")
         assert "US111" in out and "アルファ" in out
-        assert "未排序" not in out           # ranked, not a fallback
+        assert "未排序" not in out  # ranked, not a fallback
 
     def test_tier2_translate_only_when_ranking_fails(self, monkeypatch):
         c = self._client()
         monkeypatch.setattr(c, "_get_lang_hint", lambda: "Japanese")
         calls = {"n": 0}
+
         def rows(prompt):
             calls["n"] += 1
             # first call (rank) fails, second call (translate-only) succeeds
-            return [] if calls["n"] == 1 else [
-                {"idx": 0, "subject": "アルファ", "summary": "要約A"},
-                {"idx": 1, "subject": "ベータ", "summary": "要約B"},
-            ]
+            return (
+                []
+                if calls["n"] == 1
+                else [
+                    {"idx": 0, "subject": "アルファ", "summary": "要約A"},
+                    {"idx": 1, "subject": "ベータ", "summary": "要約B"},
+                ]
+            )
+
         monkeypatch.setattr(c, "_safe_json_rows", rows)
         out = c.generate_patent_table(self._PATENTS, topic="t")
-        assert "已翻譯但未排序" in out       # tier-2 note
+        assert "已翻譯但未排序" in out  # tier-2 note
         assert "アルファ" in out and "ベータ" in out
         assert "找不到相關的專利資料" not in out
 
     def test_tier3_raw_source_when_all_llm_fails(self, monkeypatch):
         c = self._client()
         monkeypatch.setattr(c, "_get_lang_hint", lambda: "Japanese")
-        monkeypatch.setattr(c, "_safe_json_rows", lambda prompt: [])   # both tiers fail
+        monkeypatch.setattr(c, "_safe_json_rows", lambda prompt: [])  # both tiers fail
         out = c.generate_patent_table(self._PATENTS, topic="t")
-        assert "US111" in out and "US222" in out    # patents preserved
-        assert "原文" in out                          # labelled raw/source
+        assert "US111" in out and "US222" in out  # patents preserved
+        assert "原文" in out  # labelled raw/source
         assert "找不到相關的專利資料" not in out
 
     def test_genuine_empty_is_honest(self):
@@ -586,9 +606,12 @@ class TestPatentTable:
 
 # ── _parse_json_array: salvage on truncation / malformed objects ─────
 
+
 class TestParseJsonArraySalvage:
     def test_clean_array(self):
-        rows = LLMClient._parse_json_array('[{"idx":0,"relevance":"高"},{"idx":1,"relevance":"低"}]')
+        rows = LLMClient._parse_json_array(
+            '[{"idx":0,"relevance":"高"},{"idx":1,"relevance":"低"}]'
+        )
         assert len(rows) == 2 and rows[0]["idx"] == 0
 
     def test_json_fenced(self):
@@ -598,16 +621,17 @@ class TestParseJsonArraySalvage:
     def test_truncated_tail_recovers_complete_objects(self):
         # Response cut off at the output-token limit: no closing ]; last object
         # is incomplete. Old code returned []; salvage keeps the complete ones.
-        truncated = ('[\n{"idx":0,"relevance":"高","zh":"a"},\n'
-                     '{"idx":1,"relevance":"中","zh":"b"},\n'
-                     '{"idx":2,"relevance":"低","zh":"c"},\n'
-                     '{"idx":3,"relevance":"高","zh":"trunc')  # cut mid-object
+        truncated = (
+            '[\n{"idx":0,"relevance":"高","zh":"a"},\n'
+            '{"idx":1,"relevance":"中","zh":"b"},\n'
+            '{"idx":2,"relevance":"低","zh":"c"},\n'
+            '{"idx":3,"relevance":"高","zh":"trunc'
+        )  # cut mid-object
         rows = LLMClient._parse_json_array(truncated)
-        assert [r["idx"] for r in rows] == [0, 1, 2]   # 3 complete survive, cut one dropped
+        assert [r["idx"] for r in rows] == [0, 1, 2]  # 3 complete survive, cut one dropped
 
     def test_single_malformed_object_doesnt_zero_the_rest(self):
-        bad_middle = ('[{"idx":0,"relevance":"高"}, {oops not json}, '
-                      '{"idx":2,"relevance":"低"}]')
+        bad_middle = '[{"idx":0,"relevance":"高"}, {oops not json}, {"idx":2,"relevance":"低"}]'
         rows = LLMClient._parse_json_array(bad_middle)
         assert [r["idx"] for r in rows] == [0, 2]
 

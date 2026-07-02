@@ -1,11 +1,9 @@
 """Tests for agents.executor_agent — Phase 5C controlled execution."""
+
 import json
 import os
-import sys
 from pathlib import Path
-from textwrap import dedent
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import pytest
@@ -83,19 +81,27 @@ class _FakeLLM:
         self.critique_calls = []
 
     def generate_synthesis(self, *, title, part_digests, final_concepts, template=None, **kwargs):
-        self.synthesize_calls.append({
-            "title": title, "part_digests": part_digests,
-            "final_concepts": final_concepts, "template": template,
-            **kwargs,
-        })
+        self.synthesize_calls.append(
+            {
+                "title": title,
+                "part_digests": part_digests,
+                "final_concepts": final_concepts,
+                "template": template,
+                **kwargs,
+            }
+        )
         if self.synthesize_raises:
             raise self.synthesize_raises
         return self.synthesize_returns
 
     def critique_text(self, *, candidate, sources, focus=None):
-        self.critique_calls.append({
-            "candidate": candidate, "sources": sources, "focus": focus,
-        })
+        self.critique_calls.append(
+            {
+                "candidate": candidate,
+                "sources": sources,
+                "focus": focus,
+            }
+        )
         return self.critique_returns
 
     def current_trace_ids(self):
@@ -110,10 +116,14 @@ def _executor(llm) -> ExecutorAgent:
     agent._writes = []
 
     def fake_write_report(title, body, report_type, metadata=None):
-        agent._writes.append({
-            "title": title, "body": body,
-            "report_type": report_type, "metadata": metadata or {},
-        })
+        agent._writes.append(
+            {
+                "title": title,
+                "body": body,
+                "report_type": report_type,
+                "metadata": metadata or {},
+            }
+        )
         return (Path("/fake/report.md"), body)
 
     agent._write_report = fake_write_report  # type: ignore[assignment]
@@ -153,20 +163,19 @@ def _valid_plan(plan_id: str = "demo") -> dict:
 
 class TestParsePlanId:
     def test_extracts_plan_id_after_ling_do(self):
-        assert ExecutorAgent._parse_plan_id(
-            "@ling-do plan_abc_123", {}
-        ) == "plan_abc_123"
+        assert ExecutorAgent._parse_plan_id("@ling-do plan_abc_123", {}) == "plan_abc_123"
 
     def test_explicit_task_context_wins(self):
-        assert ExecutorAgent._parse_plan_id(
-            "@ling-do other_id",
-            {"plan_id": "from_context"},
-        ) == "from_context"
+        assert (
+            ExecutorAgent._parse_plan_id(
+                "@ling-do other_id",
+                {"plan_id": "from_context"},
+            )
+            == "from_context"
+        )
 
     def test_slash_do(self):
-        assert ExecutorAgent._parse_plan_id(
-            "Please /do plan_xy_z right now", {}
-        ) == "plan_xy_z"
+        assert ExecutorAgent._parse_plan_id("Please /do plan_xy_z right now", {}) == "plan_xy_z"
 
     def test_no_match_returns_none(self):
         assert ExecutorAgent._parse_plan_id("just some text", {}) is None
@@ -182,6 +191,7 @@ class TestParsePlanId:
 class TestLoadSidecar:
     def test_loads_json(self, tmp_path, monkeypatch):
         import agents.executor_agent as exec_mod
+
         monkeypatch.setattr(exec_mod, "PLANS_DIR", tmp_path)
         _write_plan(tmp_path, "p1", {"id": "p1", "steps": []})
         loaded = ExecutorAgent._load_sidecar("p1")
@@ -189,11 +199,13 @@ class TestLoadSidecar:
 
     def test_missing_returns_none(self, tmp_path, monkeypatch):
         import agents.executor_agent as exec_mod
+
         monkeypatch.setattr(exec_mod, "PLANS_DIR", tmp_path)
         assert ExecutorAgent._load_sidecar("nope") is None
 
     def test_invalid_json_returns_none(self, tmp_path, monkeypatch):
         import agents.executor_agent as exec_mod
+
         monkeypatch.setattr(exec_mod, "PLANS_DIR", tmp_path)
         (tmp_path / "bad.json").write_text("{not valid json}", encoding="utf-8")
         assert ExecutorAgent._load_sidecar("bad") is None
@@ -205,6 +217,7 @@ class TestLoadSidecar:
 class TestExecutorExecute:
     def _setup(self, tmp_path, monkeypatch):
         import agents.executor_agent as exec_mod
+
         monkeypatch.setattr(exec_mod, "PLANS_DIR", tmp_path)
         cm = _FakeCapMgr([_op("synthesize"), _op("critique")])
         llm = _FakeLLM(cm)
@@ -232,6 +245,7 @@ class TestExecutorExecute:
     def test_capability_drift_errors_out(self, tmp_path, monkeypatch):
         # Plan references "critique" but the live registry has only synthesize.
         import agents.executor_agent as exec_mod
+
         monkeypatch.setattr(exec_mod, "PLANS_DIR", tmp_path)
         cm = _FakeCapMgr([_op("synthesize")])  # critique missing!
         llm = _FakeLLM(cm)
@@ -244,13 +258,15 @@ class TestExecutorExecute:
     def test_happy_path_runs_pipeline_against_real_adapters(self, tmp_path, monkeypatch):
         agent, llm, _ = self._setup(tmp_path, monkeypatch)
         _write_plan(tmp_path, "happy", _valid_plan("happy"))
-        body = agent.execute({
-            "user_directive": "@ling-do happy",
-            "execute_context": {
-                "title": "Hamlet",
-                "part_digests": [{"part": 1, "thesis": "test"}],
-            },
-        })
+        body = agent.execute(
+            {
+                "user_directive": "@ling-do happy",
+                "execute_context": {
+                    "title": "Hamlet",
+                    "part_digests": [{"part": 1, "thesis": "test"}],
+                },
+            }
+        )
         assert "Execution: Synthesize then critique" in body
         # Both LLM-backed adapters were exercised
         assert len(llm.synthesize_calls) == 1
@@ -275,10 +291,12 @@ class TestExecutorExecute:
         # synth returns empty → critique's when:nonempty fires false
         llm.synthesize_returns = ""
         _write_plan(tmp_path, "skipper", _valid_plan("skipper"))
-        body = agent.execute({
-            "user_directive": "@ling-do skipper",
-            "execute_context": {"title": "X"},
-        })
+        agent.execute(
+            {
+                "user_directive": "@ling-do skipper",
+                "execute_context": {"title": "X"},
+            }
+        )
         write = agent._writes[0]
         steps = write["metadata"]["step_statuses"]
         assert steps["synth"] == "succeeded"
@@ -316,10 +334,12 @@ class TestExecutorExecute:
         agent, llm, _ = self._setup(tmp_path, monkeypatch)
         llm.synthesize_raises = RuntimeError("boom from synthesize")
         _write_plan(tmp_path, "boom", _valid_plan("boom"))
-        body = agent.execute({
-            "user_directive": "@ling-do boom",
-            "execute_context": {"title": "X"},
-        })
+        body = agent.execute(
+            {
+                "user_directive": "@ling-do boom",
+                "execute_context": {"title": "X"},
+            }
+        )
         assert "💧" in body
         write = agent._writes[0]
         assert write["metadata"]["execution_status"] == "failed"

@@ -1,10 +1,9 @@
 """Tests for services.pipeline_runner — pure logic, no LLM, no daemon."""
+
 import os
-import sys
 from pathlib import Path
 from textwrap import dedent
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import pytest
@@ -155,10 +154,13 @@ class TestEvalWhen:
         assert _eval_when({"var": "context.present", "op": "empty"}, self.ENV) is False
 
     def test_equals_and_not_equals(self):
-        assert _eval_when({"var": "context.present", "op": "equals",
-                            "value": "yes"}, self.ENV) is True
-        assert _eval_when({"var": "context.present", "op": "not_equals",
-                            "value": "no"}, self.ENV) is True
+        assert (
+            _eval_when({"var": "context.present", "op": "equals", "value": "yes"}, self.ENV) is True
+        )
+        assert (
+            _eval_when({"var": "context.present", "op": "not_equals", "value": "no"}, self.ENV)
+            is True
+        )
 
 
 # ── AdapterRegistry ─────────────────────────────────────────────────
@@ -190,13 +192,16 @@ class TestAdapterRegistry:
 
 class TestLoadPipeline:
     def test_minimal_valid(self, tmp_path):
-        f = _write_pipeline(tmp_path, """
+        f = _write_pipeline(
+            tmp_path,
+            """
             id: demo
             steps:
               - id: a
                 capability: synthesize
                 adapter: llm.synthesize
-        """)
+        """,
+        )
         spec = load_pipeline(f)
         assert spec.id == "demo"
         assert len(spec.steps) == 1
@@ -204,17 +209,22 @@ class TestLoadPipeline:
         assert spec.source_path == f
 
     def test_id_defaults_to_filename_stem(self, tmp_path):
-        f = _write_pipeline(tmp_path, """
+        f = _write_pipeline(
+            tmp_path,
+            """
             steps:
               - id: a
                 capability: synthesize
                 adapter: llm.synthesize
-        """)
+        """,
+        )
         spec = load_pipeline(f)
         assert spec.id == "p"  # filename stem
 
     def test_full_with_when_clause(self, tmp_path):
-        f = _write_pipeline(tmp_path, """
+        f = _write_pipeline(
+            tmp_path,
+            """
             id: full
             description: example
             steps:
@@ -229,7 +239,8 @@ class TestLoadPipeline:
                 when:
                   var: steps.a.output
                   op: nonempty
-        """)
+        """,
+        )
         spec = load_pipeline(f)
         assert spec.description == "example"
         assert spec.steps[1].when == {"var": "steps.a.output", "op": "nonempty"}
@@ -245,43 +256,57 @@ class TestLoadPipeline:
             load_pipeline(f)
 
     def test_empty_steps_raises(self, tmp_path):
-        f = _write_pipeline(tmp_path, """
+        f = _write_pipeline(
+            tmp_path,
+            """
             id: x
             steps: []
-        """)
+        """,
+        )
         with pytest.raises(PipelineError, match="non-empty list"):
             load_pipeline(f)
 
     def test_duplicate_step_id_raises(self, tmp_path):
-        f = _write_pipeline(tmp_path, """
+        f = _write_pipeline(
+            tmp_path,
+            """
             id: x
             steps:
               - {id: a, capability: c, adapter: ad}
               - {id: a, capability: c, adapter: ad}
-        """)
+        """,
+        )
         with pytest.raises(PipelineError, match="duplicate step id"):
             load_pipeline(f)
 
     def test_missing_capability_raises(self, tmp_path):
-        f = _write_pipeline(tmp_path, """
+        f = _write_pipeline(
+            tmp_path,
+            """
             id: x
             steps:
               - {id: a, adapter: ad}
-        """)
+        """,
+        )
         with pytest.raises(PipelineError, match="missing 'capability'"):
             load_pipeline(f)
 
     def test_missing_adapter_raises(self, tmp_path):
-        f = _write_pipeline(tmp_path, """
+        f = _write_pipeline(
+            tmp_path,
+            """
             id: x
             steps:
               - {id: a, capability: c}
-        """)
+        """,
+        )
         with pytest.raises(PipelineError, match="missing 'adapter'"):
             load_pipeline(f)
 
     def test_invalid_when_op_raises(self, tmp_path):
-        f = _write_pipeline(tmp_path, """
+        f = _write_pipeline(
+            tmp_path,
+            """
             id: x
             steps:
               - id: a
@@ -290,7 +315,8 @@ class TestLoadPipeline:
                 when:
                   var: foo
                   op: wat
-        """)
+        """,
+        )
         with pytest.raises(PipelineError, match="when.op"):
             load_pipeline(f)
 
@@ -304,11 +330,15 @@ def _make_demo_spec() -> PipelineSpec:
         description="t",
         steps=(
             PipelineStep(
-                id="synth", capability="synthesize", adapter="llm.synthesize",
+                id="synth",
+                capability="synthesize",
+                adapter="llm.synthesize",
                 inputs={"title": "${context.title}"},
             ),
             PipelineStep(
-                id="critique", capability="critique", adapter="llm.critique",
+                id="critique",
+                capability="critique",
+                adapter="llm.critique",
                 inputs={"candidate": "${steps.synth.output}"},
                 when={"var": "steps.synth.output", "op": "nonempty"},
             ),
@@ -319,10 +349,8 @@ def _make_demo_spec() -> PipelineSpec:
 class TestPipelineRunnerEndToEnd:
     def test_happy_path_both_steps_run(self):
         registry = AdapterRegistry()
-        registry.register("llm.synthesize",
-                          lambda inp: {"output": f"SYN[{inp['title']}]"})
-        registry.register("llm.critique",
-                          lambda inp: {"output": f"CRT[{inp['candidate']}]"})
+        registry.register("llm.synthesize", lambda inp: {"output": f"SYN[{inp['title']}]"})
+        registry.register("llm.critique", lambda inp: {"output": f"CRT[{inp['candidate']}]"})
         trace = _FakeTraceStore()
         runner = PipelineRunner(
             capability_manager=_FakeCapMgr({"synthesize", "critique"}),
@@ -375,8 +403,7 @@ class TestPipelineRunnerEndToEnd:
 
     def test_adapter_exception_aborts_pipeline(self):
         registry = AdapterRegistry()
-        registry.register("llm.synthesize",
-                          lambda inp: (_ for _ in ()).throw(RuntimeError("boom")))
+        registry.register("llm.synthesize", lambda inp: (_ for _ in ()).throw(RuntimeError("boom")))
         registry.register("llm.critique", lambda inp: {"output": "should not run"})
         runner = PipelineRunner(
             capability_manager=_FakeCapMgr({"synthesize", "critique"}),
@@ -514,30 +541,36 @@ class TestShippedDemoPipeline:
 
 class TestLoadPipelineFromDict:
     def test_minimal_valid_dict(self):
-        spec = load_pipeline_from_dict({
-            "id": "in_memory",
-            "steps": [
-                {"id": "a", "capability": "synthesize", "adapter": "llm.synthesize"},
-            ],
-        })
+        spec = load_pipeline_from_dict(
+            {
+                "id": "in_memory",
+                "steps": [
+                    {"id": "a", "capability": "synthesize", "adapter": "llm.synthesize"},
+                ],
+            }
+        )
         assert spec.id == "in_memory"
         assert spec.source_path is None
         assert len(spec.steps) == 1
 
     def test_default_id_used_when_missing(self):
         spec = load_pipeline_from_dict(
-            {"steps": [
-                {"id": "a", "capability": "c", "adapter": "ad"},
-            ]},
+            {
+                "steps": [
+                    {"id": "a", "capability": "c", "adapter": "ad"},
+                ]
+            },
             default_id="from_default",
         )
         assert spec.id == "from_default"
 
     def test_no_id_no_default_raises(self):
         with pytest.raises(PipelineError, match="missing 'id'"):
-            load_pipeline_from_dict({
-                "steps": [{"id": "a", "capability": "c", "adapter": "ad"}],
-            })
+            load_pipeline_from_dict(
+                {
+                    "steps": [{"id": "a", "capability": "c", "adapter": "ad"}],
+                }
+            )
 
     def test_json_compatible_dict_works(self):
         # JSON-style dict (no YAML-only features) — same loader, no parsing.
@@ -566,18 +599,24 @@ class TestLoadPipelineFromDict:
 
     def test_load_pipeline_delegates_to_from_dict(self, tmp_path):
         # File loader and dict loader produce equivalent specs (except source_path).
-        f = _write_pipeline(tmp_path, """
+        f = _write_pipeline(
+            tmp_path,
+            """
             id: demo
             steps:
               - id: a
                 capability: synthesize
                 adapter: llm.synthesize
-        """)
+        """,
+        )
         from_file = load_pipeline(f)
         from_dict = load_pipeline_from_dict(
-            {"id": "demo", "steps": [
-                {"id": "a", "capability": "synthesize", "adapter": "llm.synthesize"},
-            ]},
+            {
+                "id": "demo",
+                "steps": [
+                    {"id": "a", "capability": "synthesize", "adapter": "llm.synthesize"},
+                ],
+            },
         )
         assert from_file.id == from_dict.id
         assert from_file.steps == from_dict.steps
@@ -596,38 +635,46 @@ class _FakeLLM:
         self.digest_calls: list[dict] = []
 
     def generate_synthesis(self, *, title, part_digests, final_concepts, template=None, **kwargs):
-        self.synthesis_calls.append({
-            "title": title,
-            "part_digests": part_digests,
-            "final_concepts": final_concepts,
-            "template": template,
-            **kwargs,
-        })
+        self.synthesis_calls.append(
+            {
+                "title": title,
+                "part_digests": part_digests,
+                "final_concepts": final_concepts,
+                "template": template,
+                **kwargs,
+            }
+        )
         return f"SYNTH({title}|{len(part_digests)} parts)"
 
     def critique_text(self, *, candidate, sources, focus=None):
-        self.critique_calls.append({
-            "candidate": candidate,
-            "sources": sources,
-            "focus": focus,
-        })
+        self.critique_calls.append(
+            {
+                "candidate": candidate,
+                "sources": sources,
+                "focus": focus,
+            }
+        )
         return f"CRIT({len(candidate)} chars)"
 
     def answer_query(self, query_content, wiki_context="", **kwargs):
-        self.answer_calls.append({
-            "query_content": query_content,
-            "wiki_context": wiki_context,
-            **kwargs,
-        })
+        self.answer_calls.append(
+            {
+                "query_content": query_content,
+                "wiki_context": wiki_context,
+                **kwargs,
+            }
+        )
         return f"ANSWER({len(query_content)}|{len(wiki_context)})"
 
     def digest_sources(self, *, query, source_title, source_text, budget):
-        self.digest_calls.append({
-            "query": query,
-            "source_title": source_title,
-            "source_text": source_text,
-            "budget": budget,
-        })
+        self.digest_calls.append(
+            {
+                "query": query,
+                "source_title": source_title,
+                "source_text": source_text,
+                "budget": budget,
+            }
+        )
         return f"DIGEST({source_title}|{len(source_text)} chars)"
 
 
@@ -663,19 +710,23 @@ class TestBuiltinAdapters:
         register_builtin_adapters(registry, llm)
         synth = registry.get("llm.synthesize")
 
-        out = synth({
-            "title": "Hamlet",
-            "part_digests": [{"part": 1}, {"part": 2}],
-            "final_concepts": "carry over",
-            "template": "wiki-note",
-        })
+        out = synth(
+            {
+                "title": "Hamlet",
+                "part_digests": [{"part": 1}, {"part": 2}],
+                "final_concepts": "carry over",
+                "template": "wiki-note",
+            }
+        )
         assert out == {"output": "SYNTH(Hamlet|2 parts)"}
-        assert llm.synthesis_calls == [{
-            "title": "Hamlet",
-            "part_digests": [{"part": 1}, {"part": 2}],
-            "final_concepts": "carry over",
-            "template": "wiki-note",
-        }]
+        assert llm.synthesis_calls == [
+            {
+                "title": "Hamlet",
+                "part_digests": [{"part": 1}, {"part": 2}],
+                "final_concepts": "carry over",
+                "template": "wiki-note",
+            }
+        ]
 
     def test_critique_adapter_wires_arguments(self):
         registry = AdapterRegistry()
@@ -685,9 +736,13 @@ class TestBuiltinAdapters:
 
         out = crit({"candidate": "ABCDEF", "sources": "src", "focus": "tone"})
         assert out == {"output": "CRIT(6 chars)"}
-        assert llm.critique_calls == [{
-            "candidate": "ABCDEF", "sources": "src", "focus": "tone",
-        }]
+        assert llm.critique_calls == [
+            {
+                "candidate": "ABCDEF",
+                "sources": "src",
+                "focus": "tone",
+            }
+        ]
 
     def test_answer_from_sources_adapter_writes_final_answer(self):
         registry = AdapterRegistry()
@@ -777,14 +832,16 @@ class TestBuiltinAdapters:
         assert "## Source: Book B" in out["source_text"]
         assert "part 1 text" in out["source_text"]
         assert "part 2 text" in out["source_text"]
-        
+
         source_meta = out["sources"][0]
         assert source_meta["title"] == "Book B"
         assert source_meta["source_kind"] == "parts_aggregated"
         assert source_meta["part_count"] == 2
         assert len(source_meta["paths"]) == 2
 
-    def test_load_sources_prefers_parts_over_synthesis_when_no_stitched(self, tmp_path, monkeypatch):
+    def test_load_sources_prefers_parts_over_synthesis_when_no_stitched(
+        self, tmp_path, monkeypatch
+    ):
         import services.builtin_adapters as adapters_mod
 
         pages = tmp_path / "pages"
@@ -864,10 +921,7 @@ class TestBuiltinAdapters:
         from core.config import WIKI_VAULT_DIR, OPERATIONS_DIR, SKILLS_DIR
         from services.capability_manager import CapabilityManager
 
-        demo_path = (
-            WIKI_VAULT_DIR / "Templates" / "Pipelines"
-            / "synthesize_critique_demo.yml"
-        )
+        demo_path = WIKI_VAULT_DIR / "Templates" / "Pipelines" / "synthesize_critique_demo.yml"
         spec = load_pipeline(demo_path)
         cap_mgr = CapabilityManager(OPERATIONS_DIR, SKILLS_DIR)
         registry = AdapterRegistry()
@@ -879,11 +933,14 @@ class TestBuiltinAdapters:
             adapter_registry=registry,
             trace_store=_FakeTraceStore(),
         )
-        result = runner.run(spec, context={
-            "title": "Hamlet",
-            "part_digests": [{"part": 1, "thesis": "x"}],
-            "part_digests_text": "(part 1 thesis: x)",
-        })
+        result = runner.run(
+            spec,
+            context={
+                "title": "Hamlet",
+                "part_digests": [{"part": 1, "thesis": "x"}],
+                "part_digests_text": "(part 1 thesis: x)",
+            },
+        )
         assert result.status == "succeeded"
         # synthesize fired once, critique fired once (synth output nonempty)
         assert len(llm.synthesis_calls) == 1
@@ -900,10 +957,7 @@ class TestBuiltinAdapters:
         (book / "Book A (Stitched).md").write_text("source body for critique", encoding="utf-8")
         monkeypatch.setattr(adapters_mod, "PAGES_DIR", pages)
 
-        demo_path = (
-            WIKI_VAULT_DIR / "Templates" / "Pipelines"
-            / "load_sources_critique_demo.yml"
-        )
+        demo_path = WIKI_VAULT_DIR / "Templates" / "Pipelines" / "load_sources_critique_demo.yml"
         spec = load_pipeline(demo_path)
         cap_mgr = CapabilityManager(OPERATIONS_DIR, SKILLS_DIR)
         registry = AdapterRegistry()
@@ -915,11 +969,14 @@ class TestBuiltinAdapters:
             adapter_registry=registry,
             trace_store=_FakeTraceStore(),
         )
-        result = runner.run(spec, context={
-            "target_titles": ["[[Book A]]"],
-            "candidate": "Compare this claim against source.",
-            "focus": "source-grounding",
-        })
+        result = runner.run(
+            spec,
+            context={
+                "target_titles": ["[[Book A]]"],
+                "candidate": "Compare this claim against source.",
+                "focus": "source-grounding",
+            },
+        )
 
         assert result.status == "succeeded"
         assert result.steps["load_sources"].output["missing_titles"] == []

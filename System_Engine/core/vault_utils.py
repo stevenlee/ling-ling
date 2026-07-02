@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
+
 try:
     from yaml import CSafeLoader as SafeLoader
 except ImportError:
@@ -18,10 +19,10 @@ from core.config import (
 )
 
 READING_INDEX_FILE = INDEX_FILE.parent / "ReadingIndex.md"
-_FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*', re.DOTALL)
-_FRONTMATTER_NL_RE = re.compile(r'^---\s*\n(.*?)\n---\s*(?:\n|$)', re.DOTALL)
-_NATURAL_SORT_RE = re.compile(r'([0-9]+)')
-_PART_RE = re.compile(r'\(Part \d+\)')
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*", re.DOTALL)
+_FRONTMATTER_NL_RE = re.compile(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", re.DOTALL)
+_NATURAL_SORT_RE = re.compile(r"([0-9]+)")
+_PART_RE = re.compile(r"\(Part \d+\)")
 _READING_INDEX_COLUMNS = (
     "Article",
     "Stat",
@@ -64,14 +65,14 @@ def _read_metadata(f_path: Path) -> dict:
     """Return {title, tags, date} for a markdown file; tolerant of bad YAML."""
     mtime = datetime.fromtimestamp(f_path.stat().st_mtime).strftime("%Y-%m-%d")
     meta = {"title": f_path.stem, "tags": [], "date": mtime}
-    
+
     fm_str = ""
     try:
-        with open(f_path, 'r', encoding='utf-8') as f:
+        with open(f_path, "r", encoding="utf-8") as f:
             first_line = f.readline()
             if not first_line.startswith("---"):
                 return meta
-            
+
             yaml_lines = []
             for line in f:
                 if line.startswith("---"):
@@ -97,7 +98,9 @@ def _read_metadata(f_path: Path) -> dict:
     meta["title"] = str(data.get("title") or f_path.stem)
     tags = data.get("tags", [])
     meta["tags"] = tags if isinstance(tags, list) else [tags]
-    yaml_date = str(data.get("date_created") or data.get("created") or data.get("date") or "").strip()
+    yaml_date = str(
+        data.get("date_created") or data.get("created") or data.get("date") or ""
+    ).strip()
     if yaml_date:
         meta["date"] = yaml_date
     return meta
@@ -205,19 +208,37 @@ def _load_reading_index() -> tuple[dict, bool, bool]:
                 ["Article", "Status", "Re", "Im", "Comments"],
                 ["Article", "Status", "Im", "Re", "Comment"],
                 ["Article", "Status", "Im", "Re", "Comments"],
-                ["Article", "Status", "Priority", "Importance", "Relevance", "Progress", "Comment", "Updated"],
-                ["Article", "Status", "Priority", "Importance", "Relevance", "Progress", "Comments", "Updated"],
+                [
+                    "Article",
+                    "Status",
+                    "Priority",
+                    "Importance",
+                    "Relevance",
+                    "Progress",
+                    "Comment",
+                    "Updated",
+                ],
+                [
+                    "Article",
+                    "Status",
+                    "Priority",
+                    "Importance",
+                    "Relevance",
+                    "Progress",
+                    "Comments",
+                    "Updated",
+                ],
             ]
             if headers not in allowed_schemas:
                 return {}, False, False
-            schema_matched = (headers == list(_READING_INDEX_COLUMNS))
+            schema_matched = headers == list(_READING_INDEX_COLUMNS)
             if idx + 1 >= len(lines):
                 return {}, False, False
             separator = _split_table_row(lines[idx + 1])
             if len(separator) != len(headers):
                 return {}, False, False
             annotations = {}
-            for row in lines[idx + 2:]:
+            for row in lines[idx + 2 :]:
                 if not row.strip().startswith("|"):
                     break
                 cells = _split_table_row(row)
@@ -244,7 +265,9 @@ def _sync_reading_index(article_titles: list[str]):
         logging.warning("Wiki index: ReadingIndex.md could not be parsed; skipping automatic sync.")
         return
 
-    all_titles = set(article_titles) | {title for title, annotation in existing.items() if annotation}
+    all_titles = set(article_titles) | {
+        title for title, annotation in existing.items() if annotation
+    }
     sorted_titles = sorted(all_titles, key=_natural_sort_key)
 
     lines = _READING_INDEX_INTRO + [
@@ -320,11 +343,12 @@ def _recent_entries(sections: dict) -> list[dict]:
     Stitched > main) and dated by the newest file in the folder, so re-ingesting
     one part legitimately bumps the doc up. Part chunks are never their own entry.
     """
+
     def _link_rank(meta: dict):
         """Sort key picking the page to link: Synthesis > Stitched > naturally
         first (so a doc with only Part notes links Part 1, not a random part)."""
         t = meta["title"]
-        return (not ("(Synthesis)" in t), not ("(Stitched)" in t), _natural_sort_key(t))
+        return ("(Synthesis)" not in t, "(Stitched)" not in t, _natural_sort_key(t))
 
     entries: list[dict] = []
     for s_info in sections.values():
@@ -333,19 +357,28 @@ def _recent_entries(sections: dict) -> list[dict]:
                 continue
             if folder == "Root":
                 for meta in files:
-                    entries.append({
-                        "date": meta["date"], "title": meta["title"],
-                        "icon": _file_icon(meta["title"]),
-                        "link": meta["title"], "tags": meta["tags"],
-                    })
+                    entries.append(
+                        {
+                            "date": meta["date"],
+                            "title": meta["title"],
+                            "icon": _file_icon(meta["title"]),
+                            "link": meta["title"],
+                            "tags": meta["tags"],
+                        }
+                    )
                 continue
             mains = [f for f in files if not _PART_RE.search(f["title"])]
             pref = min(mains or files, key=_link_rank)
             date = max((f["date"] for f in files if f["date"]), default="")
-            entries.append({
-                "date": date, "title": folder, "icon": _file_icon(pref["title"]),
-                "link": pref["title"], "tags": pref["tags"],
-            })
+            entries.append(
+                {
+                    "date": date,
+                    "title": folder,
+                    "icon": _file_icon(pref["title"]),
+                    "link": pref["title"],
+                    "tags": pref["tags"],
+                }
+            )
     # Newest first; stable sort keeps same-day ties in natural title order.
     entries.sort(key=lambda e: _natural_sort_key(e["title"]))
     entries.sort(key=lambda e: e["date"] or "", reverse=True)
@@ -375,14 +408,19 @@ def _append_annotation_lines(lines: list[str], annotation: dict, prefix: str = "
         lines.append(f"{prefix}- 💬 {comment}")
 
 
-def update_wiki_index(filepath: Path = None, title: str = None, *, sync_reading_index: bool = False):
+def update_wiki_index(
+    filepath: Path = None, title: str = None, *, sync_reading_index: bool = False
+):
     """Regenerate index.md from a full scan of Notes/, pages/, and raw/consolidate/."""
     try:
         logging.info("Wiki Utils: Regenerating Knowledge Map Index...")
         page_entities = _collect_section(PAGES_DIR)
         sections = {
-            "Notes":    {"icon": "✍️", "files": _collect_section(NOTES_DIR)},
-            "Entities": {"icon": "🌷", "files": {folder: list(files) for folder, files in page_entities.items()}},
+            "Notes": {"icon": "✍️", "files": _collect_section(NOTES_DIR)},
+            "Entities": {
+                "icon": "🌷",
+                "files": {folder: list(files) for folder, files in page_entities.items()},
+            },
         }
 
         # Inject raw/consolidate markdown into Entities, grouped by stem.
@@ -399,6 +437,7 @@ def update_wiki_index(filepath: Path = None, title: str = None, *, sync_reading_
         reading_index, _, _ = _load_reading_index()
 
         from core.version import BUILD_DATE
+
         lines = [
             "# 🎀 Knowledge Dashboard",
             f"*📅 Last updated: {BUILD_DATE}*",
@@ -449,7 +488,9 @@ def update_wiki_index(filepath: Path = None, title: str = None, *, sync_reading_
                     mains = [f for f in files if not _PART_RE.search(f["title"])]
 
                     for meta in mains:
-                        lines.append(f"> - {_file_icon(meta['title'])} [[{meta['title']}]]{_tag_inline(meta['tags'])}")
+                        lines.append(
+                            f"> - {_file_icon(meta['title'])} [[{meta['title']}]]{_tag_inline(meta['tags'])}"
+                        )
 
                     if parts:
                         lines.append(f"> - 🧩 *(... plus {len(parts)} raw chunks hidden)*")
@@ -501,7 +542,7 @@ def update_file_tags(filepath: Path, tags: list[str], add_aliases: list[str] = N
         data["aliases"] = existing_aliases
 
     new_fm = yaml.safe_dump(data, allow_unicode=True, sort_keys=False).strip()
-    body = content[fm.end():]
+    body = content[fm.end() :]
     filepath.write_text(f"---\n{new_fm}\n---\n{body}", encoding="utf-8")
 
 

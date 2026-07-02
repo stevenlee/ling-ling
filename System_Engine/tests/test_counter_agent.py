@@ -6,11 +6,9 @@ We don't mock the LLM here — only exercise the pure helpers:
   - _find_quote_offset (exact + fuzzy quote location)
   - _parse_concepts (directive parsing)
 """
-import os
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+import os
+
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import re
@@ -21,6 +19,7 @@ from agents.counter_agent import CounterAgent, _LocationIndex
 
 
 # ── _LocationIndex ─────────────────────────────────────────────────
+
 
 class TestLocationIndex:
     TEXT = (
@@ -43,7 +42,7 @@ class TestLocationIndex:
         """Verify the precomputed index returns the same closest heading as a
         from-scratch regex scan over `text[:offset]`."""
         idx = _LocationIndex(self.TEXT)
-        old_re = re.compile(r'^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$', re.MULTILINE)
+        old_re = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 
         def old(offset: int) -> str:
             closest = ""
@@ -73,6 +72,7 @@ class TestLocationIndex:
 
 
 # ── _build_tally_locally ──────────────────────────────────────────
+
 
 class TestBuildTallyLocally:
     def setup_method(self):
@@ -116,10 +116,13 @@ class TestBuildTallyLocally:
 
 # ── _find_quote_offset ────────────────────────────────────────────
 
+
 class TestFindQuoteOffset:
     def test_exact_match(self):
         article = "Some text and a specific phrase later."
-        assert CounterAgent._find_quote_offset(article, "specific phrase") == article.index("specific phrase")
+        assert CounterAgent._find_quote_offset(article, "specific phrase") == article.index(
+            "specific phrase"
+        )
 
     def test_returns_minus_one_for_empty(self):
         assert CounterAgent._find_quote_offset("anything", "") == -1
@@ -128,8 +131,10 @@ class TestFindQuoteOffset:
     def test_strips_smart_quotes(self):
         article = "She said hello today."
         # Smart quotes wrapping the quote
-        assert CounterAgent._find_quote_offset(article, "“She said hello”") >= 0 or \
-               CounterAgent._find_quote_offset(article, "She said hello") >= 0
+        assert (
+            CounterAgent._find_quote_offset(article, "“She said hello”") >= 0
+            or CounterAgent._find_quote_offset(article, "She said hello") >= 0
+        )
 
     def test_fuzzy_whitespace_match(self):
         article = "Long\nline   spanning multiple    spaces here."
@@ -144,6 +149,7 @@ class TestFindQuoteOffset:
 
 
 # ── _parse_concepts ───────────────────────────────────────────────
+
 
 class TestParseConcepts:
     def setup_method(self):
@@ -163,7 +169,9 @@ class TestParseConcepts:
         assert "straw man" in result
 
     def test_strips_trailing_question_marks(self):
-        assert self.agent._parse_concepts("Count: rhetorical questions?") == ["rhetorical questions"]
+        assert self.agent._parse_concepts("Count: rhetorical questions?") == [
+            "rhetorical questions"
+        ]
         assert self.agent._parse_concepts("計算：誇大其詞？") == ["誇大其詞"]
 
     def test_fallback_freeform_concept(self):
@@ -183,6 +191,7 @@ class TestParseConcepts:
 
 # ── _table_cell ───────────────────────────────────────────────────
 
+
 class TestTableCell:
     def test_collapses_whitespace(self):
         assert CounterAgent._table_cell("line one\n\nline two") == "line one line two"
@@ -201,6 +210,7 @@ class TestTableCell:
 
 
 # ── Lens dual-link (Phase 4) ──────────────────────────────────────
+
 
 class TestDualLink:
     def test_file_url_with_line_range(self, tmp_path):
@@ -236,6 +246,7 @@ class TestDualLink:
     def test_physical_link_includes_line_range_in_label(self, tmp_path, monkeypatch):
         # Point RAW_CONSOLIDATE_DIR at a tmp directory containing a fake source
         import agents.counter_agent as ca
+
         fake_file = tmp_path / "MyArticle.md"
         fake_file.write_text("dummy body", encoding="utf-8")
         monkeypatch.setattr(ca, "RAW_CONSOLIDATE_DIR", tmp_path)
@@ -249,6 +260,7 @@ class TestDualLink:
 
     def test_physical_link_no_range_still_renders(self, tmp_path, monkeypatch):
         import agents.counter_agent as ca
+
         fake_file = tmp_path / "MyArticle.md"
         fake_file.write_text("dummy body", encoding="utf-8")
         monkeypatch.setattr(ca, "RAW_CONSOLIDATE_DIR", tmp_path)
@@ -283,6 +295,7 @@ class TestDualLink:
         should still include the physical file:/// link, not just the
         Obsidian wikilink."""
         import agents.counter_agent as ca
+
         fake_file = tmp_path / "DirectArticle.md"
         fake_file.write_text("body", encoding="utf-8")
         monkeypatch.setattr(ca, "PAGES_DIR", tmp_path)
@@ -305,11 +318,12 @@ class TestDualLink:
             inst=inst,
         )
         assert "[[DirectArticle" in cell  # Obsidian wikilink half
-        assert "file://" in cell           # Physical link half — was missing before P2 fix
+        assert "file://" in cell  # Physical link half — was missing before P2 fix
         assert "#L5-L9" in cell
 
     def test_format_instance_dual_link_for_direct_source(self, tmp_path, monkeypatch):
         import agents.counter_agent as ca
+
         fake_file = tmp_path / "DirectArticle.md"
         fake_file.write_text("body", encoding="utf-8")
         monkeypatch.setattr(ca, "PAGES_DIR", tmp_path)
@@ -351,9 +365,9 @@ class TestRagFallbackArticleText:
         results = agent._resolve_articles(["Missing Doc"], "a semantic query")
         assert len(results) == 1
         title, text, _ = results[0]
-        assert title == "Real Title"            # not the literal "(RAG result)"
+        assert title == "Real Title"  # not the literal "(RAG result)"
         assert text == "raw chunk body, no heading"
-        assert "### [來自筆記" not in text        # no injected markdown heading
+        assert "### [來自筆記" not in text  # no injected markdown heading
 
     def test_missing_metadata_title_falls_back_to_label(self):
         agent = CounterAgent.__new__(CounterAgent)

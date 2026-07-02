@@ -1,8 +1,4 @@
 """Unit tests for quality_runner.coherence_score — no real LLM needed."""
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import pytest
 
@@ -51,6 +47,7 @@ class TestCoherenceScore:
     def test_handles_missing_keys(self):
         def fn(text):
             return {}  # no score, no reason — should not crash
+
         result = coherence_score("any", score_fn=fn, runs=1)
         assert result.score == 0
 
@@ -75,6 +72,7 @@ class TestScoreTextQualityContract:
 
     def test_unknown_prompt_version_returns_score_zero(self, monkeypatch):
         import os
+
         os.environ.setdefault("LLM_PROVIDER", "vllm")
         from services.llm_client import LLMClient
 
@@ -86,6 +84,7 @@ class TestScoreTextQualityContract:
 
     def test_empty_text_returns_score_zero(self):
         import os
+
         os.environ.setdefault("LLM_PROVIDER", "vllm")
         from services.llm_client import LLMClient
 
@@ -97,13 +96,16 @@ class TestScoreTextQualityContract:
     def test_llm_failure_returns_score_zero(self, monkeypatch):
         """If the underlying _complete_text raises, we shouldn't crash."""
         import os
+
         os.environ.setdefault("LLM_PROVIDER", "vllm")
         from services.llm_client import LLMClient
 
         agent = LLMClient.__new__(LLMClient)
+
         # Inject a failing _complete_text
         def boom(*a, **kw):
             raise RuntimeError("llm unreachable")
+
         agent._complete_text = boom
         result = agent.score_text_quality("hello world")
         assert result["score"] == 0
@@ -112,6 +114,7 @@ class TestScoreTextQualityContract:
     def test_clamps_out_of_range_score(self):
         """If the LLM returns 15 or -3, we clamp to [1, 10]."""
         import os
+
         os.environ.setdefault("LLM_PROVIDER", "vllm")
         from services.llm_client import LLMClient
 
@@ -126,6 +129,7 @@ class TestScoreTextQualityContract:
 
     def test_handles_non_numeric_score(self):
         import os
+
         os.environ.setdefault("LLM_PROVIDER", "vllm")
         from services.llm_client import LLMClient
 

@@ -1,9 +1,5 @@
 """Batch-2 T1: synthesis critique retry loop (_synthesize_with_critique_retry)."""
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
-
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -22,8 +18,15 @@ class _RetryStubLLM:
     def format_digest_for_prompt(digest):
         return f"DIGEST::{digest}"
 
-    def generate_synthesis(self, title, part_digests, final_concepts,
-                           template=None, persona=None, critique_feedback=None):
+    def generate_synthesis(
+        self,
+        title,
+        part_digests,
+        final_concepts,
+        template=None,
+        persona=None,
+        critique_feedback=None,
+    ):
         self.synthesis_calls.append({"critique_feedback": critique_feedback})
         return self.synthesis_texts.pop(0)
 
@@ -130,28 +133,32 @@ def test_unparseable_verdict_never_retries(monkeypatch):
 
 def test_parse_verdict_prose_wrapped_zh():
     # Live gemma output: keyword not flush against the colon.
-    assert IngestionPipeline._parse_verdict(
-        "**Overall Verdict**: 應修正 (revise)。存在一個關鍵的數值錯誤。"
-    ) == "revise"
+    assert (
+        IngestionPipeline._parse_verdict(
+            "**Overall Verdict**: 應修正 (revise)。存在一個關鍵的數值錯誤。"
+        )
+        == "revise"
+    )
 
 
 def test_parse_verdict_prose_wrapped_en():
-    assert IngestionPipeline._parse_verdict(
-        "**Overall Verdict**: I would revise this synthesis because of X."
-    ) == "revise"
+    assert (
+        IngestionPipeline._parse_verdict(
+            "**Overall Verdict**: I would revise this synthesis because of X."
+        )
+        == "revise"
+    )
 
 
 def test_parse_verdict_negated_revise_is_keep():
-    assert IngestionPipeline._parse_verdict(
-        "**Overall Verdict**: 不需修正，內容忠於來源。"
-    ) == "keep"
+    assert (
+        IngestionPipeline._parse_verdict("**Overall Verdict**: 不需修正，內容忠於來源。") == "keep"
+    )
 
 
 def test_parse_verdict_keyword_beyond_gap_is_none():
     filler = "x" * 60
-    assert IngestionPipeline._parse_verdict(
-        f"**Overall Verdict**: {filler} revise"
-    ) is None
+    assert IngestionPipeline._parse_verdict(f"**Overall Verdict**: {filler} revise") is None
 
 
 # ── generate_synthesis prompt: critique_feedback path ────────────────
@@ -160,6 +167,7 @@ def test_parse_verdict_keyword_beyond_gap_is_none():
 @pytest.fixture
 def llm_client():
     from services.llm_client import LLMClient
+
     with patch("services.llm_client.LLM_PROVIDER", "gemini"):
         with patch("services.llm_client._genai", MagicMock()):
             client = LLMClient()

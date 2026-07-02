@@ -2,10 +2,6 @@
 Unit tests for services.text_splitter — edge cases around code fence
 protection, chunk sizing, and span tracking.
 """
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import pytest
 from services.text_splitter import TextSplitter

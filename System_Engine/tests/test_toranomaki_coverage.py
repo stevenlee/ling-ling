@@ -6,11 +6,6 @@ once shipped undocumented. These tests fail when a routable command has no
 playbook doc, or a doc points at no route.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
-
 from core.config import WIKI_VAULT_DIR
 from watchers.prompt_watcher import INTENT_ROUTES
 
@@ -51,7 +46,8 @@ def test_every_routable_command_has_a_doc():
 def test_no_routeless_docs():
     triggers = _all_triggers()
     orphans = [
-        f"@ling-{d}.md" for d in _doc_stems()
+        f"@ling-{d}.md"
+        for d in _doc_stems()
         if d not in triggers and d not in _ROUTELESS_DOC_EXEMPT
     ]
     assert not orphans, (

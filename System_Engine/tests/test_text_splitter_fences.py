@@ -5,10 +5,6 @@ tests target the perf-relevant invariants of the refactor: fence regions
 should be computed once per call, unterminated fences should still be
 protected, and identical inputs should produce identical chunk boundaries.
 """
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import pytest
 
@@ -21,7 +17,7 @@ class TestFenceRegions:
         regions = TextSplitter._compute_fence_regions(text)
         assert len(regions) == 1
         start, end = regions[0]
-        assert text[start:start + 3] == "```"
+        assert text[start : start + 3] == "```"
         # The region should extend past the closing fence line.
         assert "```\n" in text[start:end]
 
@@ -55,7 +51,9 @@ class TestFenceProtectionAcrossSplits:
         chunks = splitter.split_text(body)
         # The mermaid block must appear intact in some chunk.
         joined_chunks = [c for c in chunks if "```mermaid" in c]
-        assert any("graph TD" in c and "E --> F" in c and c.rstrip().endswith("```") for c in joined_chunks)
+        assert any(
+            "graph TD" in c and "E --> F" in c and c.rstrip().endswith("```") for c in joined_chunks
+        )
 
     def test_legacy_inside_code_block_helper_still_works(self):
         text = "outside\n```py\ninside\n```\nafter"

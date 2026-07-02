@@ -3,22 +3,20 @@ work, walks the consolidate→makeup→spontaneous ladder, and is hard-capped by
 per-day budget. Behavioural knobs are Scripture-driven (settings.DAYDREAM_*),
 so tests drive them by overriding settings, the same way the dreaming window
 is set."""
+
 import json
-import sys
 from datetime import datetime
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import pytest
 
 import maintenance.daydream as dd_mod
 from maintenance.daydream import DaydreamPump
 
-DAY = datetime(2026, 6, 18, 10, 0, 0)    # 10am — outside the 1–5am window
-NIGHT = datetime(2026, 6, 18, 3, 0, 0)   # 3am — inside the window
+DAY = datetime(2026, 6, 18, 10, 0, 0)  # 10am — outside the 1–5am window
+NIGHT = datetime(2026, 6, 18, 3, 0, 0)  # 3am — inside the window
 
 
 @pytest.fixture
@@ -94,7 +92,7 @@ class TestDaytimeGate:
         pump = _pump(tmp_path, clock=NIGHT)
         pump._run_step()
         busy.try_set_busy.assert_not_called()
-        assert pump._kicks and pump._kicks[0] > 0   # rescheduled for after the window
+        assert pump._kicks and pump._kicks[0] > 0  # rescheduled for after the window
 
 
 class TestLadder:
@@ -105,11 +103,11 @@ class TestLadder:
         ins = _fake_insight(monkeypatch)
         pump = _pump(tmp_path)
         pump._run_step()
-        assert cons == [(1, 4)]                       # max_insights=1, bite cap=4
-        assert ins == []                              # didn't fall through to insight
+        assert cons == [(1, 4)]  # max_insights=1, bite cap=4
+        assert ins == []  # didn't fall through to insight
         assert pump._ledger["budget"]["consolidation"] == 1
-        busy.set_busy.assert_called_with(False)       # lock released
-        assert pump._kicks == [pump.step_gap_seconds] # more backlog → next bite
+        busy.set_busy.assert_called_with(False)  # lock released
+        assert pump._kicks == [pump.step_gap_seconds]  # more backlog → next bite
 
     def test_makeup_insight_when_no_backlog_and_not_run_today(self, env):
         tmp_path, _, _, _, monkeypatch = env
@@ -126,7 +124,7 @@ class TestLadder:
         monkeypatch.setattr(dd_mod, "has_pending_insights", lambda *a, **k: False)
         _fake_consolidation(monkeypatch)
         ins = _fake_insight(monkeypatch)
-        pump = _pump(tmp_path, ran_today=True)   # insight already ran today
+        pump = _pump(tmp_path, ran_today=True)  # insight already ran today
         pump._run_step()
         assert ins == ["Daydream spontaneous"]
         assert pump._ledger["budget"]["spontaneous"] == 1
@@ -157,7 +155,7 @@ class TestBudgetBound:
         pump = _pump(tmp_path)
         for _ in range(4):
             pump._run_step()
-        assert len(cons) == 2                          # capped at the daily budget
+        assert len(cons) == 2  # capped at the daily budget
         assert pump._ledger["budget"]["consolidation"] == 2
 
 
@@ -201,6 +199,7 @@ class TestFailureBackoff:
         monkeypatch.setattr(dd_mod, "run_consolidation", boom)
         pump = _pump(tmp_path)
         import time
+
         for _ in range(3):
             pump._run_step()
         assert pump._backoff_until > time.time()

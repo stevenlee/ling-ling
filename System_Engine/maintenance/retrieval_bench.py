@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -35,8 +35,8 @@ class RetrievalBenchResult:
     pass_rate: float
     rows: list[dict]
     message: str
-    facet_off_passed: int | None = None   # A/B baseline (facets disabled)
-    facet_lift: int | None = None         # passed - facet_off_passed
+    facet_off_passed: int | None = None  # A/B baseline (facets disabled)
+    facet_lift: int | None = None  # passed - facet_off_passed
     regression: bool = False
     alert_path: Path | None = None
 
@@ -129,11 +129,13 @@ def _evaluate_case(rag, case: dict, default_top_k: int, use_facets: bool | None 
     returned = []
     for item in results:
         meta = item.get("metadata") or {}
-        returned.append({
-            "id": item.get("id"),
-            "title": meta.get("title"),
-            "source": meta.get("source"),
-        })
+        returned.append(
+            {
+                "id": item.get("id"),
+                "title": meta.get("title"),
+                "source": meta.get("source"),
+            }
+        )
 
     return {
         "query": query,
@@ -180,9 +182,7 @@ def run_retrieval_bench(
     facet_off_passed = None
     facet_lift = None
     if ab_facets:
-        rows_off = [
-            _evaluate_case(rag, case, default_top_k, use_facets=False) for case in cases
-        ]
+        rows_off = [_evaluate_case(rag, case, default_top_k, use_facets=False) for case in cases]
         facet_off_passed = sum(1 for row in rows_off if row["passed"])
         facet_lift = passed - facet_off_passed
 
@@ -206,9 +206,7 @@ def run_retrieval_bench(
         if previous is not None and pass_rate < float(previous.get("pass_rate", 0.0)):
             result.regression = True
             result.status = "failed" if status == "failed" else "regressed"
-            result.message += (
-                f"; REGRESSION vs previous run ({previous.get('pass_rate', 0):.0%} → {pass_rate:.0%})"
-            )
+            result.message += f"; REGRESSION vs previous run ({previous.get('pass_rate', 0):.0%} → {pass_rate:.0%})"
             if report_dir is not None:
                 result.alert_path = _write_regression_alert(report_dir, result, previous)
 
@@ -228,22 +226,22 @@ def _append_history(history_path: Path, result: RetrievalBenchResult) -> dict | 
         logging.warning(f"Bench history unreadable, starting fresh: {e}")
 
     previous = history[-1] if history else None
-    history.append({
-        "ts": datetime.now().isoformat(timespec="seconds"),
-        "total": result.total,
-        "passed": result.passed,
-        "pass_rate": result.pass_rate,
-        "facet_off_passed": result.facet_off_passed,
-        "facet_lift": result.facet_lift,
-    })
+    history.append(
+        {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "total": result.total,
+            "passed": result.passed,
+            "pass_rate": result.pass_rate,
+            "facet_off_passed": result.facet_off_passed,
+            "facet_lift": result.facet_lift,
+        }
+    )
     history = history[-365:]  # one year of daily runs is plenty
 
     try:
         history_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = history_path.with_name(history_path.name + ".tmp")
-        tmp.write_text(
-            json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        tmp.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(history_path)
     except Exception as e:
         logging.warning(f"Bench history write failed: {e}")
@@ -268,7 +266,11 @@ def _write_regression_alert(
         if result.facet_lift is not None:
             lines.append(
                 f"- Facet lift：{result.facet_lift:+d}"
-                + ("" if result.facet_lift >= 0 else " 💦 facet 是負貢獻，考慮 `FACET_INDEX_ENABLED=false`")
+                + (
+                    ""
+                    if result.facet_lift >= 0
+                    else " 💦 facet 是負貢獻，考慮 `FACET_INDEX_ENABLED=false`"
+                )
             )
         lines += ["", "## 失敗的查詢", ""]
         for row in failed_rows[:20]:
@@ -307,10 +309,12 @@ def append_bench_log(
         "",
     ]
     if result.rows:
-        lines.extend([
-            "| Result | Query | Expectation | Returned top result |",
-            "|---|---|---|---|",
-        ])
+        lines.extend(
+            [
+                "| Result | Query | Expectation | Returned top result |",
+                "|---|---|---|---|",
+            ]
+        )
         for row in result.rows:
             returned = row["returned"][0] if row["returned"] else {}
             top = returned.get("title") or returned.get("source") or returned.get("id") or "(none)"

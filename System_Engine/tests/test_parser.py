@@ -2,11 +2,8 @@
 Unit tests for core.parser utilities — JSON extraction, markdown cleaning,
 and Mermaid repair functions.
 """
-import sys
-from pathlib import Path
 
 # Ensure System_Engine is on the path
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import pytest
 import yaml
@@ -22,6 +19,7 @@ from core.parser import (
 
 
 # ── extract_json_array ───────────────────────────────────────────────
+
 
 class TestExtractJsonArray:
     def test_plain_array(self):
@@ -52,6 +50,7 @@ class TestExtractJsonArray:
 
 # ── extract_json_object ──────────────────────────────────────────────
 
+
 class TestExtractJsonObject:
     def test_plain_object(self):
         assert extract_json_object('{"key": "value"}') == {"key": "value"}
@@ -75,7 +74,7 @@ class TestExtractJsonObject:
 
     def test_returns_dict_not_list(self):
         """Should return {} if the top-level JSON is a list, not a dict."""
-        assert extract_json_object('[1, 2, 3]') == {}
+        assert extract_json_object("[1, 2, 3]") == {}
 
     def test_nested_objects(self):
         text = '{"outer": {"inner": true}}'
@@ -83,6 +82,7 @@ class TestExtractJsonObject:
 
 
 # ── clean_llm_response ──────────────────────────────────────────────
+
 
 class TestCleanLlmResponse:
     def test_strips_markdown_fence(self):
@@ -103,6 +103,7 @@ class TestCleanLlmResponse:
 
 
 # ── run_markdown_quality_checks ──────────────────────────────────────
+
 
 class TestMarkdownQualityChecks:
     def test_removes_trailing_whitespace(self):
@@ -145,6 +146,7 @@ class TestMarkdownQualityChecks:
 
 
 # ── strip_body_frontmatter ────────────────────────────────────────────
+
 
 class TestStripBodyFrontmatter:
     def test_strips_valid_yaml_frontmatter(self):
@@ -217,6 +219,7 @@ class TestStripBodyFrontmatter:
 
 # ── Structured quality_fix records (A3 upgrade) ──────────────────────
 
+
 class TestStructuredFixRecords:
     """Each repair function emits {type, line?, before?, after?} dicts."""
 
@@ -278,6 +281,7 @@ class TestStructuredFixRecords:
 
 
 # ── Bold spacing repair ──────────────────────────────────────────────
+
 
 class TestBoldSpacingRepair:
     def test_repairs_cjk_adjacent_bold(self):
@@ -378,11 +382,12 @@ class TestLatexEscapeCollisions:
         # The actual bug path: LLM produces JSON, json.loads breaks the
         # LaTeX, repair restores it.
         import json
+
         llm_output = '{"q": "\\binom{n}{k}"}'  # LLM forgot to double-escape
         decoded = json.loads(llm_output)
-        assert decoded["q"] == "\x08inom{n}{k}"   # the bug
+        assert decoded["q"] == "\x08inom{n}{k}"  # the bug
         repaired, _ = repair_latex_escape_collisions(decoded["q"])
-        assert repaired == "\\binom{n}{k}"        # the fix
+        assert repaired == "\\binom{n}{k}"  # the fix
 
     def test_integrated_into_quality_pipeline(self):
         # run_markdown_quality_checks must include this repair so notes
@@ -398,9 +403,11 @@ if __name__ == "__main__":
 
 # ── Table Repair ───────────────────────────────────────────────────
 
+
 class TestTableRepair:
     def test_realigns_separator_columns(self):
         from core.parser import repair_markdown_tables
+
         text = "| H1 | H2 | H3 |\n| --- |\n| D1 | D2 | D3 |"
         res, fixes = repair_markdown_tables(text)
         assert "| --- | --- | --- |" in res
@@ -408,6 +415,7 @@ class TestTableRepair:
 
     def test_pads_missing_data_columns(self):
         from core.parser import repair_markdown_tables
+
         text = "| H1 | H2 | H3 |\n| --- | --- | --- |\n| D1 | D2 |"
         res, fixes = repair_markdown_tables(text)
         assert "| D1 | D2 |   |" in res
@@ -415,6 +423,7 @@ class TestTableRepair:
 
     def test_hides_interspersed_text(self):
         from core.parser import repair_markdown_tables
+
         text = "| H1 | H2 |\n| --- | --- |\n| D1 | D2 |\nThis is an explanation.\n| D3 | D4 |"
         res, fixes = repair_markdown_tables(text)
         assert "<!-- This is an explanation. -->" in res
@@ -422,6 +431,7 @@ class TestTableRepair:
 
     def test_leaves_valid_table_alone(self):
         from core.parser import repair_markdown_tables
+
         text = "| H1 | H2 |\n| --- | --- |\n| D1 | D2 |"
         res, fixes = repair_markdown_tables(text)
         assert res == text
@@ -430,8 +440,10 @@ class TestTableRepair:
 
 # ── R7-E: frontmatter + mermaid empty-label edge cases ──────────────────
 
+
 def test_frontmatter_without_trailing_newline():
     from core.parser import parse_markdown_metadata
+
     meta = parse_markdown_metadata("---\ntitle: X\ntags: [a]\n---")  # no trailing \n
     assert meta.get("title") == "X"
     assert "a" in meta.get("tags", [])
@@ -439,15 +451,18 @@ def test_frontmatter_without_trailing_newline():
 
 def test_mermaid_empty_label_preserved():
     from core.parser import _quote_labels_in_line
+
     out, changed = _quote_labels_in_line("A[]")
-    assert out == "A[]"          # shape preserved, not dropped
+    assert out == "A[]"  # shape preserved, not dropped
     assert changed is False
 
 
 # ── mindmap: flowchart quoting must not corrupt indentation-based nodes ──
 
+
 def test_mindmap_strips_node_quotes():
     from core.parser import repair_mermaid_mindmap_labels
+
     text = '```mermaid\nmindmap\n  root(("主題"))\n    "分支A"\n    id["分支B"]\n```'
     out, fixes = repair_mermaid_mindmap_labels(text)
     assert '"' not in out
@@ -457,6 +472,7 @@ def test_mindmap_strips_node_quotes():
 
 def test_mindmap_quote_strip_idempotent():
     from core.parser import repair_mermaid_mindmap_labels
+
     text = "```mermaid\nmindmap\n  root((主題))\n    分支A\n```"
     out, fixes = repair_mermaid_mindmap_labels(text)
     assert out == text and not fixes
@@ -465,6 +481,7 @@ def test_mindmap_quote_strip_idempotent():
 def test_label_quote_pass_skips_mindmap():
     # The flowchart label-quoter must NOT add quotes inside a mindmap block.
     from core.parser import repair_mermaid_label_quotes
+
     text = "```mermaid\nmindmap\n  root((主題))\n    id[分支A]\n```"
     out, fixes = repair_mermaid_label_quotes(text)
     assert 'id["分支A"]' not in out and out == text
@@ -473,6 +490,7 @@ def test_label_quote_pass_skips_mindmap():
 def test_label_quote_pass_still_quotes_flowchart():
     # Regression guard: flowchart blocks are still quoted as before.
     from core.parser import repair_mermaid_label_quotes
+
     text = "```mermaid\nflowchart TD\n  A[Hello] --> B[World]\n```"
     out, _ = repair_mermaid_label_quotes(text)
     assert 'A["Hello"]' in out and 'B["World"]' in out
@@ -481,6 +499,7 @@ def test_label_quote_pass_still_quotes_flowchart():
 def test_full_pipeline_mindmap_unquoted():
     # End-to-end: a mindmap with model-emitted quotes comes out clean.
     from core.parser import run_markdown_quality_checks
+
     text = '```mermaid\nmindmap\n  root(("成本病"))\n    "供給面"\n    "需求面"\n```'
     cleaned, _ = run_markdown_quality_checks(text)
     assert '"' not in cleaned
@@ -491,8 +510,10 @@ def test_full_pipeline_mindmap_unquoted():
 # Regression for argument_map silently producing nothing: LaTeX math in a JSON
 # string value (`$\Delta \chi^2$`) is an illegal escape that breaks json.loads.
 
+
 def test_extract_json_object_recovers_latex_backslashes():
     from core.parser import extract_json_object
+
     raw = '```json\n{"claim": "模型 $\\Delta \\chi^2$ 顯著", "grounds": ["\\mathcal{M}_0"]}\n```'
     out = extract_json_object(raw)
     assert out.get("claim", "").startswith("模型")
@@ -501,12 +522,14 @@ def test_extract_json_object_recovers_latex_backslashes():
 
 def test_extract_json_object_latex_simple():
     from core.parser import extract_json_object
+
     out = extract_json_object('{"x": "value with \\alpha and \\beta math"}')
     assert "alpha" in out.get("x", "")
 
 
 def test_extract_json_array_recovers_latex():
     from core.parser import extract_json_array
+
     out = extract_json_array('[{"t": "$\\Delta$ test"}, {"t": "ok"}]')
     assert len(out) == 2 and "test" in out[0]["t"]
 
@@ -514,6 +537,7 @@ def test_extract_json_array_recovers_latex():
 def test_extract_json_valid_unaffected():
     # Strict-parse-first: legal escapes (\n, \", \\) must be preserved exactly.
     from core.parser import extract_json_object
+
     out = extract_json_object('{"a": "line1\\nline2", "b": "say \\"hi\\"", "c": "back\\\\slash"}')
     assert out["a"] == "line1\nline2"
     assert out["b"] == 'say "hi"'
@@ -522,5 +546,6 @@ def test_extract_json_valid_unaffected():
 
 def test_extract_json_embedded_object_with_latex():
     from core.parser import extract_json_object
+
     out = extract_json_object('preamble text {"claim": "用 \\sigma 表示"} trailing')
     assert "sigma" in out.get("claim", "")

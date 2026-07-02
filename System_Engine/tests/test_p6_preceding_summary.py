@@ -12,18 +12,14 @@ Strategy mirrors P5:
 
 P6 must never make ingestion worse than P3 — same acceptance gate as P5.
 """
-import os
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+import os
+
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import pytest
 
 from services.thoughtful_splitter import (
-    BoundaryKind,
-    Chunk,
     ThoughtfulSplitter,
     _ContentHashCache,
     _SUMMARY_OPEN,
@@ -33,6 +29,7 @@ from services.thoughtful_splitter import (
 
 
 # ─── Test helpers ───────────────────────────────────────────────────
+
 
 class StubSummaryLLM:
     """Stub LLM that scripts `summarize_for_context` returns + records calls."""
@@ -81,9 +78,11 @@ def _splitter(stub_llm=None, **kw):
 
 # ─── summarize_for_context contract ─────────────────────────────────
 
+
 class TestSummarizeForContextContract:
     def setup_method(self):
         from services.llm_client import LLMClient
+
         self.client = LLMClient.__new__(LLMClient)
 
     def test_empty_input_returns_empty_without_llm_call(self):
@@ -98,6 +97,7 @@ class TestSummarizeForContextContract:
     def test_llm_failure_returns_empty(self):
         def boom(**kw):
             raise RuntimeError("LLM down")
+
         self.client._complete_text = boom
         result = self.client.summarize_for_context("real text")
         assert result["summary"] == ""
@@ -130,6 +130,7 @@ class TestSummarizeForContextContract:
 
 # ─── No LLM configured ─────────────────────────────────────────────
 
+
 class TestNoLlm:
     def test_emit_summary_true_but_no_llm_yields_empty_summaries(self):
         text = _long_paragraph_text()
@@ -142,6 +143,7 @@ class TestNoLlm:
 
 # ─── Happy paths ───────────────────────────────────────────────────
 
+
 class TestHappyPath:
     def test_first_chunk_summary_empty(self):
         text = _long_paragraph_text(n_paragraphs=12)
@@ -153,10 +155,12 @@ class TestHappyPath:
 
     def test_later_chunks_have_summary(self):
         text = _long_paragraph_text(n_paragraphs=12)
-        stub = StubSummaryLLM(responses=[
-            {"summary": "Summary for chunk 1."},
-            {"summary": "Summary for chunk 2."},
-        ])
+        stub = StubSummaryLLM(
+            responses=[
+                {"summary": "Summary for chunk 1."},
+                {"summary": "Summary for chunk 2."},
+            ]
+        )
         s = _splitter(stub_llm=stub, target_size=500, max_size=2000, min_size=100, snap_window=200)
         chunks = s.split_thoughtful(text, use_llm=False, emit_summary=True)
         assert len(chunks) >= 2
@@ -168,7 +172,14 @@ class TestHappyPath:
     def test_emit_summary_disables_overlap(self):
         text = _long_paragraph_text(n_paragraphs=12)
         stub = StubSummaryLLM(responses=[{"summary": "Summary."}])
-        s = _splitter(stub_llm=stub, target_size=500, max_size=2000, min_size=100, snap_window=200, overlap_chars=300)
+        s = _splitter(
+            stub_llm=stub,
+            target_size=500,
+            max_size=2000,
+            min_size=100,
+            snap_window=200,
+            overlap_chars=300,
+        )
         chunks = s.split_thoughtful(text, use_llm=False, emit_summary=True)
         for c in chunks:
             assert c.overlap_chars == 0, "overlap_chars should be 0 when summary is on"
@@ -195,6 +206,7 @@ class TestHappyPath:
 
 # ─── Failure modes ────────────────────────────────────────────────
 
+
 class TestFailureModes:
     def test_llm_raises_falls_back_to_empty_summary(self, caplog):
         text = _long_paragraph_text(n_paragraphs=12)
@@ -213,6 +225,7 @@ class TestFailureModes:
 
 
 # ─── Cache ─────────────────────────────────────────────────────────
+
 
 class TestCache:
     def test_repeated_chunk_hits_cache(self):
@@ -244,16 +257,28 @@ class TestCache:
     def test_disk_cache_persists(self, tmp_path):
         text = _long_paragraph_text(n_paragraphs=12)
         stub1 = StubSummaryLLM(responses=[{"summary": "Persisted."}])
-        s1 = _splitter(stub_llm=stub1, cache_dir=tmp_path,
-                       target_size=500, max_size=2000, min_size=100, snap_window=200)
+        s1 = _splitter(
+            stub_llm=stub1,
+            cache_dir=tmp_path,
+            target_size=500,
+            max_size=2000,
+            min_size=100,
+            snap_window=200,
+        )
         s1.split_thoughtful(text, use_llm=False, emit_summary=True)
         first = len(stub1.calls)
         assert first >= 1
 
         # New splitter, new stub, same disk cache.
         stub2 = StubSummaryLLM(responses=[{"summary": "WOULD BE NEW"}])
-        s2 = _splitter(stub_llm=stub2, cache_dir=tmp_path,
-                       target_size=500, max_size=2000, min_size=100, snap_window=200)
+        s2 = _splitter(
+            stub_llm=stub2,
+            cache_dir=tmp_path,
+            target_size=500,
+            max_size=2000,
+            min_size=100,
+            snap_window=200,
+        )
         chunks = s2.split_thoughtful(text, use_llm=False, emit_summary=True)
         assert stub2.calls == [], "second splitter should hit disk cache"
         # And the cached value should be applied:
@@ -274,6 +299,7 @@ class TestCache:
 
 
 # ─── _ContentHashCache directly ────────────────────────────────────
+
 
 class TestContentHashCacheGeneric:
     def test_round_trip_string_value(self, tmp_path):
@@ -298,6 +324,7 @@ class TestContentHashCacheGeneric:
 
     def test_corrupt_disk_payload_treated_as_miss(self, tmp_path):
         from hashlib import sha256
+
         key = sha256("test".encode()).hexdigest()
         (tmp_path / f"{key}.json").write_text("malformed json {{")
         c = _ContentHashCache(tmp_path)

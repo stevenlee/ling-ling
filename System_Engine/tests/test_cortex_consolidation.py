@@ -1,11 +1,9 @@
 """Nightly Cortex consolidation: candidate gating, merge-only-on-
 equivalent, contradiction links, quotas, adjudication cache, ledgers."""
+
 import json
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 from maintenance.cortex_consolidation import _pair_key, run_consolidation
 from services.cortex_store import load_all_pages, make_claim_id
@@ -13,6 +11,7 @@ from services.llm_client import LLMClient
 
 
 # ── Fakes ─────────────────────────────────────────────────────────────
+
 
 class FakeLLM:
     """extract_claims keyed by insight text marker; adjudicate by pair."""
@@ -33,16 +32,21 @@ class FakeLLM:
     def adjudicate_claims(self, claim_a, claim_b):
         self.adjudicate_calls.append((claim_a, claim_b))
         for (a, b), verdict in self.verdicts.items():
-            if {a, b} <= {claim_a, claim_b} or (a in claim_a and b in claim_b) or (a in claim_b and b in claim_a):
+            if (
+                {a, b} <= {claim_a, claim_b}
+                or (a in claim_a and b in claim_b)
+                or (a in claim_b and b in claim_a)
+            ):
                 return {"verdict": verdict, "rationale": "test"}
         return {"verdict": "unrelated", "rationale": "test"}
+
 
 class FakeRAG:
     """Embeddings by keyword so neighbor similarity is controllable."""
 
     VECTORS = {
         "ALPHA": [1.0, 0.0],
-        "NEARALPHA": [0.95, 0.312],   # cos vs ALPHA ≈ 0.95
+        "NEARALPHA": [0.95, 0.312],  # cos vs ALPHA ≈ 0.95
         "BETA": [0.0, 1.0],
     }
 
@@ -68,8 +72,16 @@ class FakeRAG:
         self.facets.append((title, facets))
 
 
-def _write_insight(insights_dir, name, *, body="insight body", refute="survived",
-                   groundedness=0.9, signals=True, sources=None):
+def _write_insight(
+    insights_dir,
+    name,
+    *,
+    body="insight body",
+    refute="survived",
+    groundedness=0.9,
+    signals=True,
+    sources=None,
+):
     insights_dir.mkdir(parents=True, exist_ok=True)
     lines = ["---"]
     if signals:
@@ -101,6 +113,7 @@ def _env(tmp_path):
 
 # ── Candidate gating ──────────────────────────────────────────────────
 
+
 class TestCandidateGating:
     def test_gates(self, tmp_path):
         env = _env(tmp_path)
@@ -110,10 +123,12 @@ class TestCandidateGating:
         _write_insight(env["insights_dir"], "nosignals.md", signals=False)
         _write_insight(env["insights_dir"], "nullground.md", body="MARKER-NULL", groundedness=None)
 
-        llm = FakeLLM(claims_map={
-            "MARKER-OK": [{"claim": "ALPHA claim about memory.", "summary": "s"}],
-            "MARKER-NULL": [{"claim": "BETA claim about sleep.", "summary": "s"}],
-        })
+        llm = FakeLLM(
+            claims_map={
+                "MARKER-OK": [{"claim": "ALPHA claim about memory.", "summary": "s"}],
+                "MARKER-NULL": [{"claim": "BETA claim about sleep.", "summary": "s"}],
+            }
+        )
         result = run_consolidation(llm, FakeRAG(), **env)
 
         # Only ok.md + nullground.md pass the gate.
@@ -145,13 +160,18 @@ class TestCandidateGating:
 
 # ── Verdict-driven actions ────────────────────────────────────────────
 
+
 class TestActions:
     def _seed_alpha_page(self, tmp_path, env):
         """First night: create the ALPHA page."""
         _write_insight(env["insights_dir"], "n1.md", body="MARKER-A", sources=["Doc X"])
-        llm = FakeLLM(claims_map={
-            "MARKER-A": [{"claim": "ALPHA: recall rewrites the memory trace.", "summary": "s1"}],
-        })
+        llm = FakeLLM(
+            claims_map={
+                "MARKER-A": [
+                    {"claim": "ALPHA: recall rewrites the memory trace.", "summary": "s1"}
+                ],
+            }
+        )
         run_consolidation(llm, FakeRAG(), **env)
         pages = load_all_pages(env["cortex_dir"])
         assert len(pages) == 1
@@ -163,9 +183,11 @@ class TestActions:
 
         _write_insight(env["insights_dir"], "n2.md", body="MARKER-B", sources=["Doc Y"])
         llm = FakeLLM(
-            claims_map={"MARKER-B": [
-                {"claim": "NEARALPHA: every retrieval re-encodes the trace.", "summary": "s2"},
-            ]},
+            claims_map={
+                "MARKER-B": [
+                    {"claim": "NEARALPHA: every retrieval re-encodes the trace.", "summary": "s2"},
+                ]
+            },
             verdicts={("NEARALPHA", "ALPHA"): "equivalent"},
         )
         result = run_consolidation(llm, FakeRAG(), **env)
@@ -190,16 +212,18 @@ class TestActions:
         for i in range(7):
             _write_insight(env["insights_dir"], f"m{i}.md", body=f"MARKER-V{i}")
             llm = FakeLLM(
-                claims_map={f"MARKER-V{i}": [
-                    {"claim": f"NEARALPHA variant {i} of the trace claim.", "summary": "s"},
-                ]},
+                claims_map={
+                    f"MARKER-V{i}": [
+                        {"claim": f"NEARALPHA variant {i} of the trace claim.", "summary": "s"},
+                    ]
+                },
                 verdicts={(f"variant {i}", "ALPHA"): "equivalent"},
             )
             run_consolidation(llm, FakeRAG(), **env, max_variants=3)
 
         page = load_all_pages(env["cortex_dir"])[0]
-        assert page.confidence == 0.9          # capped
-        assert len(page.variants) == 3         # capped, oldest dropped
+        assert page.confidence == 0.9  # capped
+        assert len(page.variants) == 3  # capped, oldest dropped
         # Spacing rule: seven same-night merges barely move S (R≈1 each time).
         assert 1.0 <= page.S < 1.1
 
@@ -209,9 +233,11 @@ class TestActions:
 
         _write_insight(env["insights_dir"], "n2.md", body="MARKER-C")
         llm = FakeLLM(
-            claims_map={"MARKER-C": [
-                {"claim": "NEARALPHA: recall never alters stored memories.", "summary": "s"},
-            ]},
+            claims_map={
+                "MARKER-C": [
+                    {"claim": "NEARALPHA: recall never alters stored memories.", "summary": "s"},
+                ]
+            },
             verdicts={("never alters", "ALPHA"): "contradicts"},
         )
         result = run_consolidation(llm, FakeRAG(), **env)
@@ -223,13 +249,15 @@ class TestActions:
         new = next(p for cid, p in pages.items() if cid != first.claim_id)
         assert new.claim_id in old.contradictions
         assert old.claim_id in new.contradictions
-        assert old.confidence == 0.3           # 0.5 - 0.2
+        assert old.confidence == 0.3  # 0.5 - 0.2
         assert new.confidence == 0.3
 
     def test_unrelated_creates_page_and_indexes(self, tmp_path):
         env = _env(tmp_path)
         _write_insight(env["insights_dir"], "n1.md", body="MARKER-A")
-        llm = FakeLLM(claims_map={"MARKER-A": [{"claim": "BETA: sleep consolidates memory.", "summary": "s"}]})
+        llm = FakeLLM(
+            claims_map={"MARKER-A": [{"claim": "BETA: sleep consolidates memory.", "summary": "s"}]}
+        )
         rag = FakeRAG()
 
         result = run_consolidation(llm, rag, **env)
@@ -244,19 +272,22 @@ class TestActions:
         claim = "ALPHA: recall rewrites the memory trace."
         _write_insight(env["insights_dir"], "n1.md", body="MARKER-A")
         _write_insight(env["insights_dir"], "n2.md", body="MARKER-B")
-        llm = FakeLLM(claims_map={
-            "MARKER-A": [{"claim": claim, "summary": "s1"}],
-            "MARKER-B": [{"claim": claim, "summary": "s2"}],
-        })
+        llm = FakeLLM(
+            claims_map={
+                "MARKER-A": [{"claim": claim, "summary": "s1"}],
+                "MARKER-B": [{"claim": claim, "summary": "s2"}],
+            }
+        )
         result = run_consolidation(llm, FakeRAG(), **env)
 
         assert result.created == 1 and result.merged == 1
-        assert llm.adjudicate_calls == []      # claim_id fast path
+        assert llm.adjudicate_calls == []  # claim_id fast path
         page = load_all_pages(env["cortex_dir"])[0]
         assert page.claim_id == make_claim_id(claim)
 
 
 # ── Quotas and cache ──────────────────────────────────────────────────
+
 
 class TestQuotasAndCache:
     def test_insight_quota(self, tmp_path):
@@ -288,7 +319,7 @@ class TestQuotasAndCache:
         result = run_consolidation(llm2, FakeRAG(), **env, max_adjudications=0)
 
         assert llm2.adjudicate_calls == []
-        assert result.created == 1            # falls through to new page
+        assert result.created == 1  # falls through to new page
 
     def test_cache_hit_skips_llm_and_is_order_invariant(self, tmp_path):
         env = _env(tmp_path)
@@ -301,8 +332,9 @@ class TestQuotasAndCache:
         # Night 2: adjudicated once (complementary → new page + link).
         _write_insight(env["insights_dir"], "n2.md", body="MARKER-B")
         claims_b = [{"claim": "NEARALPHA cousin claim.", "summary": "s"}]
-        llm2 = FakeLLM(claims_map={"MARKER-B": claims_b},
-                       verdicts={("NEARALPHA", "ALPHA"): "complementary"})
+        llm2 = FakeLLM(
+            claims_map={"MARKER-B": claims_b}, verdicts={("NEARALPHA", "ALPHA"): "complementary"}
+        )
         run_consolidation(llm2, FakeRAG(), **env)
         assert len(llm2.adjudicate_calls) == 1
 
@@ -329,7 +361,9 @@ class TestQuotasAndCache:
         )
 
         _write_insight(env["insights_dir"], "n2.md", body="MARKER-B")
-        llm2 = FakeLLM(claims_map={"MARKER-B": [{"claim": "BETA new sibling claim.", "summary": "s"}]})
+        llm2 = FakeLLM(
+            claims_map={"MARKER-B": [{"claim": "BETA new sibling claim.", "summary": "s"}]}
+        )
         run_consolidation(llm2, FakeRAG(), **env)
 
         # Cache entry was recomputed for the edited claim text.
@@ -353,10 +387,12 @@ class TestQuotasAndCache:
         env["state_file"].write_text(json.dumps(state), encoding="utf-8")
 
         _write_insight(env["insights_dir"], "n2.md", body="MARKER-B")
-        llm2 = FakeLLM(claims_map={"MARKER-B": [{"claim": "NEARALPHA cousin claim.", "summary": "s"}]})
+        llm2 = FakeLLM(
+            claims_map={"MARKER-B": [{"claim": "NEARALPHA cousin claim.", "summary": "s"}]}
+        )
         result = run_consolidation(llm2, FakeRAG(), **env)
 
-        assert result.status == "succeeded"          # no ValueError crash
+        assert result.status == "succeeded"  # no ValueError crash
         assert result.insights_processed == 1
         # The stale 3-dim vector was re-embedded back to the live 2-dim width.
         state = json.loads(env["state_file"].read_text())
@@ -378,6 +414,7 @@ class TestQuotasAndCache:
 
 # ── LLM method defenses (mock _complete_text; no provider calls) ──────
 
+
 class TestLLMDefenses:
     def _client(self, monkeypatch, response):
         client = LLMClient()
@@ -385,12 +422,14 @@ class TestLLMDefenses:
         return client
 
     def test_extract_claims_parses_and_caps(self, monkeypatch):
-        response = json.dumps([
-            {"claim": "Claim number one is long enough.", "summary": "s1"},
-            {"claim": "Claim number two is long enough.", "summary": "s2"},
-            {"claim": "Claim number three is long enough.", "summary": "s3"},
-            {"claim": "Claim number four is long enough.", "summary": "s4"},
-        ])
+        response = json.dumps(
+            [
+                {"claim": "Claim number one is long enough.", "summary": "s1"},
+                {"claim": "Claim number two is long enough.", "summary": "s2"},
+                {"claim": "Claim number three is long enough.", "summary": "s3"},
+                {"claim": "Claim number four is long enough.", "summary": "s4"},
+            ]
+        )
         out = self._client(monkeypatch, response).extract_claims("text")
         assert len(out) == 3
         assert out[0]["claim"].startswith("Claim number one")
@@ -404,7 +443,7 @@ class TestLLMDefenses:
         env = _env(tmp_path)
         _write_insight(env["insights_dir"], "n1.md", body="x")
         result = run_consolidation(MagicMock(), FakeRAG(), **env)
-        assert result.created == 0            # mock claims filtered out, no crash
+        assert result.created == 0  # mock claims filtered out, no crash
 
     def test_adjudicate_valid_and_illegal(self, monkeypatch):
         ok = self._client(monkeypatch, '{"verdict": "Equivalent", "rationale": "r"}')
@@ -418,6 +457,7 @@ class TestLLMDefenses:
 
 
 # ── Phase 2.5: falsifiability wiring, anchoring, penetration ──────────
+
 
 class FalsifiabilityFakeLLM(FakeLLM):
     """FakeLLM + configurable fifth signal; counts assessment calls."""
@@ -447,15 +487,15 @@ class TestFalsifiabilityWiring:
     def test_confidence_formula_four_points(self, tmp_path):
         # score 0 → 0.3; 0.5 → 0.5; 1.0 → 0.7
         for score, expected in ((0.0, 0.3), (0.5, 0.5), (1.0, 0.7)):
-            page = self._run_one(
-                tmp_path / f"s{score}", FalsifiabilityFakeLLM(score=score)
-            )
+            page = self._run_one(tmp_path / f"s{score}", FalsifiabilityFakeLLM(score=score))
             assert page.confidence == expected, (score, page.confidence)
             assert page.falsifiability == score
+
         # score None（解析失敗）→ 未測量 → 0.5
         class NoneScoreLLM(FalsifiabilityFakeLLM):
             def assess_falsifiability(self, claim):
                 return {"score": None, "falsifier": ""}
+
         page = self._run_one(tmp_path / "snone", NoneScoreLLM())
         assert page.confidence == 0.5
         assert page.falsifiability is None
@@ -463,13 +503,15 @@ class TestFalsifiabilityWiring:
     def test_out_of_range_score_clamped(self, tmp_path):
         page = self._run_one(tmp_path, FalsifiabilityFakeLLM(score=7.5))
         assert page.falsifiability == 1.0
-        assert page.confidence == 0.7          # 不是 3.3
+        assert page.confidence == 0.7  # 不是 3.3
 
     def test_llm_without_method_fails_open(self, tmp_path):
         # Phase 2 的 FakeLLM 沒有 assess_falsifiability —— 必須照常運作
         env = _env(tmp_path)
         _write_insight(env["insights_dir"], "n1.md", body="MARKER-A")
-        llm = FakeLLM(claims_map={"MARKER-A": [{"claim": "BETA plain claim here.", "summary": "s"}]})
+        llm = FakeLLM(
+            claims_map={"MARKER-A": [{"claim": "BETA plain claim here.", "summary": "s"}]}
+        )
         run_consolidation(llm, FakeRAG(), **env)
         page = load_all_pages(env["cortex_dir"])[0]
         assert page.falsifiability is None and page.confidence == 0.5
@@ -478,13 +520,12 @@ class TestFalsifiabilityWiring:
         class CrashLLM(FalsifiabilityFakeLLM):
             def assess_falsifiability(self, claim):
                 raise RuntimeError("provider down")
+
         page = self._run_one(tmp_path, CrashLLM())
         assert page.falsifiability is None and page.confidence == 0.5
 
     def test_applies_when_lands_on_page(self, tmp_path):
-        page = self._run_one(
-            tmp_path, FalsifiabilityFakeLLM(), applies_when="處理長文拆解時"
-        )
+        page = self._run_one(tmp_path, FalsifiabilityFakeLLM(), applies_when="處理長文拆解時")
         assert page.applies_when == "處理長文拆解時"
 
     def test_merge_path_never_reassesses(self, tmp_path):
@@ -494,7 +535,7 @@ class TestFalsifiabilityWiring:
             claims_map={"MARKER-A": [{"claim": "ALPHA base claim text.", "summary": "s"}]}
         )
         run_consolidation(llm1, FakeRAG(), **env)
-        assert len(llm1.assess_calls) == 1     # 建頁評一次
+        assert len(llm1.assess_calls) == 1  # 建頁評一次
 
         _write_insight(env["insights_dir"], "n2.md", body="MARKER-B")
         llm2 = FalsifiabilityFakeLLM(
@@ -503,23 +544,24 @@ class TestFalsifiabilityWiring:
         )
         result = run_consolidation(llm2, FakeRAG(), **env)
         assert result.merged == 1
-        assert llm2.assess_calls == []         # merge 路徑零額外 call
+        assert llm2.assess_calls == []  # merge 路徑零額外 call
 
 
 class TestWikilinkPenetration:
     def test_sources_mined_filtered_and_capped(self, tmp_path, monkeypatch):
         import maintenance.cortex_consolidation as cc
+
         pages_dir = tmp_path / "pages"
         notes_dir = tmp_path / "Notes"
-        pages_dir.mkdir(); notes_dir.mkdir()
+        pages_dir.mkdir()
+        notes_dir.mkdir()
         for name in ("P1", "P2", "P3", "P4", "P5", "P6"):
             (pages_dir / f"{name}.md").write_text("x", encoding="utf-8")
         monkeypatch.setattr(cc, "PAGES_DIR", pages_dir)
         monkeypatch.setattr(cc, "NOTES_DIR", notes_dir)
 
         env = _env(tmp_path)
-        body = ("MARKER-A 引用 [[P1]] [[P2|alias]] [[P3#sec]] [[Ghost]] "
-                "[[P4]] [[P5]] [[P6]] [[P1]]")
+        body = "MARKER-A 引用 [[P1]] [[P2|alias]] [[P3#sec]] [[Ghost]] [[P4]] [[P5]] [[P6]] [[P1]]"
         _write_insight(env["insights_dir"], "n1.md", body=body, sources=["P1"])
         llm = FalsifiabilityFakeLLM(
             claims_map={"MARKER-A": [{"claim": "BETA sourced claim text.", "summary": "s"}]}
@@ -528,6 +570,6 @@ class TestWikilinkPenetration:
 
         page = load_all_pages(env["cortex_dir"])[0]
         sources = page.evidence[0]["sources"]
-        assert "Ghost" not in sources           # 存在性過濾
-        assert len(sources) == 5                # 上限 5
-        assert sources[0] == "P1"               # frontmatter 來源優先且去重
+        assert "Ghost" not in sources  # 存在性過濾
+        assert len(sources) == 5  # 上限 5
+        assert sources[0] == "P1"  # frontmatter 來源優先且去重

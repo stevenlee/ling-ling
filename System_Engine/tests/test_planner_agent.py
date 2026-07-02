@@ -4,17 +4,16 @@ No real LLM, no daemon. Uses a stub LLMClient that returns canned
 answer_query output and exposes a real CapabilityManager so the
 capability listing reflects production-shaped data.
 """
+
 import json
 import os
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import pytest
 
-from services.capability_manager import CapabilityManager, CapabilitySpec
+from services.capability_manager import CapabilitySpec
 from agents.planner_agent import PlannerAgent
 from services.pipeline_runner import PipelineSpec, PipelineStep
 
@@ -56,10 +55,12 @@ class _FakeLLM:
         self.calls: list[dict] = []
 
     def answer_query(self, query_content, wiki_context="", **kwargs):
-        self.calls.append({
-            "query": query_content,
-            **kwargs,
-        })
+        self.calls.append(
+            {
+                "query": query_content,
+                **kwargs,
+            }
+        )
         return self.response
 
     def current_trace_ids(self):
@@ -90,12 +91,14 @@ def _planner(llm) -> PlannerAgent:
     agent._writes = []
 
     def fake_write_report(title, body, report_type, metadata=None):
-        agent._writes.append({
-            "title": title,
-            "body": body,
-            "report_type": report_type,
-            "metadata": metadata or {},
-        })
+        agent._writes.append(
+            {
+                "title": title,
+                "body": body,
+                "report_type": report_type,
+                "metadata": metadata or {},
+            }
+        )
         return (Path("/fake/report.md"), body)
 
     agent._write_report = fake_write_report  # type: ignore[assignment]
@@ -108,15 +111,30 @@ def _planner(llm) -> PlannerAgent:
 class TestCapabilityListing:
     def test_groups_operations_and_skills(self):
         caps = [
-            _spec("synthesize", type="operation", description="combine inputs",
-                  expected_inputs=("part_digests",), produces=("synthesis_text",),
-                  cost_class="medium"),
-            _spec("critique", type="operation", description="evaluate",
-                  expected_inputs=("candidate", "sources"), produces=("critique_findings",),
-                  cost_class="low"),
-            _spec("recency", type="skill", description="recent additions",
-                  expected_inputs=("user_directive",), produces=("insight_report",),
-                  cost_class="low"),
+            _spec(
+                "synthesize",
+                type="operation",
+                description="combine inputs",
+                expected_inputs=("part_digests",),
+                produces=("synthesis_text",),
+                cost_class="medium",
+            ),
+            _spec(
+                "critique",
+                type="operation",
+                description="evaluate",
+                expected_inputs=("candidate", "sources"),
+                produces=("critique_findings",),
+                cost_class="low",
+            ),
+            _spec(
+                "recency",
+                type="skill",
+                description="recent additions",
+                expected_inputs=("user_directive",),
+                produces=("insight_report",),
+                cost_class="low",
+            ),
         ]
         out = PlannerAgent._format_capability_listing(caps)
         assert "Operations" in out
@@ -129,8 +147,10 @@ class TestCapabilityListing:
 
     def test_entry_includes_metadata(self):
         c = _spec(
-            "synthesize", description="combine",
-            expected_inputs=("part_digests",), produces=("synthesis_text",),
+            "synthesize",
+            description="combine",
+            expected_inputs=("part_digests",),
+            produces=("synthesis_text",),
             cost_class="medium",
         )
         entry = PlannerAgent._format_capability_entry(c)
@@ -150,11 +170,15 @@ class TestRenderPlanReport:
             description="synth then critique",
             steps=(
                 PipelineStep(
-                    id="synth", capability="synthesize", adapter="llm.synthesize",
+                    id="synth",
+                    capability="synthesize",
+                    adapter="llm.synthesize",
                     inputs={"title": "${context.title}"},
                 ),
                 PipelineStep(
-                    id="crit", capability="critique", adapter="llm.critique",
+                    id="crit",
+                    capability="critique",
+                    adapter="llm.critique",
                     inputs={"candidate": "${steps.synth.output}"},
                     when={"var": "steps.synth.output", "op": "nonempty"},
                 ),
@@ -167,24 +191,41 @@ class TestRenderPlanReport:
             "description": "synth then critique",
             "summary": "Synthesize the doc, then critique the synthesis.",
             "steps": [
-                {"id": "synth", "capability": "synthesize", "adapter": "llm.synthesize",
-                 "inputs": {"title": "${context.title}"},
-                 "rationale": "Build a coherent summary."},
-                {"id": "crit", "capability": "critique", "adapter": "llm.critique",
-                 "when": {"var": "steps.synth.output", "op": "nonempty"},
-                 "inputs": {"candidate": "${steps.synth.output}"},
-                 "rationale": "Check the synthesis for defects."},
+                {
+                    "id": "synth",
+                    "capability": "synthesize",
+                    "adapter": "llm.synthesize",
+                    "inputs": {"title": "${context.title}"},
+                    "rationale": "Build a coherent summary.",
+                },
+                {
+                    "id": "crit",
+                    "capability": "critique",
+                    "adapter": "llm.critique",
+                    "when": {"var": "steps.synth.output", "op": "nonempty"},
+                    "inputs": {"candidate": "${steps.synth.output}"},
+                    "rationale": "Check the synthesis for defects.",
+                },
             ],
         }
 
     def test_report_contains_summary_and_each_step(self):
-        agent = _planner(_FakeLLM(_FakeCapMgr([
-            _spec("synthesize"), _spec("critique"),
-        ])))
+        agent = _planner(
+            _FakeLLM(
+                _FakeCapMgr(
+                    [
+                        _spec("synthesize"),
+                        _spec("critique"),
+                    ]
+                )
+            )
+        )
         spec = self._build_spec()
         plan_dict = self._build_plan_dict()
         report = agent._render_plan_report(
-            spec, plan_dict, "directive text",
+            spec,
+            plan_dict,
+            "directive text",
             agent._collect_capabilities(),
         )
         assert "Synthesize the doc, then critique" in report
@@ -201,7 +242,9 @@ class TestRenderPlanReport:
         agent = _planner(_FakeLLM(_FakeCapMgr([_spec("critique")])))  # synth missing
         spec = self._build_spec()
         report = agent._render_plan_report(
-            spec, self._build_plan_dict(), "directive",
+            spec,
+            self._build_plan_dict(),
+            "directive",
             agent._collect_capabilities(),
         )
         assert "NOT in registry" in report
@@ -210,7 +253,9 @@ class TestRenderPlanReport:
     def test_report_marks_no_execution(self):
         agent = _planner(_FakeLLM(_FakeCapMgr([_spec("synthesize"), _spec("critique")])))
         report = agent._render_plan_report(
-            self._build_spec(), self._build_plan_dict(), "directive",
+            self._build_spec(),
+            self._build_plan_dict(),
+            "directive",
             agent._collect_capabilities(),
         )
         # The IMPORTANT callout must be present.
@@ -253,12 +298,22 @@ Here is the plan you asked for.
 
 class TestPlannerExecute:
     def _make_caps(self):
-        return _FakeCapMgr([
-            _spec("synthesize", expected_inputs=("part_digests", "title"),
-                  produces=("synthesis_text",), cost_class="medium"),
-            _spec("critique", expected_inputs=("candidate", "sources"),
-                  produces=("critique_findings",), cost_class="low"),
-        ])
+        return _FakeCapMgr(
+            [
+                _spec(
+                    "synthesize",
+                    expected_inputs=("part_digests", "title"),
+                    produces=("synthesis_text",),
+                    cost_class="medium",
+                ),
+                _spec(
+                    "critique",
+                    expected_inputs=("candidate", "sources"),
+                    produces=("critique_findings",),
+                    cost_class="low",
+                ),
+            ]
+        )
 
     def test_empty_directive_errors_out(self):
         agent = _planner(_FakeLLM(self._make_caps()))
@@ -296,6 +351,7 @@ class TestPlannerExecute:
     def test_happy_path_writes_plan_report(self, tmp_path, monkeypatch):
         # Redirect PLANS_DIR so sidecar JSON lands in tmp, not the vault.
         import agents.planner_agent as pa_mod
+
         monkeypatch.setattr(pa_mod, "PLANS_DIR", tmp_path)
 
         llm = _FakeLLM(self._make_caps(), response=_HAPPY_LLM_RESPONSE)
@@ -365,17 +421,28 @@ class TestResolvePlanCapabilities:
     def test_records_per_step_status(self):
         caps = [_spec("synthesize"), _spec("critique")]
         spec = PipelineSpec(
-            id="x", description="",
+            id="x",
+            description="",
             steps=(
                 PipelineStep(id="a", capability="synthesize", adapter="llm.synthesize"),
-                PipelineStep(id="b", capability="ghost",      adapter="llm.ghost"),
+                PipelineStep(id="b", capability="ghost", adapter="llm.ghost"),
             ),
         )
         res = PlannerAgent._resolve_plan_capabilities(spec, caps)
         assert res == {
             "steps": [
-                {"step_id": "a", "capability": "synthesize", "registered": True,  "adapter": "llm.synthesize"},
-                {"step_id": "b", "capability": "ghost",      "registered": False, "adapter": "llm.ghost"},
+                {
+                    "step_id": "a",
+                    "capability": "synthesize",
+                    "registered": True,
+                    "adapter": "llm.synthesize",
+                },
+                {
+                    "step_id": "b",
+                    "capability": "ghost",
+                    "registered": False,
+                    "adapter": "llm.ghost",
+                },
             ],
         }
 

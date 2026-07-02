@@ -30,7 +30,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 import yaml
 
@@ -97,8 +97,7 @@ class PipelineSpec:
 # ─── YAML loader ─────────────────────────────────────────────────────
 
 
-_VALID_WHEN_OPS = frozenset({"exists", "missing", "nonempty", "empty",
-                              "equals", "not_equals"})
+_VALID_WHEN_OPS = frozenset({"exists", "missing", "nonempty", "empty", "equals", "not_equals"})
 
 
 def load_pipeline_from_dict(
@@ -114,7 +113,7 @@ def load_pipeline_from_dict(
     `default_id` is used when the data omits `id:` (typically the source
     file stem); for in-memory plans Planner should always supply `id:`.
     """
-    label = (source_path.name if source_path else "<in-memory>")
+    label = source_path.name if source_path else "<in-memory>"
 
     if not isinstance(data, dict):
         raise PipelineError(f"pipeline {label}: top-level must be a mapping")
@@ -131,48 +130,38 @@ def load_pipeline_from_dict(
     steps: list[PipelineStep] = []
     for idx, raw in enumerate(raw_steps):
         if not isinstance(raw, dict):
-            raise PipelineError(
-                f"pipeline {label}: step #{idx} is not a mapping"
-            )
+            raise PipelineError(f"pipeline {label}: step #{idx} is not a mapping")
         step_id = raw.get("id")
         if not isinstance(step_id, str) or not step_id:
-            raise PipelineError(
-                f"pipeline {label}: step #{idx} missing string 'id'"
-            )
+            raise PipelineError(f"pipeline {label}: step #{idx} missing string 'id'")
         if step_id in seen_ids:
-            raise PipelineError(
-                f"pipeline {label}: duplicate step id {step_id!r}"
-            )
+            raise PipelineError(f"pipeline {label}: duplicate step id {step_id!r}")
         seen_ids.add(step_id)
 
         capability = raw.get("capability")
         if not isinstance(capability, str) or not capability:
-            raise PipelineError(
-                f"pipeline {label}: step {step_id!r} missing 'capability'"
-            )
+            raise PipelineError(f"pipeline {label}: step {step_id!r} missing 'capability'")
         adapter = raw.get("adapter")
         if not isinstance(adapter, str) or not adapter:
-            raise PipelineError(
-                f"pipeline {label}: step {step_id!r} missing 'adapter'"
-            )
+            raise PipelineError(f"pipeline {label}: step {step_id!r} missing 'adapter'")
 
         inputs = raw.get("inputs") or {}
         if not isinstance(inputs, dict):
-            raise PipelineError(
-                f"pipeline {label}: step {step_id!r} 'inputs' must be a mapping"
-            )
+            raise PipelineError(f"pipeline {label}: step {step_id!r} 'inputs' must be a mapping")
 
         when = raw.get("when")
         if when is not None:
             _validate_when(when, label, step_id)
 
-        steps.append(PipelineStep(
-            id=step_id,
-            capability=capability,
-            adapter=adapter,
-            inputs=inputs,
-            when=when,
-        ))
+        steps.append(
+            PipelineStep(
+                id=step_id,
+                capability=capability,
+                adapter=adapter,
+                inputs=inputs,
+                when=when,
+            )
+        )
 
     return PipelineSpec(
         id=pipeline_id,
@@ -209,9 +198,7 @@ def load_pipeline(path: Path | str) -> PipelineSpec:
 
 def _validate_when(when: Any, pipeline_name: str, step_id: str) -> None:
     if not isinstance(when, dict):
-        raise PipelineError(
-            f"pipeline {pipeline_name}: step {step_id!r} 'when' must be a mapping"
-        )
+        raise PipelineError(f"pipeline {pipeline_name}: step {step_id!r} 'when' must be a mapping")
     if not isinstance(when.get("var"), str) or not when["var"]:
         raise PipelineError(
             f"pipeline {pipeline_name}: step {step_id!r} 'when.var' must be a string path"
@@ -314,7 +301,7 @@ def _eval_when(when: dict | None, env: dict) -> bool:
 @dataclass
 class StepResult:
     id: str
-    status: str                  # "succeeded" | "failed" | "skipped"
+    status: str  # "succeeded" | "failed" | "skipped"
     output: Any = None
     error: str | None = None
     duration_ms: int | None = None
@@ -324,7 +311,7 @@ class StepResult:
 class PipelineRunResult:
     pipeline_id: str
     run_id: str | None
-    status: str                  # "succeeded" | "failed"
+    status: str  # "succeeded" | "failed"
     steps: dict[str, StepResult] = field(default_factory=dict)
     error: str | None = None
 
@@ -417,14 +404,16 @@ class PipelineRunner:
             should_run = _eval_when(step.when, env)
         except PipelineError as e:
             self._record_step_artifact(
-                step, status="failed",
+                step,
+                status="failed",
                 metadata={"error": f"when-eval: {e}"},
             )
             return StepResult(id=step.id, status="failed", error=str(e))
 
         if not should_run:
             self._record_step_artifact(
-                step, status="skipped",
+                step,
+                status="skipped",
                 metadata={"reason": "when_false"},
             )
             logging.debug(f"pipeline step {step.id!r} skipped (when=false)")
@@ -455,7 +444,8 @@ class PipelineRunner:
                 resolved_inputs = _resolve_inputs(step.inputs, env)
             except PipelineError as e:
                 self._record_step_artifact(
-                    step, status="failed",
+                    step,
+                    status="failed",
                     metadata={"error": f"input-resolve: {e}"},
                 )
                 return StepResult(id=step.id, status="failed", error=str(e))
@@ -465,8 +455,7 @@ class PipelineRunner:
             # post-validate de-registration.
             if adapter is None:
                 err = f"adapter {step.adapter!r} not registered"
-                self._record_step_artifact(step, status="failed",
-                                            metadata={"error": err})
+                self._record_step_artifact(step, status="failed", metadata={"error": err})
                 return StepResult(id=step.id, status="failed", error=err)
 
             started = time.perf_counter()
@@ -475,27 +464,27 @@ class PipelineRunner:
             except Exception as e:
                 duration = int(round((time.perf_counter() - started) * 1000))
                 self._record_step_artifact(
-                    step, status="failed",
+                    step,
+                    status="failed",
                     metadata={
                         "inputs": resolved_inputs,
                         "error": str(e),
                         "duration_ms": duration,
                     },
                 )
-                return StepResult(id=step.id, status="failed",
-                                  error=str(e), duration_ms=duration)
+                return StepResult(id=step.id, status="failed", error=str(e), duration_ms=duration)
 
             duration = int(round((time.perf_counter() - started) * 1000))
             self._record_step_artifact(
-                step, status="succeeded",
+                step,
+                status="succeeded",
                 metadata={
                     "inputs": resolved_inputs,
                     "output": output,
                     "duration_ms": duration,
                 },
             )
-            return StepResult(id=step.id, status="succeeded",
-                              output=output, duration_ms=duration)
+            return StepResult(id=step.id, status="succeeded", output=output, duration_ms=duration)
 
     def _record_step_artifact(
         self,
@@ -530,7 +519,9 @@ class PipelineRunner:
 
 class _null_context:
     """Stand-in for TraceStore.run() when no trace store is provided."""
+
     def __enter__(self) -> None:
         return None
+
     def __exit__(self, *exc) -> None:
         return None

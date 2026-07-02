@@ -1,19 +1,17 @@
-import sys
 from pathlib import Path
 import pytest
-import hashlib
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 from services.rag_manager import (
     RAGManager,
     OllamaEmbeddingFunction,
     GeminiEmbeddingFunction,
-    get_effective_model_name
+    get_effective_model_name,
 )
 import services.rag_manager as rag_module
 import importlib
+
 migration_002 = importlib.import_module("maintenance.migrations.002_expand_metadata_keys")
 
 
@@ -33,20 +31,18 @@ class TestEmbeddingFunctions:
         # Mock requests response
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "embeddings": [[0.1, 0.2] * 384, [0.3, 0.4] * 384]
-        }
+        mock_response.json.return_value = {"embeddings": [[0.1, 0.2] * 384, [0.3, 0.4] * 384]}
         mock_post.return_value = mock_response
 
         fn = OllamaEmbeddingFunction(api_base="http://test-ollama", model_name="nomic-embed-text")
         embeddings = fn(["hello", "world"])
-        
+
         assert len(embeddings) == 2
         assert len(embeddings[0]) == 768
         mock_post.assert_called_once_with(
             "http://test-ollama/api/embed",
             json={"model": "nomic-embed-text", "input": ["hello", "world"]},
-            timeout=60
+            timeout=60,
         )
 
     @patch("requests.post")
@@ -58,11 +54,11 @@ class TestEmbeddingFunctions:
         def resp_for(*args, **kwargs):
             inp = kwargs["json"]["input"]
             r = MagicMock()
-            if len(inp) > 1:                       # the batch call → NaN 500
+            if len(inp) > 1:  # the batch call → NaN 500
                 r.status_code = 500
                 r.text = '{"error":"failed to encode response: json: unsupported value: NaN"}'
                 return r
-            if inp[0] == "bad":                    # the offending single input
+            if inp[0] == "bad":  # the offending single input
                 r.status_code = 500
                 r.text = "NaN"
                 return r
@@ -72,10 +68,12 @@ class TestEmbeddingFunctions:
 
         mock_post.side_effect = resp_for
         fn = OllamaEmbeddingFunction(api_base="http://t", model_name="bge-m3", max_chars=0)
-        out = fn(["ok1", "bad", "ok2"])   # chromadb coerces to ndarray → element-wise asserts
+        out = fn(["ok1", "bad", "ok2"])  # chromadb coerces to ndarray → element-wise asserts
         assert len(out) == 3
         assert out[0][0] == 0.5 and out[2][0] == 0.5 and out[0][-1] == 0.5
-        assert len(out[1]) == 1024 and out[1][0] == 1.0 and float(sum(out[1][1:])) == 0.0  # unit placeholder
+        assert (
+            len(out[1]) == 1024 and out[1][0] == 1.0 and float(sum(out[1][1:])) == 0.0
+        )  # unit placeholder
 
     @patch("requests.post")
     def test_ollama_nan_in_200_response_isolated(self, mock_post):
@@ -86,7 +84,7 @@ class TestEmbeddingFunctions:
             inp = kwargs["json"]["input"]
             r = MagicMock()
             r.status_code = 200
-            if len(inp) > 1:                       # batch returns a NaN vector
+            if len(inp) > 1:  # batch returns a NaN vector
                 r.json.return_value = {"embeddings": [good, nan_vec]}
             else:
                 r.json.return_value = {"embeddings": [nan_vec if inp[0] == "bad" else good]}
@@ -108,6 +106,7 @@ class TestEmbeddingFunctions:
         mock_post.return_value = r
         fn = OllamaEmbeddingFunction(api_base="http://t", model_name="bge-m3", max_chars=0)
         import pytest
+
         with pytest.raises(RuntimeError):
             fn(["a", "b"])
 
@@ -116,25 +115,24 @@ class TestEmbeddingFunctions:
         mock_client_class = MagicMock()
         mock_client = MagicMock()
         mock_response = MagicMock()
-        
+
         mock_emb_1 = MagicMock()
         mock_emb_1.values = [0.1] * 768
         mock_emb_2 = MagicMock()
         mock_emb_2.values = [0.2] * 768
         mock_response.embeddings = [mock_emb_1, mock_emb_2]
-        
+
         mock_client.models.embed_content.return_value = mock_response
         mock_client_class.return_value = mock_client
 
         with patch("google.genai.Client", mock_client_class):
             fn = GeminiEmbeddingFunction(api_key="test-key", model_name="text-embedding-004")
             embeddings = fn(["hello", "world"])
-            
+
             assert len(embeddings) == 2
             assert len(embeddings[0]) == 768
             mock_client.models.embed_content.assert_called_once_with(
-                model="text-embedding-004",
-                contents=["hello", "world"]
+                model="text-embedding-004", contents=["hello", "world"]
             )
 
 
@@ -156,37 +154,21 @@ class TestRAGManagerLogic:
 
     def test_build_where_clause(self):
         manager = RAGManager(db_path="test_temp_db_where", skip_config_check=True)
-        
+
         # Test tags only
         where = manager._build_where_clause(tags=["Completed", "History"])
-        assert where == {
-            "$and": [
-                {"tag_completed": True},
-                {"tag_history": True}
-            ]
-        }
-        
+        assert where == {"$and": [{"tag_completed": True}, {"tag_history": True}]}
+
         # Test section path only
         where_sec = manager._build_where_clause(section_path=["Chapter 1", "Introduction"])
-        assert where_sec == {
-            "$and": [
-                {"section_l1": "chapter 1"},
-                {"section_l2": "introduction"}
-            ]
-        }
+        assert where_sec == {"$and": [{"section_l1": "chapter 1"}, {"section_l2": "introduction"}]}
 
         # Test combined with caller custom where filter
         where_combined = manager._build_where_clause(
-            tags=["Completed"],
-            section_path=["Chapter 1"],
-            where_filter={"doc_id": "test_doc"}
+            tags=["Completed"], section_path=["Chapter 1"], where_filter={"doc_id": "test_doc"}
         )
         assert where_combined == {
-            "$and": [
-                {"tag_completed": True},
-                {"section_l1": "chapter 1"},
-                {"doc_id": "test_doc"}
-            ]
+            "$and": [{"tag_completed": True}, {"section_l1": "chapter 1"}, {"doc_id": "test_doc"}]
         }
 
         # Test empty input
@@ -195,30 +177,34 @@ class TestRAGManagerLogic:
         # Cleanup test DB
         manager.wipe_collection()
         import shutil
+
         shutil.rmtree(manager.db_dir, ignore_errors=True)
 
     def test_fail_fast_mismatch_guard(self, tmpdir):
         # Create a mock database collection with a mismatching configuration
         db_path = Path(tmpdir) / "test_mismatch_db"
-        
+
         # Initialize RAGManager with local default
-        with patch("services.rag_manager.EMBEDDING_PROVIDER", "local"), \
-             patch("services.rag_manager.EMBEDDING_MODEL", None):
+        with (
+            patch("services.rag_manager.EMBEDDING_PROVIDER", "local"),
+            patch("services.rag_manager.EMBEDDING_MODEL", None),
+        ):
             manager = RAGManager(db_path=str(db_path))
             # Insert a dummy chunk to count > 0
             manager.collection.add(
                 ids=["chunk_1"],
                 documents=["test content"],
-                metadatas=[{"title": "test_doc", "doc_id": "abc"}]
+                metadatas=[{"title": "test_doc", "doc_id": "abc"}],
             )
             # metadata is currently: provider=local, model=all-MiniLM-L6-v2, dimension=384
             assert manager.collection.metadata["embedding_provider"] == "local"
 
         # Now, try initializing with ollama. It should raise ValueError
-        with patch("services.rag_manager.EMBEDDING_PROVIDER", "ollama"), \
-             patch("services.rag_manager.EMBEDDING_MODEL", "nomic-embed-text"), \
-             patch("services.rag_manager.OllamaEmbeddingFunction") as mock_ollama_ef:
-            
+        with (
+            patch("services.rag_manager.EMBEDDING_PROVIDER", "ollama"),
+            patch("services.rag_manager.EMBEDDING_MODEL", "nomic-embed-text"),
+            patch("services.rag_manager.OllamaEmbeddingFunction") as mock_ollama_ef,
+        ):
             # Setup mock Ollama function return dimensions
             mock_instance = MagicMock()
             mock_instance.return_value = [[0.1] * 768]
@@ -226,21 +212,22 @@ class TestRAGManagerLogic:
 
             with pytest.raises(ValueError) as exc_info:
                 RAGManager(db_path=str(db_path))
-            
+
             assert "Embedding configuration mismatch detected!" in str(exc_info.value)
 
         # Cleanup
         import shutil
+
         shutil.rmtree(db_path, ignore_errors=True)
 
     def test_doc_id_generation(self):
         # Ensure SHA-256 hash is collision-free and stable
         filepath_1 = Path("pages/a/b.md")
         filepath_2 = Path("pages/a_b.md")
-        
+
         doc_id_1 = RAGManager._get_doc_id(filepath_1)
         doc_id_2 = RAGManager._get_doc_id(filepath_2)
-        
+
         assert doc_id_1 != doc_id_2
         assert len(doc_id_1) == 64  # hex representation of sha256
 
@@ -325,8 +312,8 @@ class TestRAGManagerLogic:
 
         class FakeCollection:
             def __init__(self):
-                self.deleted = []        # where-clause deletes
-                self.deleted_ids = []    # id-list deletes
+                self.deleted = []  # where-clause deletes
+                self.deleted_ids = []  # id-list deletes
                 self.upserts = []
 
             def get(self, **kwargs):
@@ -377,44 +364,48 @@ class TestRAGManagerLogic:
 class TestMigration002:
     def test_migration_expansion(self, tmpdir):
         db_path = Path(tmpdir) / "test_migration_db"
-        
+
         # Initialize legacy manager
-        with patch("core.config.EMBEDDING_PROVIDER", "local"), \
-             patch("core.config.EMBEDDING_MODEL", None):
+        with (
+            patch("core.config.EMBEDDING_PROVIDER", "local"),
+            patch("core.config.EMBEDDING_MODEL", None),
+        ):
             manager = RAGManager(db_path=str(db_path))
-            
+
             # Add a legacy formatted metadata document
             manager.collection.add(
                 ids=["legacy_1"],
                 documents=["test migration prose"],
-                metadatas=[{
-                    "title": "Legacy Doc",
-                    "source": "Legacy.md",
-                    "tags": ",Completed,History,",
-                    "section_path": ">Chapter 1>Introduction>"
-                }]
+                metadatas=[
+                    {
+                        "title": "Legacy Doc",
+                        "source": "Legacy.md",
+                        "tags": ",Completed,History,",
+                        "section_path": ">Chapter 1>Introduction>",
+                    }
+                ],
             )
-            
+
             # Run migration 002
             stats = migration_002.run(manager)
             assert stats["chunks_upgraded"] == 1
-            
+
             # Verify the upgraded properties
             updated_results = manager.collection.get(ids=["legacy_1"], include=["metadatas"])
             meta = updated_results["metadatas"][0]
-            
+
             # Boolean tags
             assert meta.get("tag_completed") is True
             assert meta.get("tag_history") is True
             assert meta.get("tags") == ",completed,history,"
-            
+
             # Section Levels
             assert meta.get("section_depth") == 2
             assert meta.get("section_l1") == "chapter 1"
             assert meta.get("section_l2") == "introduction"
             assert meta.get("section_l3") == ""
             assert meta.get("section_path_full") == "chapter 1 > introduction"
-            
+
             # doc_id is resolved and generated
             assert "doc_id" in meta
             assert len(meta["doc_id"]) == 64
@@ -422,6 +413,7 @@ class TestMigration002:
 
         # Cleanup
         import shutil
+
         shutil.rmtree(db_path, ignore_errors=True)
 
 
@@ -429,13 +421,16 @@ class TestRAGExplainMode:
     def test_query_notes_records_retrieval_breakdown_and_event(self, tmpdir):
         db_path = Path(tmpdir) / "test_explain_db"
         from services.trace_store import TraceStore
+
         trace_db = db_path / "trace.sqlite"
         trace_store = TraceStore(db_path=trace_db)
 
         # Patch EMBEDDING_CACHE_ENABLED and other provider settings
-        with patch("services.rag_manager.EMBEDDING_PROVIDER", "local"), \
-             patch("services.rag_manager.EMBEDDING_MODEL", None), \
-             patch("services.rag_manager.EMBEDDING_CACHE_ENABLED", False):
+        with (
+            patch("services.rag_manager.EMBEDDING_PROVIDER", "local"),
+            patch("services.rag_manager.EMBEDDING_MODEL", None),
+            patch("services.rag_manager.EMBEDDING_CACHE_ENABLED", False),
+        ):
             manager = RAGManager(db_path=str(db_path))
             manager.trace_store = trace_store
 
@@ -443,13 +438,12 @@ class TestRAGExplainMode:
             manager.collection.add(
                 ids=["chunk_1"],
                 documents=["test explain mode content"],
-                metadatas=[{"title": "test_doc", "doc_id": "abc"}]
+                metadatas=[{"title": "test_doc", "doc_id": "abc"}],
             )
 
             # Query with trace
             with trace_store.run(intent="test_rag_explain", agent="TestAgent") as run_id:
                 results = manager.query_notes("explain mode", top_k=1)
-                trace_ids = trace_store.current_trace_ids()
 
             assert len(results) == 1
             res = results[0]
@@ -462,9 +456,11 @@ class TestRAGExplainMode:
             assert "mmr" not in breakdown["passed_layers"]
 
             # Verify SQLite event
-            conn = sqlite3_connect = trace_store._connect()
+            conn = trace_store._connect()
             try:
-                event = conn.execute("SELECT * FROM retrieval_events WHERE run_id = ?", (run_id,)).fetchone()
+                event = conn.execute(
+                    "SELECT * FROM retrieval_events WHERE run_id = ?", (run_id,)
+                ).fetchone()
             finally:
                 conn.close()
 
@@ -473,6 +469,7 @@ class TestRAGExplainMode:
             assert event["top_k"] == 1
             assert "hybrid" in event["options_json"]
             import json
+
             results_json = json.loads(event["results_json"])
             assert len(results_json) == 1
             assert results_json[0]["id"] == "chunk_1"
@@ -481,6 +478,7 @@ class TestRAGExplainMode:
 
         # Cleanup
         import shutil
+
         shutil.rmtree(db_path, ignore_errors=True)
 
     def test_extra_queries_trigger_rrf_fusion_and_tag_candidates(self, tmpdir):
@@ -491,10 +489,12 @@ class TestRAGExplainMode:
         with extra_queries, fusion runs (rrf_score populated) and a candidate
         reached via the variant is tagged 'vector_xlingual'."""
         db_path = Path(tmpdir) / "test_xlingual_db"
-        with patch("services.rag_manager.EMBEDDING_PROVIDER", "local"), \
-             patch("services.rag_manager.EMBEDDING_MODEL", None), \
-             patch("services.rag_manager.EMBEDDING_CACHE_ENABLED", False), \
-             patch("services.rag_manager.HYBRID_RETRIEVAL_ENABLED", False):
+        with (
+            patch("services.rag_manager.EMBEDDING_PROVIDER", "local"),
+            patch("services.rag_manager.EMBEDDING_MODEL", None),
+            patch("services.rag_manager.EMBEDDING_CACHE_ENABLED", False),
+            patch("services.rag_manager.HYBRID_RETRIEVAL_ENABLED", False),
+        ):
             manager = RAGManager(db_path=str(db_path))
             manager.collection.add(
                 ids=["a", "b"],
@@ -502,7 +502,10 @@ class TestRAGExplainMode:
                     "The cat sat on the warm mat in the sunny kitchen.",
                     "Quantum chromodynamics describes the strong force between quarks.",
                 ],
-                metadatas=[{"title": "cat_doc", "doc_id": "A"}, {"title": "physics_doc", "doc_id": "B"}],
+                metadatas=[
+                    {"title": "cat_doc", "doc_id": "A"},
+                    {"title": "physics_doc", "doc_id": "B"},
+                ],
             )
 
             # Baseline: no fusion (hybrid off, no variants) → rrf_score stays None.
@@ -511,7 +514,8 @@ class TestRAGExplainMode:
 
             # With an explicit variant matching the physics doc, fusion runs.
             fused = manager.query_notes(
-                "kitchen cat mat", top_k=2,
+                "kitchen cat mat",
+                top_k=2,
                 extra_queries=["quantum chromodynamics quarks strong force"],
             )
             by_id = {r["id"]: r for r in fused}
@@ -520,17 +524,20 @@ class TestRAGExplainMode:
             assert "vector_xlingual" in by_id["b"]["retrieval_breakdown"]["passed_layers"]
 
         import shutil
+
         shutil.rmtree(db_path, ignore_errors=True)
 
     def test_cross_lingual_uses_injected_translator(self, tmpdir):
         """cross_lingual=True with a wired translator expands the query; the
         translated variant's candidate enters the pool."""
         db_path = Path(tmpdir) / "test_xlingual_translator_db"
-        with patch("services.rag_manager.EMBEDDING_PROVIDER", "local"), \
-             patch("services.rag_manager.EMBEDDING_MODEL", None), \
-             patch("services.rag_manager.EMBEDDING_CACHE_ENABLED", False), \
-             patch("services.rag_manager.HYBRID_RETRIEVAL_ENABLED", False), \
-             patch("services.rag_manager.CROSS_LINGUAL_TARGET_LANGS", ["en", "zh"]):
+        with (
+            patch("services.rag_manager.EMBEDDING_PROVIDER", "local"),
+            patch("services.rag_manager.EMBEDDING_MODEL", None),
+            patch("services.rag_manager.EMBEDDING_CACHE_ENABLED", False),
+            patch("services.rag_manager.HYBRID_RETRIEVAL_ENABLED", False),
+            patch("services.rag_manager.CROSS_LINGUAL_TARGET_LANGS", ["en", "zh"]),
+        ):
             manager = RAGManager(db_path=str(db_path))
             manager.collection.add(
                 ids=["a", "b"],
@@ -538,16 +545,22 @@ class TestRAGExplainMode:
                     "The cat sat on the warm mat in the sunny kitchen.",
                     "Quantum chromodynamics describes the strong force between quarks.",
                 ],
-                metadatas=[{"title": "cat_doc", "doc_id": "A"}, {"title": "physics_doc", "doc_id": "B"}],
+                metadatas=[
+                    {"title": "cat_doc", "doc_id": "A"},
+                    {"title": "physics_doc", "doc_id": "B"},
+                ],
             )
             # zh query → translator returns an English variant that matches doc B.
-            manager.translator = lambda text, langs: {"en": "quantum chromodynamics quarks strong force"}
+            manager.translator = lambda text, langs: {
+                "en": "quantum chromodynamics quarks strong force"
+            }
             fused = manager.query_notes("貓咪 廚房", top_k=2, cross_lingual=True)
             by_id = {r["id"]: r for r in fused}
             assert "b" in by_id
             assert "vector_xlingual" in by_id["b"]["retrieval_breakdown"]["passed_layers"]
 
         import shutil
+
         shutil.rmtree(db_path, ignore_errors=True)
 
     def test_base_agent_builds_rag_explain_appendix(self, tmpdir):
@@ -561,9 +574,9 @@ class TestRAGExplainMode:
         # Mock LLM and trace store
         mock_llm = MagicMock()
         mock_llm.trace_store = trace_store
-        
+
         agent = BaseAgent(mock_llm)
-        
+
         # Insert raw retrieval event
         with trace_store.run(intent="test", agent="TestAgent") as run_id:
             trace_store.record_retrieval_event(
@@ -584,10 +597,10 @@ class TestRAGExplainMode:
                             "rrf_score": 0.016,
                             "rerank_score": None,
                             "rerank_rank": None,
-                            "mmr_selected": True
-                        }
+                            "mmr_selected": True,
+                        },
                     }
-                ]
+                ],
             )
 
         appendix = agent._build_rag_explain_appendix(run_id)
@@ -601,18 +614,21 @@ class TestRAGExplainMode:
 
         # Cleanup
         import shutil
+
         shutil.rmtree(db_path, ignore_errors=True)
 
 
-
 # ── R7-C-2: public chunk accessors (insight no longer touches .collection) ──
+
 
 class TestPublicChunkAccessors:
     def _rag(self):
         rag = RAGManager.__new__(RAGManager)
 
         class C:
-            def __init__(self): self.calls = []
+            def __init__(self):
+                self.calls = []
+
             def get(self, where=None, include=None, limit=None, offset=0):
                 self.calls.append({"where": where, "include": include, "limit": limit})
                 return {"ids": [], "documents": [], "metadatas": []}
@@ -626,7 +642,10 @@ class TestPublicChunkAccessors:
         rag = RAGManager.__new__(RAGManager)
 
         class Paged:
-            def __init__(self, n): self.n = n; self.calls = 0
+            def __init__(self, n):
+                self.n = n
+                self.calls = 0
+
             def get(self, where=None, include=None, limit=None, offset=0):
                 self.calls += 1
                 ids = [f"id{i}" for i in range(offset, min(offset + limit, self.n))]
@@ -654,7 +673,11 @@ class TestPublicChunkAccessors:
         rag = self._rag()
         rag.chunks_by_title("Doc A")
         rag.chunks_by_title("Doc B", limit=5)
-        assert rag.collection.calls[0] == {"where": {"title": "Doc A"}, "include": ["metadatas", "documents"], "limit": None}
+        assert rag.collection.calls[0] == {
+            "where": {"title": "Doc A"},
+            "include": ["metadatas", "documents"],
+            "limit": None,
+        }
         assert rag.collection.calls[1]["where"] == {"title": "Doc B"}
         assert rag.collection.calls[1]["limit"] == 5
 
@@ -679,17 +702,17 @@ class TestPerDocumentCap:
 
     def test_cap_keeps_first_n_per_doc_in_order(self):
         cands = [
-            self._c("SpaceX (Part 1)", "1"), self._c("SpaceX (Synthesis)", "2"),
-            self._c("SpaceX (Part 9)", "3"),   # 3rd SpaceX → dropped at cap=2
+            self._c("SpaceX (Part 1)", "1"),
+            self._c("SpaceX (Synthesis)", "2"),
+            self._c("SpaceX (Part 9)", "3"),  # 3rd SpaceX → dropped at cap=2
             self._c("NIST.AI.600-1 (Part 1)", "4"),
         ]
         out = RAGManager._cap_per_document(cands, cap=2)
         ids = [c["id"] for c in out]
-        assert ids == ["1", "2", "4"]          # SpaceX#3 removed, NIST surfaces
+        assert ids == ["1", "2", "4"]  # SpaceX#3 removed, NIST surfaces
 
     def test_cap_one_maximally_diversifies(self):
-        cands = [self._c("A (Part 1)", "1"), self._c("A (Part 2)", "2"),
-                 self._c("B (Part 1)", "3")]
+        cands = [self._c("A (Part 1)", "1"), self._c("A (Part 2)", "2"), self._c("B (Part 1)", "3")]
         assert [c["id"] for c in RAGManager._cap_per_document(cands, cap=1)] == ["1", "3"]
 
     def test_cap_preserves_legit_multi_part_within_limit(self):

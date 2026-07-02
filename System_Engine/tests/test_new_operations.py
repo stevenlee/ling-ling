@@ -1,9 +1,5 @@
 """Batch-2 T2: Compare/Classify/Outline/Explain operations register from the real vault dir."""
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
-
 import pytest
 
 from core.config import OPERATIONS_DIR, SKILLS_DIR

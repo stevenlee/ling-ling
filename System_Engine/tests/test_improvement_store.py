@@ -1,14 +1,17 @@
 """Metacognition M3: improvement proposal store (queue + guarded approve)."""
-import os
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+import os
+
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 from services.improvement_store import (
-    make_proposal, save_proposal, list_proposals, get_proposal,
-    approve_proposal, reject_proposal, unified_diff,
+    make_proposal,
+    save_proposal,
+    list_proposals,
+    get_proposal,
+    approve_proposal,
+    reject_proposal,
+    unified_diff,
 )
 
 
@@ -32,10 +35,13 @@ def _dirs(tmp_path):
 
 def _prop(target, revised="original prompt\nline two\nADDED\n"):
     return make_proposal(
-        axis="報告品質", target_path="Templates/Operations/synthesize.md",
-        rationale="rc", addressed_fixes=["fix"],
+        axis="報告品質",
+        target_path="Templates/Operations/synthesize.md",
+        rationale="rc",
+        addressed_fixes=["fix"],
         original_content=target.read_text(encoding="utf-8"),
-        revised_content=revised, stamp="20260614120000",
+        revised_content=revised,
+        stamp="20260614120000",
     )
 
 
@@ -53,12 +59,17 @@ def test_approve_applies_and_backs_up(tmp_path):
     d = _dirs(tmp_path)
     p = _prop(target)
     save_proposal(p, d["pending_dir"])
-    res = approve_proposal(p["id"], vault_dir=vault, pending_dir=d["pending_dir"],
-                           applied_dir=d["applied_dir"], allowed_dirs=[vault / "Templates"])
+    res = approve_proposal(
+        p["id"],
+        vault_dir=vault,
+        pending_dir=d["pending_dir"],
+        applied_dir=d["applied_dir"],
+        allowed_dirs=[vault / "Templates"],
+    )
     assert res["ok"]
-    assert "ADDED" in target.read_text(encoding="utf-8")            # applied
-    assert (d["applied_dir"] / f"{p['id']}.original.md").exists()   # backup
-    assert get_proposal(p["id"], d["pending_dir"]) is None          # left the queue
+    assert "ADDED" in target.read_text(encoding="utf-8")  # applied
+    assert (d["applied_dir"] / f"{p['id']}.original.md").exists()  # backup
+    assert get_proposal(p["id"], d["pending_dir"]) is None  # left the queue
 
 
 def test_approve_refuses_if_target_changed(tmp_path):
@@ -66,9 +77,14 @@ def test_approve_refuses_if_target_changed(tmp_path):
     d = _dirs(tmp_path)
     p = _prop(target)
     save_proposal(p, d["pending_dir"])
-    target.write_text("SOMEONE EDITED THIS\n", encoding="utf-8")     # concurrent edit
-    res = approve_proposal(p["id"], vault_dir=vault, pending_dir=d["pending_dir"],
-                           applied_dir=d["applied_dir"], allowed_dirs=[vault / "Templates"])
+    target.write_text("SOMEONE EDITED THIS\n", encoding="utf-8")  # concurrent edit
+    res = approve_proposal(
+        p["id"],
+        vault_dir=vault,
+        pending_dir=d["pending_dir"],
+        applied_dir=d["applied_dir"],
+        allowed_dirs=[vault / "Templates"],
+    )
     assert not res["ok"] and "已被改動" in res["message"]
     assert target.read_text(encoding="utf-8") == "SOMEONE EDITED THIS\n"  # untouched
 
@@ -77,12 +93,23 @@ def test_approve_refuses_outside_allowlist(tmp_path):
     vault, target = _vault(tmp_path)
     d = _dirs(tmp_path)
     # Target a path escaping the allowlist.
-    p = make_proposal(axis="x", target_path="../../etc/evil.md", rationale="r",
-                      addressed_fixes=[], original_content="", revised_content="x",
-                      stamp="20260614120000")
+    p = make_proposal(
+        axis="x",
+        target_path="../../etc/evil.md",
+        rationale="r",
+        addressed_fixes=[],
+        original_content="",
+        revised_content="x",
+        stamp="20260614120000",
+    )
     save_proposal(p, d["pending_dir"])
-    res = approve_proposal(p["id"], vault_dir=vault, pending_dir=d["pending_dir"],
-                           applied_dir=d["applied_dir"], allowed_dirs=[vault / "Templates"])
+    res = approve_proposal(
+        p["id"],
+        vault_dir=vault,
+        pending_dir=d["pending_dir"],
+        applied_dir=d["applied_dir"],
+        allowed_dirs=[vault / "Templates"],
+    )
     assert not res["ok"]
 
 
@@ -91,8 +118,13 @@ def test_approve_refuses_empty_revision(tmp_path):
     d = _dirs(tmp_path)
     p = _prop(target, revised="   ")
     save_proposal(p, d["pending_dir"])
-    res = approve_proposal(p["id"], vault_dir=vault, pending_dir=d["pending_dir"],
-                           applied_dir=d["applied_dir"], allowed_dirs=[vault / "Templates"])
+    res = approve_proposal(
+        p["id"],
+        vault_dir=vault,
+        pending_dir=d["pending_dir"],
+        applied_dir=d["applied_dir"],
+        allowed_dirs=[vault / "Templates"],
+    )
     assert not res["ok"]
 
 

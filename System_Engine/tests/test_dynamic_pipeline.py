@@ -1,8 +1,3 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
-
 import pytest
 from unittest.mock import MagicMock
 from services.ingestion_pipeline import IngestionPipeline
@@ -20,13 +15,23 @@ class FakeLLM:
         self.model = "fake-model"
         self.trace_store = MagicMock()
 
-    def generate_entity_page(self, markdown_content, filename, index_content, context_hint=None, persona=None, forced_template=None):
-        self.generate_entity_page_calls.append({
-            "content": markdown_content,
-            "filename": filename,
-            "persona": persona,
-            "forced_template": forced_template,
-        })
+    def generate_entity_page(
+        self,
+        markdown_content,
+        filename,
+        index_content,
+        context_hint=None,
+        persona=None,
+        forced_template=None,
+    ):
+        self.generate_entity_page_calls.append(
+            {
+                "content": markdown_content,
+                "filename": filename,
+                "persona": persona,
+                "forced_template": forced_template,
+            }
+        )
         return {
             "title": filename,
             "tags": ["topic"],
@@ -34,7 +39,9 @@ class FakeLLM:
             "content": "Generated content from fake LLM",
         }
 
-    def generate_part_digest(self, title, part_number, total_parts, raw_chunk, part_note, pending_concepts=""):
+    def generate_part_digest(
+        self, title, part_number, total_parts, raw_chunk, part_note, pending_concepts=""
+    ):
         return {
             "part": part_number,
             "title": f"Part {part_number}",
@@ -42,11 +49,13 @@ class FakeLLM:
         }
 
     def generate_synthesis(self, title, part_digests, final_concepts, template=None, persona=None):
-        self.generate_synthesis_calls.append({
-            "title": title,
-            "template": template,
-            "persona": persona,
-        })
+        self.generate_synthesis_calls.append(
+            {
+                "title": title,
+                "template": template,
+                "persona": persona,
+            }
+        )
         return "Fake synthesis body"
 
     def critique_text(self, candidate, sources, focus=None):
@@ -77,7 +86,7 @@ class FakeLLM:
             "persona_name": f"{category}-assistant",
             "persona_content": f"# {category.capitalize()} Assistant\nFake guidelines for {category}",
             "template_name": f"{category}-summary",
-            "template_content": f"# {category.capitalize()} Summary\nFake structure for {category}"
+            "template_content": f"# {category.capitalize()} Summary\nFake structure for {category}",
         }
 
 
@@ -113,7 +122,9 @@ def _setup_vault(monkeypatch, tmp_path, profiles: dict[str, tuple[str, str]] | N
 
     monkeypatch.setattr("services.ingestion_pipeline.SCRIPTURE_DIR", scripture_dir)
     monkeypatch.setattr("services.ingestion_pipeline.PROFILES_DIR", profiles_dir)
-    monkeypatch.setattr("services.ingestion_pipeline.PROFILES_PENDING_DIR", profiles_dir / "_pending")
+    monkeypatch.setattr(
+        "services.ingestion_pipeline.PROFILES_PENDING_DIR", profiles_dir / "_pending"
+    )
     monkeypatch.setattr("services.ingestion_pipeline.FROM_LLM_DIR", from_llm)
     monkeypatch.setattr("services.ingestion_pipeline.update_wiki_index", MagicMock())
     monkeypatch.setattr("services.ingestion_pipeline.PAGES_DIR", tmp_path / "pages")
@@ -130,8 +141,10 @@ def _setup_vault(monkeypatch, tmp_path, profiles: dict[str, tuple[str, str]] | N
     for name, (persona, template) in profiles.items():
         (profiles_dir / f"{name}.md").write_text(
             render_profile_markdown(
-                persona=persona, template=template,
-                description=name, applicable_when=f"{name} documents",
+                persona=persona,
+                template=template,
+                description=name,
+                applicable_when=f"{name} documents",
             ),
             encoding="utf-8",
         )
@@ -156,7 +169,11 @@ class TestProfileRouting:
         assert call["persona"] == "patent-expert"
         assert call["forced_template"] == "patent-rpt"
         # Selection was closed-choice over the registered profiles.
-        assert {o["name"] for o in llm.select_profile_calls[0]["options"]} == {"patent", "paper", "default"}
+        assert {o["name"] for o in llm.select_profile_calls[0]["options"]} == {
+            "patent",
+            "paper",
+            "default",
+        }
 
     def test_short_doc_patent_selected_by_filename(self, monkeypatch, tmp_path, fake_services):
         llm, rag = fake_services
@@ -192,7 +209,9 @@ class TestProfileRouting:
         # Full override: no LLM routing call needed.
         assert llm.select_profile_calls == []
 
-    def test_frontmatter_profile_name_skips_llm_selection(self, monkeypatch, tmp_path, fake_services):
+    def test_frontmatter_profile_name_skips_llm_selection(
+        self, monkeypatch, tmp_path, fake_services
+    ):
         llm, rag = fake_services
         pipeline = IngestionPipeline(llm, rag)
         monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
@@ -209,7 +228,9 @@ class TestProfileRouting:
         assert call["forced_template"] == "research-rpt"
         assert llm.select_profile_calls == []
 
-    def test_document_type_matching_profile_skips_llm_selection(self, monkeypatch, tmp_path, fake_services):
+    def test_document_type_matching_profile_skips_llm_selection(
+        self, monkeypatch, tmp_path, fake_services
+    ):
         llm, rag = fake_services
         pipeline = IngestionPipeline(llm, rag)
         monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
@@ -225,7 +246,9 @@ class TestProfileRouting:
         assert call["persona"] == "patent-expert"
         assert llm.select_profile_calls == []
 
-    def test_long_doc_parts_translator_synthesis_profile(self, monkeypatch, tmp_path, fake_services):
+    def test_long_doc_parts_translator_synthesis_profile(
+        self, monkeypatch, tmp_path, fake_services
+    ):
         llm, rag = fake_services
         pipeline = IngestionPipeline(llm, rag)
         monkeypatch.setattr(pipeline.splitter, "chunk_size", 20)
@@ -264,7 +287,8 @@ class TestRoutingTraceAndTemplateStamp:
 
         # llm.trace_store is a MagicMock — inspect the routing artifact call.
         routing_calls = [
-            c for c in llm.trace_store.record_artifact.call_args_list
+            c
+            for c in llm.trace_store.record_artifact.call_args_list
             if c.kwargs.get("artifact_type") == "routing_decision"
         ]
         assert len(routing_calls) == 1
@@ -286,14 +310,17 @@ class TestRoutingTraceAndTemplateStamp:
         pipeline.ingest_markdown(content, source_file)
 
         routing_calls = [
-            c for c in llm.trace_store.record_artifact.call_args_list
+            c
+            for c in llm.trace_store.record_artifact.call_args_list
             if c.kwargs.get("artifact_type") == "routing_decision"
         ]
         meta = routing_calls[0].kwargs["metadata"]
         assert meta["layer"] == "default_profile"
         assert meta["fellback_to_default"] is True
 
-    def test_generated_page_stamped_with_template_version(self, monkeypatch, tmp_path, fake_services):
+    def test_generated_page_stamped_with_template_version(
+        self, monkeypatch, tmp_path, fake_services
+    ):
         llm, rag = fake_services
         pipeline = IngestionPipeline(llm, rag)
         monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
@@ -302,7 +329,8 @@ class TestRoutingTraceAndTemplateStamp:
         templates_dir = tmp_path / "Templates"
         templates_dir.mkdir(exist_ok=True)
         (templates_dir / "patent-rpt.md").write_text(
-            "---\nversion: 3\n---\n\n# Patent Report Template\n", encoding="utf-8")
+            "---\nversion: 3\n---\n\n# Patent Report Template\n", encoding="utf-8"
+        )
 
         content = "Claims\nPrior Art\nAn invention."
         source_file = tmp_path / "MyPatent.md"
@@ -313,6 +341,7 @@ class TestRoutingTraceAndTemplateStamp:
         pages = list((tmp_path / "pages").rglob("*.md"))
         assert len(pages) == 1
         from core.parser import parse_markdown_metadata
+
         meta = parse_markdown_metadata(pages[0].read_text(encoding="utf-8"))
         assert meta["template"] == "patent-rpt"
         assert meta["template_version"] == 3
@@ -390,7 +419,9 @@ class TestDocTypeMigrationInPipeline:
 
 
 class TestUnknownCategoryPendingFlow:
-    def test_unknown_category_queues_pending_and_uses_default(self, monkeypatch, tmp_path, fake_services):
+    def test_unknown_category_queues_pending_and_uses_default(
+        self, monkeypatch, tmp_path, fake_services
+    ):
         llm, rag = fake_services
         pipeline = IngestionPipeline(llm, rag)
         monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
@@ -417,13 +448,16 @@ class TestUnknownCategoryPendingFlow:
         assert call["persona"] == "default-document-architect"
         assert call["forced_template"] == "universal-document-template"
 
-    def test_unknown_category_without_default_falls_back_to_settings(self, monkeypatch, tmp_path, fake_services):
+    def test_unknown_category_without_default_falls_back_to_settings(
+        self, monkeypatch, tmp_path, fake_services
+    ):
         llm, rag = fake_services
         pipeline = IngestionPipeline(llm, rag)
         monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
         _setup_vault(monkeypatch, tmp_path, profiles={"patent": ("patent-expert", "patent-rpt")})
 
         from core.config import settings
+
         monkeypatch.setattr(settings, "AGENT_ROLE", "assistant")
         monkeypatch.setattr(settings, "USE_TEMPLATE", None)
 

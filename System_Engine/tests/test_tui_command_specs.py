@@ -1,12 +1,10 @@
 """The TUI's composed command files must route back to the intended intent
 through the REAL PromptWatcher parser — this guards against the spec drifting
 from INTENT_ROUTES."""
+
 import os
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 from watchers.prompt_watcher import PromptWatcher
@@ -31,7 +29,9 @@ class TestCommandSpecsRoundTrip:
         for spec in COMMANDS:
             fn, content = build_command_file(spec, _filled(spec), stamp="20260619-000000")
             intent = w._detect_intent(fn.lower(), content.lower())
-            assert intent == spec.intent, f"{spec.trigger!r} routed to {intent!r}, expected {spec.intent!r}"
+            assert intent == spec.intent, (
+                f"{spec.trigger!r} routed to {intent!r}, expected {spec.intent!r}"
+            )
 
     def test_filenames_are_unique(self):
         triggers = [s.trigger for s in COMMANDS]
@@ -56,9 +56,7 @@ class TestCommandSpecsRoundTrip:
 
     def test_visualize_as_type(self):
         spec = next(s for s in COMMANDS if s.intent == "visualize")
-        _, content = build_command_file(
-            spec, {"targets": ["N"], "as_type": "timeline"}, stamp="t"
-        )
+        _, content = build_command_file(spec, {"targets": ["N"], "as_type": "timeline"}, stamp="t")
         assert "[[N]]" in content
         assert "as timeline" in content
 
@@ -71,14 +69,17 @@ class TestCommandSpecsRoundTrip:
         assert f"[[{title}]]" in content
         # The real PromptWatcher wikilink extractor recovers the full title.
         import re
+
         found = re.findall(r"\[\[(.*?)\]\]", content)
         assert found == [title]
 
     def test_bracketed_multi_target_string_is_extracted(self):
         spec = next(s for s in COMMANDS if s.intent == "merge")
         _, content = build_command_file(
-            spec, {"targets": "[[A note]] [[B (Synthesis)]]"}, stamp="t")
+            spec, {"targets": "[[A note]] [[B (Synthesis)]]"}, stamp="t"
+        )
         import re
+
         assert re.findall(r"\[\[(.*?)\]\]", content) == ["A note", "B (Synthesis)"]
 
     def test_fieldless_brain_op_is_filename_only(self):

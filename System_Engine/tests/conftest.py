@@ -4,6 +4,7 @@ Adds a --run-live-llm flag that controls whether tests marked
 `@pytest.mark.live_llm` actually run. Default behaviour: skip them, so the
 normal test suite never makes real LLM calls.
 """
+
 import pytest
 
 
@@ -19,13 +20,6 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Overwrite saved chunker snapshots instead of comparing.",
-    )
-
-
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers",
-        "live_llm: marks tests that make real LLM API calls (skipped unless --run-live-llm)",
     )
 
 
@@ -46,6 +40,7 @@ def _no_leak_daemon_status(monkeypatch):
     it when it does its own work)."""
     try:
         import core.ui as cui
+
         monkeypatch.setattr(cui.ui, "_persist_status", lambda *a, **k: None, raising=False)
     except Exception:
         pass

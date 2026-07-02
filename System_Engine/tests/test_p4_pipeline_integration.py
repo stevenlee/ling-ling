@@ -13,12 +13,11 @@ These tests verify two contracts:
 We never call a real LLM here — we stub it. The point is plumbing, not
 content quality.
 """
+
 import os
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import importlib
@@ -38,12 +37,15 @@ def _reload_with_flags(**env_overrides):
         os.environ[k] = v
 
     import core.config
+
     importlib.reload(core.config)
 
     import services.ingestion_pipeline as ip_mod
+
     importlib.reload(ip_mod)
 
     import agents.counter_agent as ca_mod
+
     importlib.reload(ca_mod)
 
     return ip_mod.IngestionPipeline, ca_mod.CounterAgent
@@ -81,14 +83,18 @@ def _isolate_env():
             os.environ[k] = v
     # Reload back to original state so other test files see defaults.
     import core.config
+
     importlib.reload(core.config)
     import services.ingestion_pipeline as ip_mod
+
     importlib.reload(ip_mod)
     import agents.counter_agent as ca_mod
+
     importlib.reload(ca_mod)
 
 
 # ─── Splitter selection ────────────────────────────────────────────
+
 
 class TestSplitterSelection:
     def test_flag_off_uses_text_splitter(self):
@@ -131,6 +137,7 @@ class TestSplitterSelection:
 
 # ─── section_path / boundary_type flow into wiki_meta ──────────────
 
+
 class TestPartMetadataFlow:
     """Under flag ON, ThoughtfulSplitter's section_path threads into wiki_meta."""
 
@@ -161,7 +168,9 @@ class TestPartMetadataFlow:
             page_type="entity",
             tags=[],
             part_info={
-                "current": 1, "total": 3, "master_tags": [],
+                "current": 1,
+                "total": 3,
+                "master_tags": [],
                 "section_path": [],  # explicit empty
             },
             quality_fixes=[],
@@ -171,6 +180,7 @@ class TestPartMetadataFlow:
 
 
 # ─── End-to-end ingestion smoke ─────────────────────────────────────
+
 
 class TestEndToEndIngestion:
     """Run a long-doc through the full pipeline with mocked LLM/RAG."""
@@ -188,17 +198,26 @@ class TestEndToEndIngestion:
         llm = MagicMock()
         llm.model = "test-model"
         # generate_entity_page is called per-part. Return a minimal valid result.
-        llm.generate_entity_page = MagicMock(return_value={
-            "title": "Stub Page",
-            "tags": ["stub"],
-            "type": "entity",
-            "content": "stub body content\n",
-        })
-        llm.generate_part_digest = MagicMock(return_value={
-            "part": 1, "title": "Stub", "thesis": "Stub thesis",
-            "key_points": [], "evidence": [], "terms": [],
-            "open_questions": [], "handoff": "",
-        })
+        llm.generate_entity_page = MagicMock(
+            return_value={
+                "title": "Stub Page",
+                "tags": ["stub"],
+                "type": "entity",
+                "content": "stub body content\n",
+            }
+        )
+        llm.generate_part_digest = MagicMock(
+            return_value={
+                "part": 1,
+                "title": "Stub",
+                "thesis": "Stub thesis",
+                "key_points": [],
+                "evidence": [],
+                "terms": [],
+                "open_questions": [],
+                "handoff": "",
+            }
+        )
         llm.generate_synthesis = MagicMock(return_value="Stub synthesis.")
         # Critique post-step needs both helpers; return empty critique so the
         # pipeline's skip-on-empty path keeps these tests focused on splitter/
@@ -239,8 +258,13 @@ class TestEndToEndIngestion:
         self._redirect_paths(tmp_path, monkeypatch)
         # Small sizes so the doc actually splits into multiple parts.
         from services.thoughtful_splitter import ThoughtfulSplitter
+
         pipeline.splitter = ThoughtfulSplitter(
-            target_size=1000, max_size=1800, min_size=200, snap_window=400, overlap_chars=0,
+            target_size=1000,
+            max_size=1800,
+            min_size=200,
+            snap_window=400,
+            overlap_chars=0,
             default_use_llm=False,
         )
 
@@ -251,8 +275,7 @@ class TestEndToEndIngestion:
 
         # Collect every section_path kwarg passed to rag.add_document.
         section_paths_passed = [
-            call.kwargs.get("section_path")
-            for call in rag.add_document.call_args_list
+            call.kwargs.get("section_path") for call in rag.add_document.call_args_list
         ]
         # At least one call must have a non-empty section_path (the document
         # starts with "# Notes on Cache Coherence Protocols").
@@ -266,8 +289,13 @@ class TestEndToEndIngestion:
         pipeline, llm, rag = self._make_pipeline(flag_on=True)
         self._redirect_paths(tmp_path, monkeypatch)
         from services.thoughtful_splitter import ThoughtfulSplitter
+
         pipeline.splitter = ThoughtfulSplitter(
-            target_size=1000, max_size=1800, min_size=200, snap_window=400, overlap_chars=0,
+            target_size=1000,
+            max_size=1800,
+            min_size=200,
+            snap_window=400,
+            overlap_chars=0,
             default_use_llm=False,
         )
 
@@ -278,6 +306,7 @@ class TestEndToEndIngestion:
 
         # Look for any Part *.md file with section_path in frontmatter.
         from core.config import PAGES_DIR
+
         part_files = list(PAGES_DIR.rglob("*Part*.md"))
         assert part_files, "no part files were written"
         found_section_path = False
@@ -292,6 +321,7 @@ class TestEndToEndIngestion:
     def _redirect_paths(tmp_path, monkeypatch):
         """Redirect PAGES_DIR / INDEX_FILE / FROM_LLM_DIR so the pipeline writes to tmp."""
         from core import config
+
         pages = tmp_path / "pages"
         pages.mkdir()
         notes = tmp_path / "notes"
@@ -308,14 +338,18 @@ class TestEndToEndIngestion:
 
         # Also patch references that imported these names directly.
         import services.ingestion_pipeline as ip_mod
+
         monkeypatch.setattr(ip_mod, "PAGES_DIR", pages)
         monkeypatch.setattr(ip_mod, "INDEX_FILE", index)
         monkeypatch.setattr(ip_mod, "SCRIPTURE_DIR", tmp_path / "Scripture")
         monkeypatch.setattr(ip_mod, "PROFILES_DIR", tmp_path / "Scripture" / "Profiles")
-        monkeypatch.setattr(ip_mod, "PROFILES_PENDING_DIR", tmp_path / "Scripture" / "Profiles" / "_pending")
+        monkeypatch.setattr(
+            ip_mod, "PROFILES_PENDING_DIR", tmp_path / "Scripture" / "Profiles" / "_pending"
+        )
         monkeypatch.setattr(ip_mod, "FROM_LLM_DIR", from_llm)
 
         import core.vault_utils as vu_mod
+
         monkeypatch.setattr(vu_mod, "PAGES_DIR", pages)
         monkeypatch.setattr(vu_mod, "NOTES_DIR", notes)
         monkeypatch.setattr(vu_mod, "INDEX_FILE", index)
@@ -323,6 +357,7 @@ class TestEndToEndIngestion:
 
 
 # ─── ChromaDB metadata format ───────────────────────────────────────
+
 
 class TestChromaDBSectionMetadata:
     """The section_path passed to add_document gets encoded as `>a>b>c>`."""
@@ -360,7 +395,9 @@ class TestChromaDBSectionMetadata:
         source = tmp_path / "x.md"
         source.write_text("x" * 250, encoding="utf-8")
         rag.add_document(
-            source, "MyTitle", "x" * 250,
+            source,
+            "MyTitle",
+            "x" * 250,
             tags=["tag1"],
             section_path=["Chapter 1", "Background", "Methodology"],
         )

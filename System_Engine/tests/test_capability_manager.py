@@ -1,10 +1,9 @@
 """Tests for services.capability_manager — pure logic, no LLM."""
+
 import os
-import sys
 from pathlib import Path
 from textwrap import dedent
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import pytest
@@ -19,6 +18,7 @@ from services.capability_manager import (
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
+
 
 def _write(path: Path, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -35,6 +35,7 @@ def _make_dirs(tmp_path: Path) -> tuple[Path, Path]:
 
 
 # ── _as_str_tuple ────────────────────────────────────────────────────
+
 
 class TestAsStrTuple:
     def test_none_returns_empty(self):
@@ -55,13 +56,17 @@ class TestAsStrTuple:
 
 # ── _normalize_cost_class ────────────────────────────────────────────
 
+
 class TestNormalizeCostClass:
-    @pytest.mark.parametrize("value,expected", [
-        ("low", "low"),
-        ("MEDIUM", "medium"),
-        (" High ", "high"),
-        ("unknown", "unknown"),
-    ])
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("low", "low"),
+            ("MEDIUM", "medium"),
+            (" High ", "high"),
+            ("unknown", "unknown"),
+        ],
+    )
     def test_known_values(self, value, expected):
         assert _normalize_cost_class(value) == expected
 
@@ -72,9 +77,12 @@ class TestNormalizeCostClass:
 
 # ── _parse_capability_file ───────────────────────────────────────────
 
+
 class TestParseCapabilityFile:
     def test_full_frontmatter(self, tmp_path):
-        path = _write(tmp_path / "foo.md", """
+        path = _write(
+            tmp_path / "foo.md",
+            """
             ---
             type: operation
             description: Combine inputs.
@@ -91,7 +99,8 @@ class TestParseCapabilityFile:
             ---
 
             body text
-        """)
+        """,
+        )
         spec = _parse_capability_file(path, fallback_type="operation")
         assert spec.name == "foo"  # file stem is canonical
         assert spec.type == "operation"
@@ -112,7 +121,9 @@ class TestParseCapabilityFile:
         assert spec.cost_class == "unknown"
 
     def test_malformed_yaml_returns_empty_spec(self, tmp_path, caplog):
-        path = _write(tmp_path / "broken.md", """
+        path = _write(
+            tmp_path / "broken.md",
+            """
             ---
             type: operation
             expected_inputs:
@@ -120,7 +131,8 @@ class TestParseCapabilityFile:
               -- bad indentation
             ---
             body
-        """)
+        """,
+        )
         with caplog.at_level("WARNING"):
             spec = _parse_capability_file(path, fallback_type="skill")
         assert spec.name == "broken"
@@ -130,28 +142,34 @@ class TestParseCapabilityFile:
 
     def test_filestem_overrides_frontmatter_name(self, tmp_path):
         # frontmatter says name:bar but filename is foo — file stem wins
-        path = _write(tmp_path / "foo.md", """
+        path = _write(
+            tmp_path / "foo.md",
+            """
             ---
             name: bar
             type: skill
             description: stuff
             ---
             body
-        """)
+        """,
+        )
         spec = _parse_capability_file(path, fallback_type="skill")
         assert spec.name == "foo"
         assert spec.raw_frontmatter["name"] == "bar"  # preserved for legacy readers
 
     def test_non_mapping_frontmatter_falls_back(self, tmp_path):
         # YAML that parses to a list, not a dict
-        path = _write(tmp_path / "weird.md", """
+        path = _write(
+            tmp_path / "weird.md",
+            """
             ---
             - just
             - a
             - list
             ---
             body
-        """)
+        """,
+        )
         spec = _parse_capability_file(path, fallback_type="operation")
         assert spec.type == "operation"
         assert spec.expected_inputs == ()
@@ -159,25 +177,32 @@ class TestParseCapabilityFile:
 
 # ── CapabilityManager ────────────────────────────────────────────────
 
+
 class TestCapabilityManager:
     def test_scans_both_dirs(self, tmp_path):
         ops, skills = _make_dirs(tmp_path)
-        _write(ops / "synth.md", """
+        _write(
+            ops / "synth.md",
+            """
             ---
             type: operation
             description: x
             cost_class: medium
             ---
             body
-        """)
-        _write(skills / "recency.md", """
+        """,
+        )
+        _write(
+            skills / "recency.md",
+            """
             ---
             type: skill
             description: y
             cost_class: low
             ---
             body
-        """)
+        """,
+        )
         mgr = CapabilityManager(ops, skills)
         assert {s.name for s in mgr.all()} == {"synth", "recency"}
         assert mgr.get("synth").type == "operation"
@@ -205,7 +230,9 @@ class TestCapabilityManager:
 
     def test_resolve_shape_all_axes(self, tmp_path):
         ops, skills = _make_dirs(tmp_path)
-        _write(ops / "synthesize.md", """
+        _write(
+            ops / "synthesize.md",
+            """
             ---
             type: operation
             description: x
@@ -214,7 +241,8 @@ class TestCapabilityManager:
             cost_class: medium
             ---
             body
-        """)
+        """,
+        )
         mgr = CapabilityManager(ops, skills)
         record = mgr.resolve(persona="translator", operation="synthesize", template="wiki-note")
         assert record["operation"]["name"] == "synthesize"
@@ -245,14 +273,17 @@ class TestCapabilityManager:
 
     def test_validate_inputs_stub_known(self, tmp_path):
         ops, skills = _make_dirs(tmp_path)
-        _write(ops / "synth.md", """
+        _write(
+            ops / "synth.md",
+            """
             ---
             type: operation
             expected_inputs:
               - part_digests
             ---
             body
-        """)
+        """,
+        )
         mgr = CapabilityManager(ops, skills)
         # Phase 4 stub: when available=None, just confirm capability exists.
         ok, missing = mgr.validate_inputs("synth")
@@ -261,7 +292,9 @@ class TestCapabilityManager:
 
     def test_validate_inputs_detects_missing_when_set_given(self, tmp_path):
         ops, skills = _make_dirs(tmp_path)
-        _write(ops / "synth.md", """
+        _write(
+            ops / "synth.md",
+            """
             ---
             type: operation
             expected_inputs:
@@ -269,7 +302,8 @@ class TestCapabilityManager:
               - title
             ---
             body
-        """)
+        """,
+        )
         mgr = CapabilityManager(ops, skills)
         ok, missing = mgr.validate_inputs("synth", available={"title"})
         assert ok is False
@@ -278,7 +312,9 @@ class TestCapabilityManager:
         assert ok is True
         assert missing == []
 
+
 # ── CapabilitySpec ──────────────────────────────────────────────────
+
 
 class TestCapabilitySpec:
     def test_to_trace_record(self, tmp_path):

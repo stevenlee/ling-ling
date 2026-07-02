@@ -1,8 +1,6 @@
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import core.vault_utils as vault_utils
 from watchers.vault_watcher import VaultWatcher
@@ -68,9 +66,7 @@ class TestVaultWatcherReadingIndex:
         rag = MagicMock()
         watcher = VaultWatcher(rag)
 
-        monkeypatch.setattr(
-            "watchers.vault_watcher.global_busy_state.try_set_busy", lambda: False
-        )
+        monkeypatch.setattr("watchers.vault_watcher.global_busy_state.try_set_busy", lambda: False)
 
         try:
             watcher._process_deletion("Article L")
@@ -86,9 +82,7 @@ class TestVaultWatcherReadingIndex:
         rag = MagicMock()
         watcher = VaultWatcher(rag)
 
-        monkeypatch.setattr(
-            "watchers.vault_watcher.global_busy_state.try_set_busy", lambda: False
-        )
+        monkeypatch.setattr("watchers.vault_watcher.global_busy_state.try_set_busy", lambda: False)
 
         watcher._process_deletion("Article L", attempt=10)
 
@@ -110,4 +104,3 @@ class TestVaultWatcherReadingIndex:
 
         rag.delete_document.assert_called_once_with("Article L")
         mock_update.assert_called_once_with(sync_reading_index=True)
-

@@ -26,9 +26,7 @@ from core.config import (
     SYNTHESIS_CRITIQUE_ENABLED,
     SYNTHESIS_CRITIQUE_MAX_RETRIES,
     THOUGHTFUL_EMIT_SUMMARY,
-    THOUGHTFUL_USE_LLM_FOR_INGEST,
     TEMPLATES_DIR,
-    USE_THOUGHTFUL_SPLITTER,
     settings,
     SCRIPTURE_DIR,
 )
@@ -45,8 +43,8 @@ from services.profile_manager import ProfileManager
 from services.text_splitter import TextSplitter
 
 
-_HEADING_RE = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
-_FRONTMATTER_RE = re.compile(r'^---\s*\n.*?\n---\s*\n?', re.DOTALL)
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+_FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n?", re.DOTALL)
 _PART_DIGEST_HEADER = "## 🧩 Part Digest Appendix"
 # Auto-attached learning-artifact section (visual_router). Prefix shared by all
 # emitted sections so re-runs can strip and regenerate them idempotently.
@@ -58,13 +56,18 @@ _CRITIQUE_HEADER = "## 🔍 Quality Critique"
 # gemma), so allow a short gap after the colon and take the first keyword on
 # the line. A negated revise ("不需修正") counts as keep.
 _VERDICT_RE = re.compile(
-    r'(?im)^\**\s*Overall\s+Verdict\**\s*[:：][^\n]{0,40}?(keep|revise|reject|保留|修訂|修正|重做|拒絕)',
+    r"(?im)^\**\s*Overall\s+Verdict\**\s*[:：][^\n]{0,40}?(keep|revise|reject|保留|修訂|修正|重做|拒絕)",
 )
-_VERDICT_NEGATION_RE = re.compile(r'(不需|不必|無需|无需|毋須|毋须)\s*$')
+_VERDICT_NEGATION_RE = re.compile(r"(不需|不必|無需|无需|毋須|毋须)\s*$")
 _VERDICT_NORMALISE = {
-    "keep": "keep", "保留": "keep",
-    "revise": "revise", "修訂": "revise", "修正": "revise",
-    "reject": "reject", "重做": "reject", "拒絕": "reject",
+    "keep": "keep",
+    "保留": "keep",
+    "revise": "revise",
+    "修訂": "revise",
+    "修正": "revise",
+    "reject": "reject",
+    "重做": "reject",
+    "拒絕": "reject",
 }
 
 
@@ -81,6 +84,7 @@ class IngestionPipeline:
         # downstream `chunk_spans[i].get(...)` reads below.
         if settings.USE_THOUGHTFUL_SPLITTER:
             from services.thoughtful_splitter import ThoughtfulSplitter
+
             self.splitter = ThoughtfulSplitter(
                 default_use_llm=settings.THOUGHTFUL_USE_LLM_FOR_INGEST,
                 default_emit_summary=THOUGHTFUL_EMIT_SUMMARY,
@@ -108,6 +112,7 @@ class IngestionPipeline:
         #   0b normalize_structure — promote plain-text chapter cues to markdown
         #      headings, but only for docs that lack markdown structure.
         from services.source_prep import strip_boilerplate, normalize_structure
+
         content, _stripped = strip_boilerplate(content)
         content, _normed = normalize_structure(content)
         if _stripped or _normed:
@@ -118,7 +123,9 @@ class IngestionPipeline:
         doc_config = self._resolve_routing(meta, content, source_filepath)
 
         if len(content) > self.splitter.chunk_size + 1000:
-            self._ingest_long_document(content, source_filepath, source_filepath.stem, doc_config=doc_config)
+            self._ingest_long_document(
+                content, source_filepath, source_filepath.stem, doc_config=doc_config
+            )
         else:
             result = self.ingest_to_wiki(content, source_filepath, doc_config=doc_config)
             self._index_short_doc_facets(content, result)
@@ -181,7 +188,12 @@ class IngestionPipeline:
             return
         try:
             digest = self.llm.generate_part_digest(
-                title, 1, 1, raw_content, ingest_result.get("content", ""), "",
+                title,
+                1,
+                1,
+                raw_content,
+                ingest_result.get("content", ""),
+                "",
             )
         except Exception as e:
             logging.warning(f"Short-doc digest for facets failed for {title}: {e}")
@@ -320,7 +332,7 @@ class IngestionPipeline:
         if content.startswith("---"):
             match = _FRONTMATTER_RE.match(content)
             if match:
-                clean_content = content[match.end():]
+                clean_content = content[match.end() :]
         return clean_content[:500]
 
     def _queue_new_profile(
@@ -334,12 +346,10 @@ class IngestionPipeline:
         _pending/. Fail-soft: routing falls back to `default` regardless.
         Returns True when a new bundle was queued."""
         try:
-            category = doc_type or self.llm.classify_document(
-                source_filepath.name, content_prefix
-            )
+            category = doc_type or self.llm.classify_document(source_filepath.name, content_prefix)
             if not isinstance(category, str):
                 return False
-            category = re.sub(r'[^a-z0-9\-]', '', category.lower().strip())
+            category = re.sub(r"[^a-z0-9\-]", "", category.lower().strip())
             if not category or pm.get(category) or pm.has_pending(category):
                 return False
 
@@ -356,8 +366,8 @@ class IngestionPipeline:
             ):
                 return False
 
-            persona_name = re.sub(r'[^a-zA-Z0-9\-]', '', persona_name.replace(".md", ""))
-            template_name = re.sub(r'[^a-zA-Z0-9\-]', '', template_name.replace(".md", ""))
+            persona_name = re.sub(r"[^a-zA-Z0-9\-]", "", persona_name.replace(".md", ""))
+            template_name = re.sub(r"[^a-zA-Z0-9\-]", "", template_name.replace(".md", ""))
             pm.queue_pending(
                 profile_name=category,
                 persona_name=persona_name,
@@ -393,15 +403,23 @@ class IngestionPipeline:
                 context_hint = (part_info or {}).get("context_hint", "")
                 index_content = (part_info or {}).get("index_content")
                 if index_content is None:
-                    index_content = INDEX_FILE.read_text(encoding="utf-8") if INDEX_FILE.exists() else ""
+                    index_content = (
+                        INDEX_FILE.read_text(encoding="utf-8") if INDEX_FILE.exists() else ""
+                    )
 
                 # Resolve dynamic persona/template:
                 if part_info:
                     persona = part_info.get("ingest_persona", "translator")
                     template = part_info.get("ingest_template", "translation-rpt")
                 else:
-                    persona = (doc_config or {}).get("synthesis_persona") or settings.AGENT_ROLE or "none"
-                    template = (doc_config or {}).get("synthesis_template") or settings.USE_TEMPLATE or "wiki-note"
+                    persona = (
+                        (doc_config or {}).get("synthesis_persona") or settings.AGENT_ROLE or "none"
+                    )
+                    template = (
+                        (doc_config or {}).get("synthesis_template")
+                        or settings.USE_TEMPLATE
+                        or "wiki-note"
+                    )
                 template_used = template
 
                 llm_result = self.llm.generate_entity_page(
@@ -425,7 +443,11 @@ class IngestionPipeline:
             # short docs to `{stem}` would break all three for cosmetic gain, so
             # the suffix stays. A given stem is either short (one Synthesis page,
             # no Parts) or long (Parts + a real Synthesis), never both.
-            title = f"{base_title} (Part {part_info['current']})" if part_info else f"{base_title} (Synthesis)"
+            title = (
+                f"{base_title} (Part {part_info['current']})"
+                if part_info
+                else f"{base_title} (Synthesis)"
+            )
 
             tags = (part_info or {}).get("master_tags") or llm_result.get("tags", [])
             page_type = llm_result.get("type", "entity")
@@ -449,7 +471,10 @@ class IngestionPipeline:
 
             if not (part_info and part_info.get("defer_rag")):
                 self.rag.add_document(
-                    page_path, title, wiki_markdown, tags=tags,
+                    page_path,
+                    title,
+                    wiki_markdown,
+                    tags=tags,
                     section_path=(part_info or {}).get("section_path") or None,
                 )
 
@@ -523,11 +548,17 @@ class IngestionPipeline:
 
     # ── Long-document pipeline ──────────────────────────────────────
 
-    def _ingest_long_document(self, content: str, source_filepath: Path, base_title: str, doc_config: dict | None = None):
+    def _ingest_long_document(
+        self, content: str, source_filepath: Path, base_title: str, doc_config: dict | None = None
+    ):
         chunk_spans = self.splitter.split_text_with_spans(content)
         chunks = [s["text"] for s in chunk_spans]
-        source_spans = [self._source_span_for_chunk(content, span, i + 1) for i, span in enumerate(chunk_spans)]
-        logging.info(f"Long document detected ({len(content)} chars). Splitting into {len(chunks)} parts.")
+        source_spans = [
+            self._source_span_for_chunk(content, span, i + 1) for i, span in enumerate(chunk_spans)
+        ]
+        logging.info(
+            f"Long document detected ({len(content)} chars). Splitting into {len(chunks)} parts."
+        )
 
         # Read the wiki index ONCE for the whole run; previously each part
         # re-read it from disk.
@@ -537,8 +568,13 @@ class IngestionPipeline:
         # ThoughtfulSplitter is in use; under the legacy splitter the extra
         # keys simply aren't present and `_process_parts` falls back to "".
         part_state = self._process_parts(
-            chunks, source_spans, source_filepath, base_title, index_content,
-            chunk_metas=chunk_spans, doc_config=doc_config,
+            chunks,
+            source_spans,
+            source_filepath,
+            base_title,
+            index_content,
+            chunk_metas=chunk_spans,
+            doc_config=doc_config,
         )
 
         ui.set_status(f"Stitching: {base_title}...")
@@ -608,9 +644,7 @@ class IngestionPipeline:
 
             context_hint = f"Part {i + 1}/{total}."
             if i > 0 and pending_concepts:
-                context_hint += (
-                    f" Previously you identified these pending concepts: {pending_concepts}. Please focus on them."
-                )
+                context_hint += f" Previously you identified these pending concepts: {pending_concepts}. Please focus on them."
             if i < total - 1:
                 context_hint += " Since more parts follow, PLEASE include a 'pending_concepts' field in your YAML."
 
@@ -642,20 +676,32 @@ class IngestionPipeline:
             part_content = result.get("content", "")
             total_output_chars += len(part_content)
             digest = self.llm.generate_part_digest(
-                base_title, i + 1, total, chunk, part_content, pending_concepts,
+                base_title,
+                i + 1,
+                total,
+                chunk,
+                part_content,
+                pending_concepts,
             )
             part_digests.append(digest)
             self._append_part_digest_to_note(
-                result, digest, section_path=part_info.get("section_path"),
-                part_content=part_content, pending_concepts=pending_concepts,
+                result,
+                digest,
+                section_path=part_info.get("section_path"),
+                part_content=part_content,
+                pending_concepts=pending_concepts,
                 chunk=chunk,
             )
             self._index_digest_facets(
-                result.get("_page_path"), result.get("_title"), digest,
+                result.get("_page_path"),
+                result.get("_title"),
+                digest,
                 tags=master_tags,
             )
 
-            nav_summary = digest_value_to_text(digest.get("thesis")) if isinstance(digest, dict) else ""
+            nav_summary = (
+                digest_value_to_text(digest.get("thesis")) if isinstance(digest, dict) else ""
+            )
             if not nav_summary:
                 nav_summary = part_content.strip().split("\n")[0][:100]
             navigation_items.append(f"- [[{base_title} (Part {i + 1})]]: {nav_summary[:140]}")
@@ -685,7 +731,9 @@ class IngestionPipeline:
         from core.version import BUILD_DATE
 
         syn_persona = (doc_config or {}).get("synthesis_persona", "none")
-        syn_template = (doc_config or {}).get("synthesis_template") or settings.USE_TEMPLATE or "wiki-note"
+        syn_template = (
+            (doc_config or {}).get("synthesis_template") or settings.USE_TEMPLATE or "wiki-note"
+        )
 
         outcome = self._synthesize_with_critique_retry(
             base_title, part_state, syn_template, syn_persona
@@ -708,6 +756,7 @@ class IngestionPipeline:
         # Phase 6 auto-attach: a learning artifact for the summary (gated by
         # Scripture's `visual_router`; "" and zero LLM calls when off → byte-identical).
         from services.learning_artifacts import maybe_artifact_section
+
         artifact_section = maybe_artifact_section(
             self.llm, synthesis_text, limit=3, exclude_types={"flowchart", "concept_map"}
         )
@@ -747,9 +796,7 @@ class IngestionPipeline:
             "quality_checker": "deterministic-markdown-v1",
         }
         final_meta.update(self._template_stamp(syn_template))
-        combined_fixes = self._dedupe_quality_fixes(
-            (synthesis_fixes or []) + (final_fixes or [])
-        )
+        combined_fixes = self._dedupe_quality_fixes((synthesis_fixes or []) + (final_fixes or []))
         if combined_fixes:
             final_meta["quality_fixes"] = combined_fixes
         if critique_verdict:
@@ -763,7 +810,9 @@ class IngestionPipeline:
         entity_dir = PAGES_DIR / base_title
         entity_dir.mkdir(parents=True, exist_ok=True)
         synthesis_file = entity_dir / f"{base_title} (Synthesis).md"
-        synthesis_file.write_text(dump_markdown_with_metadata(final_meta, final_content), encoding="utf-8")
+        synthesis_file.write_text(
+            dump_markdown_with_metadata(final_meta, final_content), encoding="utf-8"
+        )
         self._record_artifact(
             synthesis_file,
             "synthesis",
@@ -860,9 +909,7 @@ class IngestionPipeline:
         if not part_digests or not synthesis_text.strip():
             return "", None
 
-        sources = "\n\n".join(
-            self.llm.format_digest_for_prompt(d) for d in part_digests
-        )
+        sources = "\n\n".join(self.llm.format_digest_for_prompt(d) for d in part_digests)
         try:
             critique = self.llm.critique_text(
                 candidate=synthesis_text,
@@ -896,11 +943,7 @@ class IngestionPipeline:
         seen = set()
         out = []
         for fix in fixes:
-            key = (
-                tuple(sorted(fix.items()))
-                if isinstance(fix, dict)
-                else ("scalar", str(fix))
-            )
+            key = tuple(sorted(fix.items())) if isinstance(fix, dict) else ("scalar", str(fix))
             if key in seen:
                 continue
             seen.add(key)
@@ -1009,11 +1052,17 @@ class IngestionPipeline:
         }
 
     def _append_part_digest_to_note(
-        self, ingest_result: dict, digest, section_path: list | None = None,
-        part_content: str | None = None, pending_concepts: str = "",
+        self,
+        ingest_result: dict,
+        digest,
+        section_path: list | None = None,
+        part_content: str | None = None,
+        pending_concepts: str = "",
         chunk: str | None = None,
     ) -> None:
-        page_path_value = ingest_result.get("_page_path") if isinstance(ingest_result, dict) else None
+        page_path_value = (
+            ingest_result.get("_page_path") if isinstance(ingest_result, dict) else None
+        )
         if not page_path_value:
             return
 
@@ -1027,6 +1076,7 @@ class IngestionPipeline:
         artifact_section = ""
         if part_content:
             from services.learning_artifacts import maybe_artifact_section
+
             artifact_section = maybe_artifact_section(
                 self.llm, part_content, limit=3, exclude_types={"flowchart", "concept_map"}
             )
@@ -1046,7 +1096,9 @@ class IngestionPipeline:
         highlighted = 0
         if settings.HIGHLIGHT_ENABLED and isinstance(digest, dict):
             content, highlighted = self._apply_highlights(
-                content, digest.get("highlights"), settings.HIGHLIGHT_MAX,
+                content,
+                digest.get("highlights"),
+                settings.HIGHLIGHT_MAX,
             )
 
         tail = f"{artifact_section}{appendix}".strip()
@@ -1067,7 +1119,9 @@ class IngestionPipeline:
 
         title = ingest_result.get("_title") or page_path.stem
         tags = ingest_result.get("_tags") or ingest_result.get("tags", [])
-        self.rag.add_document(page_path, title, updated, tags=tags, section_path=section_path or None)
+        self.rag.add_document(
+            page_path, title, updated, tags=tags, section_path=section_path or None
+        )
 
     @staticmethod
     def _apply_highlights(text: str, highlights, max_spans: int = 5) -> tuple[str, int]:
@@ -1105,9 +1159,9 @@ class IngestionPipeline:
             if idx == -1:
                 continue
             # Skip if the span already abuts a marker (idempotent re-ingest).
-            if body[max(0, idx - 2):idx] == "==":
+            if body[max(0, idx - 2) : idx] == "==":
                 continue
-            body = f"{body[:idx]}=={phrase}=={body[idx + len(phrase):]}"
+            body = f"{body[:idx]}=={phrase}=={body[idx + len(phrase) :]}"
             applied += 1
 
         return head + body, applied
@@ -1148,6 +1202,7 @@ class IngestionPipeline:
             return None
 
         from core.version import BUILD_DATE
+
         metadata = {
             "title": f"{base_title} (Stitched)",
             "type": "stitched_article",
@@ -1170,8 +1225,7 @@ class IngestionPipeline:
             "## 🔗 Navigation\n"
             f"- [[{base_title} (Synthesis)|查看洞察總結 (Synthesis)]]\n"
             f"- [[{base_title}|查看完整原始檔 (Original)]]\n\n"
-            "---\n\n"
-            + "\n".join(f"{section}\n" for section in sections)
+            "---\n\n" + "\n".join(f"{section}\n" for section in sections)
         )
         body, quality_fixes = run_markdown_quality_checks(body)
         if quality_fixes:
@@ -1184,7 +1238,9 @@ class IngestionPipeline:
         stitched_file.write_text(stitched_markdown, encoding="utf-8")
         self._record_artifact(stitched_file, "stitched_article", metadata["title"], metadata)
 
-        self.rag.add_document(stitched_file, f"{base_title} (Stitched)", stitched_markdown, tags=metadata["tags"])
+        self.rag.add_document(
+            stitched_file, f"{base_title} (Stitched)", stitched_markdown, tags=metadata["tags"]
+        )
         return stitched_file
 
     # ── Helpers ──────────────────────────────────────────────────────

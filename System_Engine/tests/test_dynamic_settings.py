@@ -5,12 +5,11 @@ The README promises that Scripture.md changes take effect immediately;
 this suite locks that promise in by exercising DynamicSettings.reload()
 against a tmp Scripture file (no daemon, no watchdog).
 """
+
 import os
-import sys
 from pathlib import Path
 from textwrap import dedent
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import pytest
@@ -49,7 +48,9 @@ class TestDynamicSettingsDefaults:
 
 class TestDynamicSettingsReload:
     def test_loads_full_scripture(self, tmp_path, monkeypatch):
-        f = _write_scripture(tmp_path, """
+        f = _write_scripture(
+            tmp_path,
+            """
             ---
             be_a: researcher
             use_template: tech-rpt
@@ -66,12 +67,13 @@ class TestDynamicSettingsReload:
             strict_mode: false
             ---
             # Scripture body (ignored by parser)
-        """)
+        """,
+        )
         monkeypatch.setattr(config_mod, "SCRIPTURE_FILE", f)
 
         s = DynamicSettings()
         s.reload()
-        assert s.AGENT_ROLE == "researcher"        # lowered
+        assert s.AGENT_ROLE == "researcher"  # lowered
         assert s.OUTPUT_LANGUAGE == "English"
         assert s.USE_TEMPLATE == "tech-rpt"
         assert s.DIGEST_LIMIT == 12000
@@ -91,35 +93,44 @@ class TestDynamicSettingsReload:
         s = DynamicSettings()
         assert s.VISUAL_ROUTER_ENABLED is False
         assert s.ARGUMENT_MAP_MERMAID is False
-        f = _write_scripture(tmp_path, """
+        f = _write_scripture(
+            tmp_path,
+            """
             ---
             be_a: assistant
             visual_router: true
             argument_map_mermaid: true
             ---
-        """)
+        """,
+        )
         monkeypatch.setattr(config_mod, "SCRIPTURE_FILE", f)
         s.reload()
         assert s.VISUAL_ROUTER_ENABLED is True
         assert s.ARGUMENT_MAP_MERMAID is True
 
     def test_agent_role_is_lowercased(self, tmp_path, monkeypatch):
-        f = _write_scripture(tmp_path, """
+        f = _write_scripture(
+            tmp_path,
+            """
             ---
             be_a: TRANSLATOR
             ---
-        """)
+        """,
+        )
         monkeypatch.setattr(config_mod, "SCRIPTURE_FILE", f)
         s = DynamicSettings()
         s.reload()
         assert s.AGENT_ROLE == "translator"
 
     def test_missing_keys_keep_existing_values(self, tmp_path, monkeypatch):
-        f = _write_scripture(tmp_path, """
+        f = _write_scripture(
+            tmp_path,
+            """
             ---
             be_a: coder
             ---
-        """)
+        """,
+        )
         monkeypatch.setattr(config_mod, "SCRIPTURE_FILE", f)
         s = DynamicSettings()
         previous_creativity = s.CREATIVITY
@@ -131,13 +142,16 @@ class TestDynamicSettingsReload:
         assert s.DIGEST_LIMIT == previous_digest
 
     def test_bad_value_is_skipped_not_fatal(self, tmp_path, monkeypatch, caplog):
-        f = _write_scripture(tmp_path, """
+        f = _write_scripture(
+            tmp_path,
+            """
             ---
             be_a: assistant
             creativity: "wildly creative"
             digest_limit: 10000
             ---
-        """)
+        """,
+        )
         monkeypatch.setattr(config_mod, "SCRIPTURE_FILE", f)
         s = DynamicSettings()
         default_creativity = s.CREATIVITY
@@ -152,12 +166,15 @@ class TestDynamicSettingsReload:
     def test_empty_frontmatter_logs_warning(self, tmp_path, monkeypatch, caplog):
         # Frontmatter markers with a blank line in between → regex matches,
         # yaml.safe_load returns None → hits the "frontmatter is empty" branch.
-        f = _write_scripture(tmp_path, """
+        f = _write_scripture(
+            tmp_path,
+            """
             ---
 
             ---
             body
-        """)
+        """,
+        )
         monkeypatch.setattr(config_mod, "SCRIPTURE_FILE", f)
         s = DynamicSettings()
         before = (s.AGENT_ROLE, s.CREATIVITY)
@@ -178,12 +195,15 @@ class TestDynamicSettingsReload:
     def test_reload_is_idempotent_and_repeatable(self, tmp_path, monkeypatch):
         """Editing Scripture.md and calling reload again must pick up the new
         values — this is the hot-reload promise."""
-        f = _write_scripture(tmp_path, """
+        f = _write_scripture(
+            tmp_path,
+            """
             ---
             be_a: assistant
             creativity: 0.3
             ---
-        """)
+        """,
+        )
         monkeypatch.setattr(config_mod, "SCRIPTURE_FILE", f)
         s = DynamicSettings()
         s.reload()
@@ -191,12 +211,15 @@ class TestDynamicSettingsReload:
         assert s.CREATIVITY == 0.3
 
         # Edit Scripture, reload, observe new values.
-        f.write_text(dedent("""
+        f.write_text(
+            dedent("""
             ---
             be_a: researcher
             creativity: 0.9
             ---
-        """).lstrip("\n"), encoding="utf-8")
+        """).lstrip("\n"),
+            encoding="utf-8",
+        )
         s.reload()
         assert s.AGENT_ROLE == "researcher"
         assert s.CREATIVITY == 0.9

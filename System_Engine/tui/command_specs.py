@@ -12,7 +12,7 @@ Keep this list aligned with watchers/prompt_watcher.py::INTENT_ROUTES.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from core.config import COMMAND_PREFIX
 
@@ -23,7 +23,7 @@ _WIKILINK_RE = re.compile(r"\[\[(.*?)\]\]")
 class Field:
     key: str
     label: str
-    kind: str            # "links" | "text" | "choice" | "flag"
+    kind: str  # "links" | "text" | "choice" | "flag"
     required: bool = False
     choices: tuple[str, ...] = ()
     help: str = ""
@@ -31,10 +31,10 @@ class Field:
 
 @dataclass(frozen=True)
 class CommandSpec:
-    intent: str          # must equal PromptWatcher intent_key (asserted in tests)
-    trigger: str         # the @ling-<trigger> filename token
+    intent: str  # must equal PromptWatcher intent_key (asserted in tests)
+    trigger: str  # the @ling-<trigger> filename token
     label: str
-    group: str           # "Brain" | "Cortex" | "Maintenance" | "KB"
+    group: str  # "Brain" | "Cortex" | "Maintenance" | "KB"
     help: str = ""
     fields: tuple[Field, ...] = ()
 
@@ -45,61 +45,143 @@ _BODY = Field("body", "指令內文", "text", help="自由文字指示")
 # Ordered for display; grouped. Triggers/intents mirror INTENT_ROUTES.
 COMMANDS: tuple[CommandSpec, ...] = (
     # ── Brain ops (fire a cognition/maintenance pass now) ──
-    CommandSpec("dream", "dream", "做夢 (生成一條反思)", "Brain",
-                "立刻跑一次 doc-anchored 洞察生成"),
-    CommandSpec("consolidate", "consolidate", "鞏固 (insight→Cortex 主張)", "Brain",
-                "消化未鞏固的 insight 積壓"),
+    CommandSpec(
+        "dream", "dream", "做夢 (生成一條反思)", "Brain", "立刻跑一次 doc-anchored 洞察生成"
+    ),
+    CommandSpec(
+        "consolidate",
+        "consolidate",
+        "鞏固 (insight→Cortex 主張)",
+        "Brain",
+        "消化未鞏固的 insight 積壓",
+    ),
     CommandSpec("decay", "decay", "衰減 / 強化 Cortex", "Brain"),
     CommandSpec("ledger", "ledger", "Cortex 帳本 (falsification)", "Brain"),
-    CommandSpec("assess", "assess", "自我體檢 (read-only)", "Brain",
-                "彙整品質訊號成健康記分卡"),
-    CommandSpec("resynthesize", "resynthesize", "重新 synthesis 一份文件", "Brain",
-                "把原始檔重新投入 Consolidate", fields=(Field("targets", "文件 [[標題]]", "links", required=True),)),
-    CommandSpec("insight", "insight", "洞察 (可指定策略/目標)", "Brain", fields=(
-        _TARGETS, _BODY,
-        Field("strategy", "策略", "choice",
-              choices=("montecarlo", "recency", "tag-cluster"), help="/<策略>"),
-        Field("planner", "planner 預覽", "flag"),
-        Field("execute", "執行計畫", "flag"),
-    )),
-    CommandSpec("research", "research", "自動研究 (Agentic RAG)", "Brain",
-                "執行學術精兵搜索與專利大範圍掃描", fields=(_TARGETS, _BODY)),
+    CommandSpec("assess", "assess", "自我體檢 (read-only)", "Brain", "彙整品質訊號成健康記分卡"),
+    CommandSpec(
+        "resynthesize",
+        "resynthesize",
+        "重新 synthesis 一份文件",
+        "Brain",
+        "把原始檔重新投入 Consolidate",
+        fields=(Field("targets", "文件 [[標題]]", "links", required=True),),
+    ),
+    CommandSpec(
+        "insight",
+        "insight",
+        "洞察 (可指定策略/目標)",
+        "Brain",
+        fields=(
+            _TARGETS,
+            _BODY,
+            Field(
+                "strategy",
+                "策略",
+                "choice",
+                choices=("montecarlo", "recency", "tag-cluster"),
+                help="/<策略>",
+            ),
+            Field("planner", "planner 預覽", "flag"),
+            Field("execute", "執行計畫", "flag"),
+        ),
+    ),
+    CommandSpec(
+        "research",
+        "research",
+        "自動研究 (Agentic RAG)",
+        "Brain",
+        "執行學術精兵搜索與專利大範圍掃描",
+        fields=(_TARGETS, _BODY),
+    ),
     # ── Cortex queries ──
-    CommandSpec("review", "review", "書評／報導 (發布稿)", "Cortex",
-                "把一篇 Synthesis 寫成助學習的書評/報導；genre 省略時：標題有專利號→patent，否則 book",
-                fields=(
-                    Field("targets", "目標 [[筆記]]", "links", required=True),
-                    Field("as_type", "genre", "choice",
-                          choices=("book", "explainer", "paper", "patent")),
-                )),
-    CommandSpec("blog", "blog", "發布到 kafu (Blog→content)", "Cortex",
-                "把 lings-desktop/Blog/ 的 review 轉成 Quartz 內容送進 kafu/content/；"
-                "之後到 kafu 跑 `make publish` 上線"),
+    CommandSpec(
+        "review",
+        "review",
+        "書評／報導 (發布稿)",
+        "Cortex",
+        "把一篇 Synthesis 寫成助學習的書評/報導；genre 省略時：標題有專利號→patent，否則 book",
+        fields=(
+            Field("targets", "目標 [[筆記]]", "links", required=True),
+            Field("as_type", "genre", "choice", choices=("book", "explainer", "paper", "patent")),
+        ),
+    ),
+    CommandSpec(
+        "blog",
+        "blog",
+        "發布到 kafu (Blog→content)",
+        "Cortex",
+        "把 lings-desktop/Blog/ 的 review 轉成 Quartz 內容送進 kafu/content/；"
+        "之後到 kafu 跑 `make publish` 上線",
+    ),
     CommandSpec("recall", "recall", "回想 (蒸餾主張)", "Cortex", fields=(_TARGETS, _BODY)),
     CommandSpec("tensions", "tensions", "知識張力掃描", "Cortex"),
-    CommandSpec("quiz", "quiz", "複習卡 (小老師出題)", "Cortex",
-                "把快忘記的 Cortex 主張出成一張主動回想卡"),
-    CommandSpec("recalled", "recalled", "我記得 (強化主張)", "Cortex",
-                "回報你記得某條主張，拉長它的半衰期",
-                fields=(Field("targets", "主張 [[claim]]", "links", required=True),)),
+    CommandSpec(
+        "quiz", "quiz", "複習卡 (小老師出題)", "Cortex", "把快忘記的 Cortex 主張出成一張主動回想卡"
+    ),
+    CommandSpec(
+        "recalled",
+        "recalled",
+        "我記得 (強化主張)",
+        "Cortex",
+        "回報你記得某條主張，拉長它的半衰期",
+        fields=(Field("targets", "主張 [[claim]]", "links", required=True),),
+    ),
     CommandSpec("cortex", "cortex", "Cortex 三層驗證", "Cortex"),
-    CommandSpec("visualize", "visualize", "視覺化 (圖表)", "Cortex", fields=(
-        Field("targets", "目標 [[筆記]]", "links", required=True),
-        Field("as_type", "指定類型", "choice", choices=(
-            "all", "comparison_table", "flowchart", "mindmap", "timeline",
-            "quadrant", "concept_map", "argument_map", "sequence_diagram", 
-            "state_diagram", "user_journey", "gantt_chart", "pie_chart",
-            "sankey_diagram", "xy_chart", "block_diagram", "c4_diagram", 
-            "class_diagram", "er_diagram", "ontology")),
-    )),
-    CommandSpec("lens", "lens", "概念透鏡 (掃描實例)", "Cortex", fields=(
-        Field("targets", "目標 [[筆記]]", "links", required=True),
-        Field("body", "Count: 概念", "text", required=True, help="要找的概念"),
-        Field("confidence", "信心", "choice", choices=("high", "medium", "low")),
-    )),
+    CommandSpec(
+        "visualize",
+        "visualize",
+        "視覺化 (圖表)",
+        "Cortex",
+        fields=(
+            Field("targets", "目標 [[筆記]]", "links", required=True),
+            Field(
+                "as_type",
+                "指定類型",
+                "choice",
+                choices=(
+                    "all",
+                    "comparison_table",
+                    "flowchart",
+                    "mindmap",
+                    "timeline",
+                    "quadrant",
+                    "concept_map",
+                    "argument_map",
+                    "sequence_diagram",
+                    "state_diagram",
+                    "user_journey",
+                    "gantt_chart",
+                    "pie_chart",
+                    "sankey_diagram",
+                    "xy_chart",
+                    "block_diagram",
+                    "c4_diagram",
+                    "class_diagram",
+                    "er_diagram",
+                    "ontology",
+                ),
+            ),
+        ),
+    ),
+    CommandSpec(
+        "lens",
+        "lens",
+        "概念透鏡 (掃描實例)",
+        "Cortex",
+        fields=(
+            Field("targets", "目標 [[筆記]]", "links", required=True),
+            Field("body", "Count: 概念", "text", required=True, help="要找的概念"),
+            Field("confidence", "信心", "choice", choices=("high", "medium", "low")),
+        ),
+    ),
     # ── Maintenance ──
-    CommandSpec("merge", "merge", "合併筆記", "Maintenance",
-                fields=(Field("targets", "[[A]] [[B]]", "links", required=True),)),
+    CommandSpec(
+        "merge",
+        "merge",
+        "合併筆記",
+        "Maintenance",
+        fields=(Field("targets", "[[A]] [[B]]", "links", required=True),),
+    ),
     CommandSpec("patrol", "patrol", "全庫健康巡邏", "Maintenance"),
     CommandSpec("linter", "repair-db", "資料庫修復同步", "Maintenance"),
     CommandSpec("patrol_tags", "patrol-tags", "標籤巡邏", "Maintenance"),

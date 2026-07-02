@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import array
 import hashlib
-import logging
 import sqlite3
 import threading
 import time

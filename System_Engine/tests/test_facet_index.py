@@ -1,11 +1,9 @@
 """Facet index: LLM digest sentences (thesis/key_points) embedded as
 retrieval pointers. Facets share the parent's doc_id, carry role="facet",
 and are dereferenced to the parent's real chunk before reranking."""
-import sys
-from pathlib import Path
+
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 from services.ingestion_pipeline import IngestionPipeline
 from services.rag_manager import RAGManager
@@ -87,7 +85,7 @@ class TestDereference:
     def _seed_parent(self, rag, page, n_chunks=2):
         doc_id = RAGManager._get_doc_id(page)
         for i in range(n_chunks):
-            rag.collection.store[f"{doc_id}_chunk_{i*100}_{i*100+99}"] = {
+            rag.collection.store[f"{doc_id}_chunk_{i * 100}_{i * 100 + 99}"] = {
                 "text": f"chunk {i} body",
                 "meta": {"doc_id": doc_id, "title": "P", "start_offset": i * 100},
             }
@@ -98,7 +96,8 @@ class TestDereference:
         page = tmp_path / "p.md"
         doc_id = self._seed_parent(rag, page)
         facet = {
-            "id": f"{doc_id}_facet_abc", "text": "The thesis.",
+            "id": f"{doc_id}_facet_abc",
+            "text": "The thesis.",
             "metadata": {"role": "facet", "doc_id": doc_id, "title": "P"},
             "distance": 0.1,
         }
@@ -118,10 +117,17 @@ class TestDereference:
         page = tmp_path / "p.md"
         doc_id = self._seed_parent(rag, page, n_chunks=1)
         parent_id = f"{doc_id}_chunk_0_99"
-        chunk = {"id": parent_id, "text": "chunk 0 body", "metadata": {"doc_id": doc_id}, "distance": 0.05}
+        chunk = {
+            "id": parent_id,
+            "text": "chunk 0 body",
+            "metadata": {"doc_id": doc_id},
+            "distance": 0.05,
+        }
         facet = {
-            "id": f"{doc_id}_facet_abc", "text": "The thesis.",
-            "metadata": {"role": "facet", "doc_id": doc_id}, "distance": 0.1,
+            "id": f"{doc_id}_facet_abc",
+            "text": "The thesis.",
+            "metadata": {"role": "facet", "doc_id": doc_id},
+            "distance": 0.1,
         }
 
         out = rag._dereference_facets([chunk, facet], {})
@@ -137,8 +143,10 @@ class TestDereference:
         page = tmp_path / "p.md"
         doc_id = self._seed_parent(rag, page, n_chunks=1)
         facet = {
-            "id": f"{doc_id}_facet_abc", "text": "Dense thesis.",
-            "metadata": {"role": "facet", "doc_id": doc_id}, "distance": 0.01,  # best rank
+            "id": f"{doc_id}_facet_abc",
+            "text": "Dense thesis.",
+            "metadata": {"role": "facet", "doc_id": doc_id},
+            "distance": 0.01,  # best rank
         }
         direct_a = {"id": "a", "text": "A", "metadata": {}, "distance": 0.2}
         direct_b = {"id": "b", "text": "B", "metadata": {}, "distance": 0.3}
@@ -150,8 +158,10 @@ class TestDereference:
     def test_dangling_facet_dropped(self, tmp_path):
         rag = _rag()
         facet = {
-            "id": "ghost_facet_1", "text": "Orphan thesis.",
-            "metadata": {"role": "facet", "doc_id": "nonexistent"}, "distance": 0.1,
+            "id": "ghost_facet_1",
+            "text": "Orphan thesis.",
+            "metadata": {"role": "facet", "doc_id": "nonexistent"},
+            "distance": 0.1,
         }
         assert rag._dereference_facets([facet], {}) == []
 
@@ -168,14 +178,32 @@ class TestDereference:
         a_id = self._seed_parent(rag, tmp_path / "a.md", n_chunks=2)
         b_id = self._seed_parent(rag, tmp_path / "b.md", n_chunks=1)
         facets = [
-            {"id": f"{a_id}_facet_1", "text": "A1", "metadata": {"role": "facet", "doc_id": a_id}, "distance": 0.1},
-            {"id": f"{a_id}_facet_2", "text": "A2", "metadata": {"role": "facet", "doc_id": a_id}, "distance": 0.2},
-            {"id": f"{b_id}_facet_1", "text": "B1", "metadata": {"role": "facet", "doc_id": b_id}, "distance": 0.3},
+            {
+                "id": f"{a_id}_facet_1",
+                "text": "A1",
+                "metadata": {"role": "facet", "doc_id": a_id},
+                "distance": 0.1,
+            },
+            {
+                "id": f"{a_id}_facet_2",
+                "text": "A2",
+                "metadata": {"role": "facet", "doc_id": a_id},
+                "distance": 0.2,
+            },
+            {
+                "id": f"{b_id}_facet_1",
+                "text": "B1",
+                "metadata": {"role": "facet", "doc_id": b_id},
+                "distance": 0.3,
+            },
         ]
         rag.collection.get_calls = 0
         out = rag._dereference_facets(facets, {})
-        assert rag.collection.get_calls == 1                       # one batched fetch
-        assert {c["id"] for c in out} == {f"{a_id}_chunk_0_99", f"{b_id}_chunk_0_99"}  # deduped parents
+        assert rag.collection.get_calls == 1  # one batched fetch
+        assert {c["id"] for c in out} == {
+            f"{a_id}_chunk_0_99",
+            f"{b_id}_chunk_0_99",
+        }  # deduped parents
 
 
 class TestContentHashSkipsFacets:
@@ -185,10 +213,12 @@ class TestContentHashSkipsFacets:
         doc_id = RAGManager._get_doc_id(page)
         # Facet stored "before" the real chunk in iteration order.
         rag.collection.store[f"{doc_id}_facet_x"] = {
-            "text": "thesis", "meta": {"doc_id": doc_id, "role": "facet"},
+            "text": "thesis",
+            "meta": {"doc_id": doc_id, "role": "facet"},
         }
         rag.collection.store[f"{doc_id}_chunk_0_99"] = {
-            "text": "body", "meta": {"doc_id": doc_id, "content_hash": "h123"},
+            "text": "body",
+            "meta": {"doc_id": doc_id, "content_hash": "h123"},
         }
         assert rag._get_existing_content_hash(doc_id) == "h123"
 
@@ -198,6 +228,7 @@ class TestPipelineFacetWiring:
 
     def _facet_rag(self):
         from unittest.mock import MagicMock
+
         rag = MagicMock()
         return rag
 

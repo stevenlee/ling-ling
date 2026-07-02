@@ -26,11 +26,13 @@ from core.ui import ui
 from services.cortex_recall import recall_claims
 from services.cortex_store import load_all_pages
 
-_CMD_TOKEN_RE = re.compile(r'(?:@ling-recall|/recall)\b', re.IGNORECASE)
+_CMD_TOKEN_RE = re.compile(r"(?:@ling-recall|/recall)\b", re.IGNORECASE)
 _STATUS_BADGE = {"active": "🌸", "dormant": "💤", "falsified": "🍂"}
-_CITE_RE = re.compile(r'#(\d+)')
+_CITE_RE = re.compile(r"#(\d+)")
 
-_SYSTEM_PROMPT = (
+# Fallback only — the canonical prompt lives in Templates/Prompts/agent_recall.md
+# (editable in the vault, hot-reloaded via the prompt mtime cache).
+_FALLBACK_SYSTEM_PROMPT = (
     "你是 Ling-Ling 的長期記憶回想介面。使用者給一個主題，user message 裡附上系統蒸餾過的"
     "所有信念（每條編號 [#N]，含信心/可反駁性/反例）。\n\n"
     "規則：\n"
@@ -58,23 +60,28 @@ class RecallAgent(BaseAgent):
 
         ui.set_status(f"📓 回想：{query[:40]}")
         pages = [
-            p for p in load_all_pages(CORTEX_DIR)
+            p
+            for p in load_all_pages(CORTEX_DIR)
             if p.claim.strip() and p.status in ("active", "dormant")
         ]
         if not pages:
             return self._write_report(
                 query,
                 f"# 📓 Cortex Recall\n\n對「{query}」沒有足夠的記憶。",
-                "ctx-recall", {"query": query, "claims_returned": 0},
+                "ctx-recall",
+                {"query": query, "claims_returned": 0},
             )[1]
 
         # Whole corpus when it fits; hybrid pre-filter only when it doesn't.
         if len(pages) <= CORTEX_RECALL_LLM_MAX:
             candidates = pages
         else:
-            candidates = [p for _, p in recall_claims(
-                self.rag, query, cortex_dir=CORTEX_DIR, top_k=CORTEX_RECALL_PREFILTER
-            )] or pages[:CORTEX_RECALL_PREFILTER]
+            candidates = [
+                p
+                for _, p in recall_claims(
+                    self.rag, query, cortex_dir=CORTEX_DIR, top_k=CORTEX_RECALL_PREFILTER
+                )
+            ] or pages[:CORTEX_RECALL_PREFILTER]
 
         numbered = list(enumerate(candidates, 1))
         source_block = self._claims_block(numbered)
@@ -82,13 +89,17 @@ class RecallAgent(BaseAgent):
         # with no template/persona/visualization scaffolding, so the model
         # selects + summarizes instead of chasing a Mermaid diagram.
         user_msg = f"主題：{query}\n\n系統的所有信念：\n{source_block}"
-        answer = self.llm.complete(
-            _SYSTEM_PROMPT, user_msg, temperature=0.2, stage="cortex_recall"
-        ) or "（回想時 LLM 呼叫失敗。）"
+        system_prompt = self._load_prompt("agent_recall") or _FALLBACK_SYSTEM_PROMPT
+        answer = (
+            self.llm.complete(system_prompt, user_msg, temperature=0.2, stage="cortex_recall")
+            or "（回想時 LLM 呼叫失敗。）"
+        )
 
         body = self._render(query, answer, numbered)
         _, full_markdown = self._write_report(
-            query, body, "ctx-recall",
+            query,
+            body,
+            "ctx-recall",
             {"query": query, "candidates": len(candidates)},
         )
         ui.success(f"📓 回想完成：掃過 {len(candidates)} 條信念 → fromLingLing/")
@@ -116,8 +127,7 @@ class RecallAgent(BaseAgent):
             "",
             answer.strip(),
         ]
-        cited = sorted({int(m) for m in _CITE_RE.findall(answer)
-                        if 1 <= int(m) <= len(numbered)})
+        cited = sorted({int(m) for m in _CITE_RE.findall(answer) if 1 <= int(m) <= len(numbered)})
         if cited:
             by_num = dict(numbered)
             lines += ["", "---", "## 📎 引用的主張（含知識論）", ""]
@@ -133,7 +143,8 @@ class RecallAgent(BaseAgent):
                     lines.append(f"  - 反例：{p.falsifier}")
                 ev = [
                     f"[[{(e.get('insight') or '')[:-3] if (e.get('insight') or '').endswith('.md') else e.get('insight')}]]"
-                    for e in (p.evidence or [])[:3] if isinstance(e, dict) and e.get("insight")
+                    for e in (p.evidence or [])[:3]
+                    if isinstance(e, dict) and e.get("insight")
                 ]
                 if ev:
                     lines.append(f"  - 證據：{' · '.join(ev)}")

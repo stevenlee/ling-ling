@@ -1,8 +1,3 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
-
 from services.cross_lingual import detect_lang, expand_queries
 
 

@@ -4,7 +4,6 @@ Uses a background thread to poll DGX stats via SSH (to avoid blocking TUI).
 Reads SQLite trace DB in read-only mode for token stats.
 """
 
-import os
 import sqlite3
 import subprocess
 import threading
@@ -27,11 +26,8 @@ MODEL_LIMITS_K = {
 }
 
 # Global cache for DGX stats
-_dgx_stats = {
-    "cpu": "N/A",
-    "ram": "N/A",
-    "gpu": "N/A"
-}
+_dgx_stats = {"cpu": "N/A", "ram": "N/A", "gpu": "N/A"}
+
 
 def _poll_dgx_stats():
     """Background loop to fetch stats from DGX via SSH every 3 seconds."""
@@ -41,8 +37,8 @@ def _poll_dgx_stats():
             # timeout 2s for the ssh command itself to avoid hanging forever
             cmd = "ssh -o LogLevel=QUIET -o ConnectTimeout=2 dgx \"top -bn1 | grep 'Cpu(s)' && free -m && nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits\""
             output = subprocess.check_output(cmd, shell=True, text=True, timeout=5)
-            lines = [line.strip() for line in output.split('\n') if line.strip()]
-            
+            lines = [line.strip() for line in output.split("\n") if line.strip()]
+
             # Parse output
             # Expected format:
             # 1. %Cpu(s): 50.9 us,  2.7 sy,  0.0 ni, 46.5 id...
@@ -50,19 +46,19 @@ def _poll_dgx_stats():
             # 3. Mem:          124610       52801       14382        6977       66121       71809
             # 4. Swap:          16383        1688       14695
             # 5. 85 (or multiple lines if multiple GPUs)
-            
+
             cpu_val = "N/A"
             ram_val = "N/A"
             gpu_val = "N/A"
-            
+
             for i, line in enumerate(lines):
                 if line.startswith("%Cpu"):
                     # id is typically the 8th word: "%Cpu(s): 50.9 us,  2.7 sy,  0.0 ni, 46.5 id..."
                     try:
                         # Extract the idle percentage and subtract from 100
-                        parts = line.split(',')
+                        parts = line.split(",")
                         for p in parts:
-                            if 'id' in p:
+                            if "id" in p:
                                 idle = float(p.strip().split()[0])
                                 cpu_val = f"{100.0 - idle:.1f}%"
                                 break
@@ -73,10 +69,10 @@ def _poll_dgx_stats():
                         parts = line.split()
                         total = float(parts[1])
                         used = float(parts[2])
-                        ram_val = f"{(used/total)*100:.1f}%"
+                        ram_val = f"{(used / total) * 100:.1f}%"
                     except Exception:
                         pass
-                
+
             # The remaining lines are GPU utilizations (nvidia-smi). Take the max or average.
             gpu_lines = [l for l in lines if l.isdigit()]
             if gpu_lines:
@@ -86,7 +82,7 @@ def _poll_dgx_stats():
                     gpu_val = f"{max_gpu}%"
                 except Exception:
                     pass
-                    
+
             _dgx_stats["cpu"] = cpu_val
             _dgx_stats["ram"] = ram_val
             _dgx_stats["gpu"] = gpu_val
@@ -94,8 +90,9 @@ def _poll_dgx_stats():
         except Exception:
             # On failure, keep the old values or show N/A
             pass
-            
+
         time.sleep(3)
+
 
 # Start background thread once when module is imported
 _t = threading.Thread(target=_poll_dgx_stats, daemon=True)
@@ -111,12 +108,14 @@ def get_model_limit_k(model_name: str) -> int:
             return limit
     return 128
 
+
 def format_tokens(n: int) -> str:
     if n is None:
         return "0"
     if n >= 1000:
-        return f"{n/1000:.1f}k"
+        return f"{n / 1000:.1f}k"
     return str(n)
+
 
 def get_telemetry_string(current_run_id: str | None, provider: str = "ollama") -> str:
     # 1. System Metrics (from DGX or Cloud)
@@ -148,13 +147,13 @@ def get_telemetry_string(current_run_id: str | None, provider: str = "ollama") -
                     mod = row_ctx["model"] or ""
                     limit_k = get_model_limit_k(mod)
                     ctx_str = f"{format_tokens(p_tok)} / {limit_k}k"
-                
+
                 # Current Run Total
                 if current_run_id:
                     row_run = con.execute(
                         "SELECT SUM(prompt_tokens) as p_sum, SUM(completion_tokens) as c_sum "
                         "FROM llm_calls WHERE run_id = ?",
-                        (current_run_id,)
+                        (current_run_id,),
                     ).fetchone()
                     if row_run:
                         run_in = row_run["p_sum"] or 0
@@ -163,7 +162,9 @@ def get_telemetry_string(current_run_id: str | None, provider: str = "ollama") -
                 con.close()
         except Exception:
             pass
-            
-    token_str = f"Tokens: {format_tokens(run_in)} In / {format_tokens(run_out)} Out | 🪟 Ctx: {ctx_str}"
-    
+
+    token_str = (
+        f"Tokens: {format_tokens(run_in)} In / {format_tokens(run_out)} Out | 🪟 Ctx: {ctx_str}"
+    )
+
     return f"{sys_str}  ||  {token_str}"

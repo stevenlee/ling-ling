@@ -1,9 +1,7 @@
 """@ling-profiles command: subcommand parsing and end-to-end approve."""
-import os
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+import os
+
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import pytest
@@ -56,8 +54,10 @@ class TestProfilesAgent:
         pm = ProfileManager(profiles_dir)
         pm.queue_pending(
             profile_name="diary",
-            persona_name="diary-companion", persona_content="x",
-            template_name="diary-entry", template_content="y",
+            persona_name="diary-companion",
+            persona_content="x",
+            template_name="diary-entry",
+            template_content="y",
         )
         agent.execute({"user_directive": "show pending please"})
         _, body = reports[0]
@@ -68,8 +68,10 @@ class TestProfilesAgent:
         pm = ProfileManager(profiles_dir)
         pm.queue_pending(
             profile_name="diary",
-            persona_name="diary-companion", persona_content="x",
-            template_name="diary-entry", template_content="y",
+            persona_name="diary-companion",
+            persona_content="x",
+            template_name="diary-entry",
+            template_content="y",
         )
         agent.execute({"user_directive": "approve diary"})
         _, body = reports[0]

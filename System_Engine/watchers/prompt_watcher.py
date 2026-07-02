@@ -32,51 +32,60 @@ LOCK_FILE = PROJECT_ROOT / ".kb_lock"
 # ones (e.g. "patrol") to prevent false matches.
 # Each entry: (filename_triggers, slash_triggers, intent_key)
 INTENT_ROUTES = [
-    (["visualize"],                          ["visualize"],   "visualize"),
-    (["merge"],                              ["merge"],       "merge"),
-    (["lens", "count"],                      ["lens", "count"], "lens"),
-    (["patrol-tags"],                        ["patrol-tags"], "patrol_tags"),
-    (["repair-tags"],                        ["repair-tags"], "repair_tags"),
-    (["patrol"],                             ["patrol"],      "patrol"),
-    (["repair-db"],                          ["repair-db"],   "linter"),
-    (["insight"],                            ["insight"],     "insight"),
+    (["visualize"], ["visualize"], "visualize"),
+    (["merge"], ["merge"], "merge"),
+    (["lens", "count"], ["lens", "count"], "lens"),
+    (["patrol-tags"], ["patrol-tags"], "patrol_tags"),
+    (["repair-tags"], ["repair-tags"], "repair_tags"),
+    (["patrol"], ["patrol"], "patrol"),
+    (["repair-db"], ["repair-db"], "linter"),
+    (["insight"], ["insight"], "insight"),
     # Publishing track — turn a note's Synthesis into a learning-first blog
     # review/report (報導者／書評人). Dispatches to ReviewAgent.
-    (["review"],                             ["review"],      "review"),
+    (["review"], ["review"], "review"),
     # Publish track step 1 (ling-ling push): transform Blog/ → kafu/content/.
     # Build + deploy stay on the kafu side (`make publish`). Dispatches BlogAgent.
-    (["blog"],                               ["blog"],        "blog"),
-    (["profiles", "profile"],                ["profiles", "profile"], "profiles"),
+    (["blog"], ["blog"], "blog"),
+    (["profiles", "profile"], ["profiles", "profile"], "profiles"),
     # "recalled" before "recall": longer trigger first, else @ling-recalled
     # would false-match the recall (Q&A) route. Fires a spaced-review reinforce.
-    (["recalled"],                           ["recalled"],    "recalled"),
-    (["recall"],                             ["recall"],      "recall"),
-    (["tensions", "tension"],                ["tensions", "tension"], "tensions"),
-    (["improve", "improvements"],            ["improve"],     "improve"),
-    (["cortex"],                             ["cortex"],      "cortex"),
+    (["recalled"], ["recalled"], "recalled"),
+    (["recall"], ["recall"], "recall"),
+    (["tensions", "tension"], ["tensions", "tension"], "tensions"),
+    (["improve", "improvements"], ["improve"], "improve"),
+    (["cortex"], ["cortex"], "cortex"),
     # Brain ops — fire a maintenance/cognition pass on demand (TUI or Obsidian).
     # They run the SAME functions the scheduler/daydream pump use, under the
     # busy lock the worker already holds. No agent class; dispatched directly.
-    (["resynthesize", "re-synthesize"],      ["resynthesize", "re-synthesize"], "resynthesize"),
-    (["consolidate"],                        ["consolidate"], "consolidate"),
-    (["dream"],                              ["dream"],       "dream"),
-    (["decay"],                              ["decay"],       "decay"),
-    (["ledger"],                             ["ledger"],      "ledger"),
-    (["assess", "checkup"],                  ["assess", "checkup"], "assess"),
+    (["resynthesize", "re-synthesize"], ["resynthesize", "re-synthesize"], "resynthesize"),
+    (["consolidate"], ["consolidate"], "consolidate"),
+    (["dream"], ["dream"], "dream"),
+    (["decay"], ["decay"], "decay"),
+    (["ledger"], ["ledger"], "ledger"),
+    (["assess", "checkup"], ["assess", "checkup"], "assess"),
     # Spaced-review card on demand (小老師出題考你). Daily auto-push runs via the
     # scheduler; this is the manual "give me a card now" trigger.
-    (["quiz"],                               ["quiz"],        "quiz"),
-    (["plan"],                               ["plan"],        "plan"),
-    (["do"],                                 ["do"],          "do"),
-    (["zip"],                                ["zip"],         "kb_zip"),
-    (["unzip"],                              ["unzip"],       "kb_unzip"),
-    (["reset"],                              ["reset"],       "kb_reset"),
-    (["research"],                           ["research"],    "research"),
+    (["quiz"], ["quiz"], "quiz"),
+    (["plan"], ["plan"], "plan"),
+    (["do"], ["do"], "do"),
+    (["zip"], ["zip"], "kb_zip"),
+    (["unzip"], ["unzip"], "kb_unzip"),
+    (["reset"], ["reset"], "kb_reset"),
+    (["research"], ["research"], "research"),
 ]
 
 # Intents dispatched directly to a maintenance/cognition function (no agent).
-_BRAIN_OPS = {"dream", "consolidate", "decay", "ledger", "assess", "resynthesize",
-              "quiz", "recalled"}
+_BRAIN_OPS = {
+    "dream",
+    "consolidate",
+    "decay",
+    "ledger",
+    "assess",
+    "resynthesize",
+    "quiz",
+    "recalled",
+}
+
 
 class PromptWatcher(watchdog.events.FileSystemEventHandler):
     def __init__(self, llm_client, rag_manager):
@@ -101,6 +110,7 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
     def on_moved(self, event):
         if not event.is_directory:
             from core.config import TO_LLM_DIR
+
             dest_path = Path(event.dest_path)
             if TO_LLM_DIR in dest_path.parents:
                 self._handle_event(event, is_move=True)
@@ -110,7 +120,7 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             return
 
         filepath = Path(event.dest_path) if is_move else Path(event.src_path)
-        if filepath.suffix.lower() not in ('.md', '.txt'):
+        if filepath.suffix.lower() not in (".md", ".txt"):
             return
 
         # Enqueue and wake the worker; do NOT process here (audit R7-G). This
@@ -175,7 +185,6 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
         with self._queue_lock:
             self._queued_paths.discard(str(filepath))
 
-
     def _drain_queue(self):
         """Acquire global busy state and process every queued prompt file.
 
@@ -220,10 +229,9 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
         Called during startup (busy state held by caller) and as an idle
         callback (busy state held by the callback mechanism).
         """
-        from core.config import TO_LLM_DIR
         if TO_LLM_DIR.exists():
             for f in sorted(TO_LLM_DIR.iterdir()):
-                if f.is_file() and f.suffix.lower() in ('.md', '.txt'):
+                if f.is_file() and f.suffix.lower() in (".md", ".txt"):
                     if self._enqueue(f):
                         ui.info(f"Found pending prompt: {f.name}")
         return self._process_queue_items()
@@ -252,16 +260,13 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
         """Load explicitly linked vault sources for default Q&A prompts."""
         loaded_sources = []
         max_chars = LOAD_SOURCES_MAX_CHARS_PER_SOURCE
-        target_titles = [t.split('|')[0].strip() for t in target_entities]
+        target_titles = [t.split("|")[0].strip() for t in target_entities]
         for title in target_titles:
             resolved = _resolve_source_paths(title)
             if not resolved:
                 continue
 
-            text = "\n\n".join(
-                path.read_text(encoding="utf-8")
-                for path, _ in resolved
-            )
+            text = "\n\n".join(path.read_text(encoding="utf-8") for path, _ in resolved)
             if max_chars > 0 and len(text) > max_chars:
                 text = (
                     text[:max_chars].rstrip()
@@ -269,19 +274,21 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                 )
             loaded_sources.append(f"## Source: {title}\n\n{text}")
         return loaded_sources
-            
+
     def process_prompt(self, filepath: Path):
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 query_content = f.read()
-                
-            logging.info(f"Answering prompt {filepath.name} using {self.llm.provider.upper()} ({self.llm.model})...")
-            
+
+            logging.info(
+                f"Answering prompt {filepath.name} using {self.llm.provider.upper()} ({self.llm.model})..."
+            )
+
             # Identify Intent
-            target_entities = re.findall(r'\[\[(.*?)\]\]', query_content)
+            target_entities = re.findall(r"\[\[(.*?)\]\]", query_content)
             lower_query = query_content.lower()
             lower_name = filepath.name.lower()
-            
+
             intent_key = self._detect_intent(lower_name, lower_query)
 
             run_context = (
@@ -299,50 +306,67 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
             with run_context:
                 # Execution
                 output_path = None
-                
+
                 # Special case for non-agent maintenance (keep for now or migrate to agents later)
                 if intent_key in ["kb_zip", "kb_unzip", "kb_reset"]:
                     from maintenance.kb_manager import KBManager
+
                     manager = KBManager(self.rag)
-                    if intent_key == "kb_zip": res = f"✅ Backup successful: {manager.zip_kb().name}"
-                    elif intent_key == "kb_reset": res = manager.reset_kb()
-                    else: res = manager.unzip_kb(target_entities[0] if target_entities else None)
-                    
-                    output_path = FROM_LLM_DIR / f"✅sys-admin-{datetime.now().strftime('%Y%m%d-%H%M')}.md"
-                    output_path.write_text(f"---\ntitle: \"管理報告\"\ntype: report_admin\n---\n\n{res}", encoding='utf-8')
+                    if intent_key == "kb_zip":
+                        res = f"✅ Backup successful: {manager.zip_kb().name}"
+                    elif intent_key == "kb_reset":
+                        res = manager.reset_kb()
+                    else:
+                        res = manager.unzip_kb(target_entities[0] if target_entities else None)
+
+                    output_path = (
+                        FROM_LLM_DIR / f"✅sys-admin-{datetime.now().strftime('%Y%m%d-%H%M')}.md"
+                    )
+                    output_path.write_text(
+                        f'---\ntitle: "管理報告"\ntype: report_admin\n---\n\n{res}',
+                        encoding="utf-8",
+                    )
 
                 # Brain ops — run a cognition/maintenance pass directly (no agent),
                 # reusing the busy lock the worker already holds.
                 elif intent_key in _BRAIN_OPS:
                     res = self._run_brain_op(intent_key, target_entities)
-                    output_path = FROM_LLM_DIR / f"✅sys-admin-{datetime.now().strftime('%Y%m%d-%H%M')}.md"
+                    output_path = (
+                        FROM_LLM_DIR / f"✅sys-admin-{datetime.now().strftime('%Y%m%d-%H%M')}.md"
+                    )
                     output_path.write_text(
-                        f"---\ntitle: \"{intent_key} 報告\"\ntype: report_admin\n---\n\n{res}",
-                        encoding='utf-8',
+                        f'---\ntitle: "{intent_key} 報告"\ntype: report_admin\n---\n\n{res}',
+                        encoding="utf-8",
                     )
 
                 elif intent_key == "repair_tags":
                     from maintenance.repair_tags import repair_tags_interactively
+
                     repair_tags_interactively(filepath)
 
                 elif intent_key == "research":
                     from services.research_pipeline import ResearchPipeline
+
                     rp = ResearchPipeline(self.llm)
                     # We use query_content (original case) but strip the command prefix.
                     # Since query_content could contain the trigger anywhere, we remove it.
                     # (?!-) so we don't partially strip a @ling-research-done style marker.
-                    instruction = re.sub(f"(?i){COMMAND_PREFIX}research(?!-)", "", query_content).strip()
+                    instruction = re.sub(
+                        f"(?i){COMMAND_PREFIX}research(?!-)", "", query_content
+                    ).strip()
                     if not instruction:
                         instruction = "General topic"
-                        
+
                     res = rp.prepare_and_run(instruction, query_content)
-                    
-                    short_topic = filepath.stem[6:] if filepath.stem.startswith("@ling-") else filepath.stem
-                    timestamp = datetime.now().strftime('%Y%m%d-%H%M')
+
+                    short_topic = (
+                        filepath.stem[6:] if filepath.stem.startswith("@ling-") else filepath.stem
+                    )
+                    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
                     output_path = FROM_LLM_DIR / f"💌re-{short_topic}-{timestamp}.md"
                     output_path.write_text(
-                        f"---\ntitle: \"re: {filepath.stem}\"\ntype: research\n---\n\n{res}",
-                        encoding='utf-8'
+                        f'---\ntitle: "re: {filepath.stem}"\ntype: research\n---\n\n{res}',
+                        encoding="utf-8",
                     )
 
                 elif intent_key:
@@ -350,7 +374,7 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                     if agent:
                         # Prepare context
                         context = {
-                            "target_titles": [t.split('|')[0].strip() for t in target_entities],
+                            "target_titles": [t.split("|")[0].strip() for t in target_entities],
                             "user_directive": query_content,
                             "strategy_id": "recency",
                             "is_full_report": "/full" in lower_query,
@@ -359,59 +383,79 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                             # and "linter" (@ling-repair-db, focused DB repair).
                             "intent_key": intent_key,
                         }
-                        
-                        template_match = re.search(r'/template[:\s]+([\w-]+)', lower_query)
+
+                        template_match = re.search(r"/template[:\s]+([\w-]+)", lower_query)
                         if template_match:
                             context["forced_template"] = template_match.group(1)
-                            
+
                         # Specialized context for InsightAgent
                         if intent_key == "insight":
                             context.update(self._detect_planner_flags(lower_query))
-                            for s_id in getattr(agent, 'strategies', {}).keys():
+                            for s_id in getattr(agent, "strategies", {}).keys():
                                 # `/tag` and `/tags` are documented shortcuts for the
                                 # tag-cluster strategy (its skill name is "tag-cluster",
                                 # not "tags" — that's its `method:` field).
-                                if f"/{s_id}" in lower_query or (s_id == "tag-cluster" and "/tag" in lower_query):
+                                if f"/{s_id}" in lower_query or (
+                                    s_id == "tag-cluster" and "/tag" in lower_query
+                                ):
                                     context["strategy_id"] = s_id
                                     break
                         # Specialized context for LingLens/CounterAgent
                         elif intent_key == "lens":
                             confidence = "medium"
-                            conf_match = re.search(r'(?:confidence|信心)\s*[:：]\s*(high|medium|low)', lower_query)
+                            conf_match = re.search(
+                                r"(?:confidence|信心)\s*[:：]\s*(high|medium|low)", lower_query
+                            )
                             if conf_match:
                                 confidence = conf_match.group(1)
                             context["confidence"] = confidence
-                        
+
                         agent.execute(context)
                     else:
                         logging.warning(f"No agent found for intent: {intent_key}")
-                
+
                 else:
                     # Default Chat/Q&A
                     loaded_sources = self._load_linked_sources(target_entities)
-                    relevant = self.rag.query_similar_notes(query_content, top_k=settings.SEARCH_DEPTH)
+                    relevant = self.rag.query_similar_notes(
+                        query_content, top_k=settings.SEARCH_DEPTH
+                    )
                     context_parts = []
                     if loaded_sources:
                         context_parts.extend(loaded_sources)
                     if relevant:
                         context_parts.extend(relevant)
 
-                    context = "\n---\n".join(context_parts) if context_parts else (INDEX_FILE.read_text('utf-8') if INDEX_FILE.exists() else "")
-                    
+                    context = (
+                        "\n---\n".join(context_parts)
+                        if context_parts
+                        else (INDEX_FILE.read_text("utf-8") if INDEX_FILE.exists() else "")
+                    )
+
                     forced_template = None
-                    template_match = re.search(r'/template[:\s]+([\w-]+)', lower_query)
+                    template_match = re.search(r"/template[:\s]+([\w-]+)", lower_query)
                     if template_match:
                         forced_template = template_match.group(1)
-                    
-                    res = self.llm.answer_query(query_content, context, forced_template=forced_template)
-                    
-                    trace_ids = self.llm.current_trace_ids() if hasattr(self.llm, "current_trace_ids") else []
-                    run_id = self.llm.current_run_id() if hasattr(self.llm, "current_run_id") else None
-                    
-                    short_topic = filepath.stem[6:] if filepath.stem.startswith("@ling-") else filepath.stem
-                    timestamp = datetime.now().strftime('%Y%m%d-%H%M')
+
+                    res = self.llm.answer_query(
+                        query_content, context, forced_template=forced_template
+                    )
+
+                    trace_ids = (
+                        self.llm.current_trace_ids()
+                        if hasattr(self.llm, "current_trace_ids")
+                        else []
+                    )
+                    run_id = (
+                        self.llm.current_run_id() if hasattr(self.llm, "current_run_id") else None
+                    )
+
+                    short_topic = (
+                        filepath.stem[6:] if filepath.stem.startswith("@ling-") else filepath.stem
+                    )
+                    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
                     output_path = FROM_LLM_DIR / f"💌re-{short_topic}-{timestamp}.md"
-                    
+
                     if forced_template:
                         # Template path: the model emits its own YAML frontmatter
                         # + body, so write it through verbatim rather than wrapping
@@ -419,24 +463,21 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                         # template-shaped document.
                         output_path = FROM_LLM_DIR / f"📄{forced_template}-{filepath.stem}.md"
                         body = res if res.endswith("\n") else f"{res}\n"
-                        output_path.write_text(body, encoding='utf-8')
+                        output_path.write_text(body, encoding="utf-8")
                         artifact_type = "report"
                         artifact_title = f"{forced_template}: {filepath.stem}"
                     else:
                         trace_meta = ""
                         if run_id or trace_ids:
-                            trace_meta = (
-                                f"run_id: {run_id or ''}\n"
-                                f"trace_ids: {trace_ids}\n"
-                            )
+                            trace_meta = f"run_id: {run_id or ''}\ntrace_ids: {trace_ids}\n"
                         full_content = (
-                            f"---\ntitle: \"re: {filepath.stem}\"\ntype: chat\n{trace_meta}---\n\n"
+                            f'---\ntitle: "re: {filepath.stem}"\ntype: chat\n{trace_meta}---\n\n'
                             f"> {query_content.strip()}\n\n{res}\n"
                         )
-                        output_path.write_text(full_content, encoding='utf-8')
+                        output_path.write_text(full_content, encoding="utf-8")
                         artifact_type = "chat"
                         artifact_title = f"re: {filepath.stem}"
-                    
+
                     if hasattr(self.llm, "trace_store"):
                         self.llm.trace_store.record_artifact(
                             path=output_path,
@@ -447,7 +488,7 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
                         )
 
             self._archive_raw(filepath)
-            
+
         except Exception as e:
             logging.error(f"Error answering {filepath.name}: {str(e)}")
             self._write_error_output(filepath, e)
@@ -465,30 +506,37 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
         # Both read/write only Cortex/*.md via cortex_store — no agent needed.
         if intent_key == "quiz":
             from maintenance.spaced_review import run_spaced_review
+
             result = run_spaced_review(self.llm, self.rag, occasion="Manual")
             return f"[{result.status}] {result.summary}"
         if intent_key == "recalled":
             from maintenance.spaced_review import run_recalled_report
+
             result = run_recalled_report(target_entities)
             return f"[{result.status}] {result.summary}"
 
         trace_store = getattr(self.llm, "trace_store", None)
         if intent_key == "dream":
             from maintenance.daily_insight import run_daily_insight
+
             result = run_daily_insight(self.llm, self.rag, occasion="Manual")
         elif intent_key == "consolidate":
             from maintenance.cortex_consolidation import run_consolidation
+
             result = run_consolidation(self.llm, self.rag)
         elif intent_key == "decay":
             from maintenance.cortex_decay_pass import run_decay_pass
+
             result = run_decay_pass(self.llm, self.rag)
         elif intent_key == "ledger":
             from maintenance.cortex_ledger import run_ledger_pass
+
             result = run_ledger_pass(self.llm, self.rag)
         elif intent_key == "assess":
             if trace_store is None:
                 return "skipped：沒有 trace store，無法體檢。"
             from maintenance.self_assessment import run_self_assessment
+
             result = run_self_assessment(trace_store)
         else:
             return f"未知的大腦指令：{intent_key}"
@@ -503,7 +551,8 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
         archived source back into Consolidate/ (ClippingWatcher picks it up).
         Sidecar images are restored too so `images/<title>/` links resolve."""
         from core.config import RAW_CONSOLIDATE_DIR, CONSOLIDATE_DIR
-        titles = [t.split('|')[0].strip() for t in target_entities]
+
+        titles = [t.split("|")[0].strip() for t in target_entities]
         if not titles:
             return "skipped：請以 [[標題]] 指定要重新 synthesis 的文件。"
         done, missing = [], []
@@ -528,17 +577,18 @@ class PromptWatcher(watchdog.events.FileSystemEventHandler):
         return "；".join(parts) or "無動作"
 
     def _archive_raw(self, filepath: Path):
-        if not filepath.exists(): return
+        if not filepath.exists():
+            return
         # Ensure we are using the simple name to avoid weird path corruption
         safe_name = os.path.basename(str(filepath))
         dest = RAW_PROMPTS_DIR / safe_name
-        
+
         if dest.exists():
-            timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             stem = Path(safe_name).stem
             suffix = Path(safe_name).suffix
             dest = RAW_PROMPTS_DIR / f"{stem}_{timestamp}{suffix}"
-            
+
         try:
             shutil.move(str(filepath), str(dest))
         except Exception as e:
@@ -562,6 +612,6 @@ request_id: "{request_id}"
 {safe_message}
 """
         try:
-            output_path.write_text(body, encoding='utf-8')
+            output_path.write_text(body, encoding="utf-8")
         except Exception as write_error:
             logging.error(f"Failed to write error output for {request_id}: {write_error}")

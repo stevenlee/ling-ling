@@ -10,11 +10,10 @@ generate_full_insight it was missing entirely.
 These tests pin the contract: the Insights/ copy is byte-identical to
 the canonical FROM_LLM_DIR report.
 """
+
 import os
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import pytest
@@ -35,6 +34,7 @@ def stub_agent(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "FROM_LLM_DIR", from_llm_dir)
     # base_agent imported FROM_LLM_DIR at module load — patch that binding too.
     import agents.base_agent as base_agent_mod
+
     monkeypatch.setattr(base_agent_mod, "FROM_LLM_DIR", from_llm_dir)
 
     agent = InsightAgent.__new__(InsightAgent)
@@ -49,6 +49,7 @@ def stub_agent(tmp_path, monkeypatch):
 
 class _StubLLM:
     """Minimal LLM stub: returns deterministic content; satisfies _self_correct calls."""
+
     model = "stub-model"
 
     def answer_query(self, *a, **kw):
@@ -149,32 +150,38 @@ class _PlannerStubLLM(_StubLLM):
 ```"""
 
     def generate_synthesis(self, *, title, part_digests, final_concepts, template=None, **kwargs):
-        self.synthesis_calls.append({
-            "title": title,
-            "part_digests": part_digests,
-            "final_concepts": final_concepts,
-            "template": template,
-            **kwargs,
-        })
+        self.synthesis_calls.append(
+            {
+                "title": title,
+                "part_digests": part_digests,
+                "final_concepts": final_concepts,
+                "template": template,
+                **kwargs,
+            }
+        )
         return "SYNTHESIS OUTPUT"
 
     def critique_text(self, *, candidate, sources, focus=None):
-        self.critique_calls.append({
-            "candidate": candidate,
-            "sources": sources,
-            "focus": focus,
-        })
+        self.critique_calls.append(
+            {
+                "candidate": candidate,
+                "sources": sources,
+                "focus": focus,
+            }
+        )
         return "CRITIQUE OUTPUT"
 
 
 class _AnswerPlannerStubLLM(_PlannerStubLLM):
     def answer_query(self, query_content, wiki_context="", **kwargs):
         if kwargs.get("operation") == "answer_from_sources":
-            self.answer_from_sources_calls.append({
-                "query_content": query_content,
-                "wiki_context": wiki_context,
-                **kwargs,
-            })
+            self.answer_from_sources_calls.append(
+                {
+                    "query_content": query_content,
+                    "wiki_context": wiki_context,
+                    **kwargs,
+                }
+            )
             return "FINAL SOURCE-GROUNDED ANSWER"
         self.calls.append({"query": query_content, **kwargs})
         return """```json
@@ -202,11 +209,13 @@ class _AnswerPlannerStubLLM(_PlannerStubLLM):
 class _LoadThenAnswerPlannerStubLLM(_AnswerPlannerStubLLM):
     def answer_query(self, query_content, wiki_context="", **kwargs):
         if kwargs.get("operation") == "answer_from_sources":
-            self.answer_from_sources_calls.append({
-                "query_content": query_content,
-                "wiki_context": wiki_context,
-                **kwargs,
-            })
+            self.answer_from_sources_calls.append(
+                {
+                    "query_content": query_content,
+                    "wiki_context": wiki_context,
+                    **kwargs,
+                }
+            )
             return f"FINAL ANSWER WITH {len(wiki_context)} SOURCE CHARS"
         self.calls.append({"query": query_content, **kwargs})
         return """```json
@@ -271,7 +280,9 @@ class TestMirrorMetadata:
         agent, from_llm_dir, insights_dir = stub_agent
 
         path, full_markdown = agent._write_report(
-            "Test Report", "Body of report.", "report_insight",
+            "Test Report",
+            "Body of report.",
+            "report_insight",
             {"exercise_strategy": "recency", "pipeline": "single"},
         )
         agent._mirror_to_insights(
@@ -285,7 +296,8 @@ class TestMirrorMetadata:
 
         # Insights/ copy equals the canonical report — same bytes.
         mirrored = [
-            path for path in insights_dir.iterdir()
+            path
+            for path in insights_dir.iterdir()
             if path.name.endswith("[Test Source][insight-recency].md")
         ]
         assert len(mirrored) == 1
@@ -298,15 +310,24 @@ class TestMirrorMetadata:
         agent, _, insights_dir = stub_agent
 
         _, full_markdown = agent._write_report(
-            "Test Report", "Body.", "report_insight",
+            "Test Report",
+            "Body.",
+            "report_insight",
             {"exercise_strategy": "recency"},
         )
         agent._mirror_to_insights(full_markdown, requested_cmd="insight-recency")
 
         mirror = next(insights_dir.iterdir()).read_text(encoding="utf-8")
         assert mirror.startswith("---\n"), "mirror should have YAML frontmatter"
-        for field in ("title:", "type: report_insight", "engine_build:", "date_created:",
-                      "input_chars:", "output_chars:", "exercise_strategy: recency"):
+        for field in (
+            "title:",
+            "type: report_insight",
+            "engine_build:",
+            "date_created:",
+            "input_chars:",
+            "output_chars:",
+            "exercise_strategy: recency",
+        ):
             assert field in mirror, f"mirror missing {field!r}"
 
     def test_full_insight_mirror_has_frontmatter(self, stub_agent):
@@ -318,7 +339,9 @@ class TestMirrorMetadata:
 
         # Simulate the no-extra-metadata case generate_full_insight uses.
         _, full_markdown = agent._write_report(
-            "全方位洞察報告", "Body content.", "report_insight_full",
+            "全方位洞察報告",
+            "Body content.",
+            "report_insight_full",
         )
         agent._mirror_to_insights(
             full_markdown,
@@ -327,8 +350,7 @@ class TestMirrorMetadata:
         )
 
         mirror = next(
-            path for path in insights_dir.iterdir()
-            if path.name.endswith("[A+B][full-insight].md")
+            path for path in insights_dir.iterdir() if path.name.endswith("[A+B][full-insight].md")
         ).read_text(encoding="utf-8")
         assert mirror.startswith("---\n"), "full-insight mirror lost its frontmatter"
         assert "type: report_insight_full" in mirror
@@ -339,7 +361,9 @@ class TestMirrorMetadata:
         agent, _, insights_dir = stub_agent
 
         _, full_markdown = agent._write_report(
-            "Test Report", "Body.", "report_insight",
+            "Test Report",
+            "Body.",
+            "report_insight",
         )
         agent._mirror_to_insights(
             full_markdown,
@@ -355,7 +379,9 @@ class TestMirrorMetadata:
         agent, _, insights_dir = stub_agent
 
         _, full_markdown = agent._write_report(
-            "Test Report", "Body.", "report_insight",
+            "Test Report",
+            "Body.",
+            "report_insight",
         )
         agent._mirror_to_insights(full_markdown, requested_cmd="full-insight")
 
@@ -375,11 +401,13 @@ class TestPlannerPreview:
         agent._run_single = boom
         agent._run_montecarlo = boom
 
-        full_markdown = agent.execute({
-            "planner_mode": True,
-            "user_directive": "@ling-insight planner-mode compare [[A]] and [[B]]",
-            "target_titles": ["A", "B"],
-        })
+        full_markdown = agent.execute(
+            {
+                "planner_mode": True,
+                "user_directive": "@ling-insight planner-mode compare [[A]] and [[B]]",
+                "target_titles": ["A", "B"],
+            }
+        )
 
         assert "planner_mode: preview" in full_markdown
         assert "type: report_insight_planner_preview" in full_markdown
@@ -393,7 +421,8 @@ class TestPlannerPreview:
         assert "Step 2: `crit`" in full_markdown
         assert "no pipeline steps were executed" in full_markdown
         mirrored = [
-            path for path in insights_dir.iterdir()
+            path
+            for path in insights_dir.iterdir()
             if path.name.endswith("[A+B][insight-plan-preview].md")
         ]
         assert len(mirrored) == 1
@@ -404,12 +433,14 @@ class TestPlannerPreview:
         llm = _PlannerStubLLM()
         agent.llm = llm
 
-        full_markdown = agent.execute({
-            "planner_mode": True,
-            "execute_plan": True,
-            "user_directive": "@ling-insight planner-mode /execute compare [[A]] and [[B]]",
-            "target_titles": ["A", "B"],
-        })
+        full_markdown = agent.execute(
+            {
+                "planner_mode": True,
+                "execute_plan": True,
+                "user_directive": "@ling-insight planner-mode /execute compare [[A]] and [[B]]",
+                "target_titles": ["A", "B"],
+            }
+        )
 
         assert "execute_requested: true" in full_markdown
         assert "planner_mode: execute" in full_markdown
@@ -428,19 +459,23 @@ class TestPlannerPreview:
         llm = _AnswerPlannerStubLLM()
         agent.llm = llm
 
-        full_markdown = agent.execute({
-            "planner_mode": True,
-            "execute_plan": True,
-            "user_directive": "@ling-insight planner-mode /execute compare [[A]]",
-            "target_titles": ["A"],
-        })
+        full_markdown = agent.execute(
+            {
+                "planner_mode": True,
+                "execute_plan": True,
+                "user_directive": "@ling-insight planner-mode /execute compare [[A]]",
+                "target_titles": ["A"],
+            }
+        )
 
         assert "planner_mode: execute" in full_markdown
         assert "finality_status: final_output" in full_markdown
         assert "FINAL SOURCE-GROUNDED ANSWER" in full_markdown
         assert len(llm.answer_from_sources_calls) == 1
 
-    def test_execute_report_includes_loaded_source_appendix(self, stub_agent, tmp_path, monkeypatch):
+    def test_execute_report_includes_loaded_source_appendix(
+        self, stub_agent, tmp_path, monkeypatch
+    ):
         import services.builtin_adapters as adapters_mod
 
         pages = tmp_path / "pages"
@@ -453,17 +488,21 @@ class TestPlannerPreview:
         llm = _LoadThenAnswerPlannerStubLLM()
         agent.llm = llm
 
-        full_markdown = agent.execute({
-            "planner_mode": True,
-            "execute_plan": True,
-            "user_directive": "@ling-insight planner-mode /execute compare [[Book A]]",
-            "target_titles": ["Book A"],
-        })
+        full_markdown = agent.execute(
+            {
+                "planner_mode": True,
+                "execute_plan": True,
+                "user_directive": "@ling-insight planner-mode /execute compare [[Book A]]",
+                "target_titles": ["Book A"],
+            }
+        )
 
         assert "planner_mode: execute" in full_markdown
         assert "## Source Appendix" in full_markdown
         assert "| Book A | stitched |" in full_markdown
-        assert "| Title | Kind | Loaded chars | Original chars | Truncated | Path |" in full_markdown
+        assert (
+            "| Title | Kind | Loaded chars | Original chars | Truncated | Path |" in full_markdown
+        )
         assert "yes" in full_markdown
         assert len(llm.answer_from_sources_calls) == 1
         assert "## Source: Book A" in llm.answer_from_sources_calls[0]["wiki_context"]
@@ -473,12 +512,14 @@ class TestPlannerPreview:
         llm = _MissingContextPlannerStubLLM()
         agent.llm = llm
 
-        full_markdown = agent.execute({
-            "planner_mode": True,
-            "execute_plan": True,
-            "user_directive": "@ling-insight planner-mode /execute critique [[A]]",
-            "target_titles": ["A"],
-        })
+        full_markdown = agent.execute(
+            {
+                "planner_mode": True,
+                "execute_plan": True,
+                "user_directive": "@ling-insight planner-mode /execute critique [[A]]",
+                "target_titles": ["A"],
+            }
+        )
 
         assert "planner_mode: preview" in full_markdown
         assert "execution_status: blocked_by_execution_gate" in full_markdown
@@ -491,10 +532,12 @@ class TestPlannerPreview:
         llm = _PlannerStubLLM()
         agent.llm = llm
 
-        agent.execute({
-            "planner_mode": True,
-            "user_directive": "@ling-insight planner-mode compare notes",
-        })
+        agent.execute(
+            {
+                "planner_mode": True,
+                "user_directive": "@ling-insight planner-mode compare notes",
+            }
+        )
 
         assert len(llm.calls) == 1
         assert llm.calls[0]["operation"] == "plan"
@@ -508,23 +551,27 @@ class _LoadDigestAnswerPlannerStubLLM(_AnswerPlannerStubLLM):
         self.digest_calls = []
 
     def digest_sources(self, *, query, source_title, source_text, budget):
-        self.digest_calls.append({
-            "query": query,
-            "source_title": source_title,
-            "source_text": source_text,
-            "budget": budget,
-        })
+        self.digest_calls.append(
+            {
+                "query": query,
+                "source_title": source_title,
+                "source_text": source_text,
+                "budget": budget,
+            }
+        )
         return f"DIGEST OF {source_title}"
 
     def answer_query(self, query_content, wiki_context="", **kwargs):
         if kwargs.get("operation") == "digest_sources":
             return "DIGEST OF BOOK"
         if kwargs.get("operation") == "answer_from_sources":
-            self.answer_from_sources_calls.append({
-                "query_content": query_content,
-                "wiki_context": wiki_context,
-                **kwargs,
-            })
+            self.answer_from_sources_calls.append(
+                {
+                    "query_content": query_content,
+                    "wiki_context": wiki_context,
+                    **kwargs,
+                }
+            )
             return f"FINAL ANSWER WITH {len(wiki_context)} CHARS"
         self.calls.append({"query": query_content, **kwargs})
         return """```json
@@ -586,16 +633,21 @@ def test_execute_report_includes_digest_source_appendix(stub_agent, tmp_path, mo
     llm = _LoadDigestAnswerPlannerStubLLM()
     agent.llm = llm
 
-    full_markdown = agent.execute({
-        "planner_mode": True,
-        "execute_plan": True,
-        "user_directive": "@ling-insight planner-mode /execute compare [[Book A]] and [[Book B]]",
-        "target_titles": ["Book A", "Book B"],
-    })
+    full_markdown = agent.execute(
+        {
+            "planner_mode": True,
+            "execute_plan": True,
+            "user_directive": "@ling-insight planner-mode /execute compare [[Book A]] and [[Book B]]",
+            "target_titles": ["Book A", "Book B"],
+        }
+    )
 
     assert "planner_mode: execute" in full_markdown
     assert "## Source Appendix" in full_markdown
-    assert "| Title | Kind | Loaded chars | Original chars | Truncated | Digest chars | Coverage Warning | Path |" in full_markdown
+    assert (
+        "| Title | Kind | Loaded chars | Original chars | Truncated | Digest chars | Coverage Warning | Path |"
+        in full_markdown
+    )
     assert "| Book A | stitched |" in full_markdown
     assert "| Book B | stitched |" in full_markdown
     assert "none" in full_markdown
@@ -607,8 +659,10 @@ if __name__ == "__main__":
 
 # ── R7-D: targeted-pair fallback must respect the exclude set ───────────
 
+
 def test_targeted_pairs_fallback_respects_exclude():
     from agents.insight_agent import InsightAgent
+
     agent = InsightAgent.__new__(InsightAgent)
     T = {"title": "T"}
     A = {"title": "A"}
@@ -617,7 +671,9 @@ def test_targeted_pairs_fallback_respects_exclude():
 
     # The only possible partner pair (T, A) is excluded → fallback must NOT
     # re-emit it; return empty (caller's stop signal).
-    out = agent._build_targeted_pairs([T, A], ["T"], num_pairs=1, exclude={InsightAgent._pair_key(T, A)})
+    out = agent._build_targeted_pairs(
+        [T, A], ["T"], num_pairs=1, exclude={InsightAgent._pair_key(T, A)}
+    )
     assert out == []
 
     # With nothing excluded, the fallback pairs the target with A.
@@ -627,8 +683,10 @@ def test_targeted_pairs_fallback_respects_exclude():
 
 # ── Phase 6: insight learning-artifact auto-attach (flag-gated) ─────────
 
+
 def test_maybe_artifact_off_returns_empty(monkeypatch):
     from agents.insight_agent import InsightAgent
+
     monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", False)
     agent = InsightAgent.__new__(InsightAgent)
     agent.llm = object()
@@ -637,7 +695,7 @@ def test_maybe_artifact_off_returns_empty(monkeypatch):
 
 def test_maybe_artifact_on_wraps_section(monkeypatch):
     from agents.insight_agent import InsightAgent
-    import agents.insight_agent as ia
+
     agent = InsightAgent.__new__(InsightAgent)
     agent.llm = object()
     monkeypatch.setattr(
@@ -650,6 +708,7 @@ def test_maybe_artifact_on_wraps_section(monkeypatch):
 
 def test_maybe_artifact_failopen(monkeypatch):
     from agents.insight_agent import InsightAgent
+
     agent = InsightAgent.__new__(InsightAgent)
     agent.llm = object()
 

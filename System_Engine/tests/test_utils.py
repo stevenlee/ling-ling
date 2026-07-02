@@ -1,10 +1,6 @@
 """
 Unit tests for core.utils — shared utility functions.
 """
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import pytest
 from core.utils import digest_value_to_text

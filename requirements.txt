@@ -1,3 +1,5 @@
+# NOTE: pyproject.toml is now the canonical dependency list (P0 refactor).
+# This file is kept for one transition release; prefer `make install-dev`.
 watchdog
 openai
 google-genai

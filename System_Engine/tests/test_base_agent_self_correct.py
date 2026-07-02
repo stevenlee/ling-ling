@@ -7,12 +7,10 @@ report body contained anything the markdown quality pipeline wanted to
 repair. The nightly full-insight scheduler tripped this for ~24h before
 detection — see Database/maintenance_state.json.
 """
+
 import logging
 import os
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import pytest
@@ -22,6 +20,7 @@ from agents.base_agent import BaseAgent
 
 class _StubLLM:
     """Bare minimum to satisfy BaseAgent.__init__."""
+
     pass
 
 
@@ -60,9 +59,7 @@ def test_self_correct_with_empty_fixes_logs_nothing(caplog):
     agent = BaseAgent(_StubLLM())
     with caplog.at_level(logging.INFO):
         agent._self_correct("Plain prose with nothing to repair.")
-    assert not any(
-        "Applied markdown quality fixes" in r.message for r in caplog.records
-    )
+    assert not any("Applied markdown quality fixes" in r.message for r in caplog.records)
 
 
 if __name__ == "__main__":

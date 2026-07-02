@@ -1,3 +1,5 @@
+# NOTE: pyproject.toml is now the canonical dependency list (P0 refactor).
+# This file is kept for one transition release; prefer `make install-dev`.
 # Optional reranker extra — install to enable the cross-encoder reranker.
 #
 #   pip install -r requirements-reranker.txt

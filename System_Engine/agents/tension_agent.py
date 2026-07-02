@@ -20,7 +20,6 @@ class TensionAgent(BaseAgent):
     def execute(self, context: dict) -> str:
         ui.set_status("💬 掃描知識張力…")
         report = scan_tensions(CORTEX_DIR)
-        body = self._render(report)
         counts = {
             "contradictions": len(report.contradictions),
             "dogmatic": len(report.dogmatic),
@@ -54,15 +53,17 @@ class TensionAgent(BaseAgent):
         if r.contradictions:
             L += ["## 💬 矛盾對（活的異議）", ""]
             for p, others in r.contradictions:
-                L.append(f"- {_STATUS_BADGE.get(p.status,'')} **{claim_line(p)}**")
+                L.append(f"- {_STATUS_BADGE.get(p.status, '')} **{claim_line(p)}**")
                 for o in others:
                     L.append(f"  - ↔ 與之衝突：{o}")
             L.append("")
 
         if r.dogmatic:
             L += [
-                "## 🧱 教條風險（高信心、低可反駁性）", "",
-                "> 這些主張**信得高、卻難以被推翻**——同溫層的結構性燃料。優先重新檢視或補上可檢驗的反例。", "",
+                "## 🧱 教條風險（高信心、低可反駁性）",
+                "",
+                "> 這些主張**信得高、卻難以被推翻**——同溫層的結構性燃料。優先重新檢視或補上可檢驗的反例。",
+                "",
             ]
             for p in r.dogmatic:
                 fz = "—" if p.falsifiability is None else f"{p.falsifiability:.2f}"

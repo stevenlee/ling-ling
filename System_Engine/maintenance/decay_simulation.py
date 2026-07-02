@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 
 from core.config import CORTEX_DIR
 from services.cortex_decay import derive_status, retrievability
@@ -73,7 +72,11 @@ def simulate(
         status = "active"
         for event in events[1:]:
             r_event = retrievability(
-                S, last.isoformat(), base_days=base_days, growth=growth, now=event,
+                S,
+                last.isoformat(),
+                base_days=base_days,
+                growth=growth,
+                now=event,
             )
             new_status = derive_status(status, r_event)
             if new_status != status:
@@ -87,7 +90,11 @@ def simulate(
         while cursor < now:
             cursor = min(now, cursor.replace(hour=23, minute=59, second=59))
             r_cursor = retrievability(
-                S, last.isoformat(), base_days=base_days, growth=growth, now=cursor,
+                S,
+                last.isoformat(),
+                base_days=base_days,
+                growth=growth,
+                now=cursor,
             )
             new_status = derive_status(status, r_cursor)
             if new_status != status:
@@ -98,7 +105,11 @@ def simulate(
             cursor = datetime.fromordinal(cursor.toordinal() + 1)
 
         r_final = retrievability(
-            S, last.isoformat(), base_days=base_days, growth=growth, now=now,
+            S,
+            last.isoformat(),
+            base_days=base_days,
+            growth=growth,
+            now=now,
         )
         r_values.append(r_final)
         status_counts[status] = status_counts.get(status, 0) + 1
@@ -126,13 +137,17 @@ def main():
         print("No cortex pages to simulate.")
         return
     print(f"Simulating {len(pages)} pages over the (base, growth) grid:\n")
-    print(f"{'base':>6} {'growth':>7} {'active':>7} {'fading':>7} {'dormant':>8} "
-          f"{'trans':>6} {'mean_R':>7}")
+    print(
+        f"{'base':>6} {'growth':>7} {'active':>7} {'fading':>7} {'dormant':>8} "
+        f"{'trans':>6} {'mean_R':>7}"
+    )
     for cell in run_grid(pages):
         c = cell.status_counts
-        print(f"{cell.base_days:>6.0f} {cell.growth:>7.1f} {c.get('active', 0):>7} "
-              f"{c.get('fading', 0):>7} {c.get('dormant', 0):>8} "
-              f"{cell.transition_count:>6} {cell.mean_r:>7.3f}")
+        print(
+            f"{cell.base_days:>6.0f} {cell.growth:>7.1f} {c.get('active', 0):>7} "
+            f"{c.get('fading', 0):>7} {c.get('dormant', 0):>8} "
+            f"{cell.transition_count:>6} {cell.mean_r:>7.3f}"
+        )
 
 
 if __name__ == "__main__":

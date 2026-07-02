@@ -1,10 +1,6 @@
 """cortex_store: the only Cortex page read/write path. The hard gate is
 parse(render(page)) round-tripping every field — including Chinese
 claims, special characters, and PyYAML's eager timestamp parsing."""
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 from services.cortex_store import (
     CortexPage,
@@ -12,7 +8,6 @@ from services.cortex_store import (
     load_all_pages,
     make_claim_id,
     parse_cortex_page,
-    render_cortex_page,
     save_cortex_page,
 )
 
@@ -87,7 +82,8 @@ class TestRoundTrip:
 
     def test_evidence_date_coercion(self, tmp_path):
         page = _page(
-            tmp_path, "Evidence dates also stay strings.",
+            tmp_path,
+            "Evidence dates also stay strings.",
             evidence=[{"insight": "x.md", "sources": ["A"], "date": "2026-06-11", "summary": "s"}],
         )
         parsed = _roundtrip(page)

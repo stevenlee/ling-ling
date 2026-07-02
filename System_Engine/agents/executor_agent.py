@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from pathlib import Path
 from typing import Any
 
 from agents.base_agent import BaseAgent
@@ -133,24 +132,16 @@ class ExecutorAgent(BaseAgent):
             "pipeline_run_id": result.run_id,
             "step_count": len(spec.steps),
             "execution_status": result.status,
-            "step_statuses": {
-                step_id: sr.status for step_id, sr in result.steps.items()
-            },
+            "step_statuses": {step_id: sr.status for step_id, sr in result.steps.items()},
             "initial_context_keys": sorted(initial_context.keys()),
         }
         title = f"{spec.description or spec.id}"
         self._write_report(title, report, "cmd", meta)
 
         if result.status == "succeeded":
-            ui.success(
-                f"⚙️ Executor 完成：{plan_id} ({len(result.steps)} steps, "
-                f"all succeeded)"
-            )
+            ui.success(f"⚙️ Executor 完成：{plan_id} ({len(result.steps)} steps, all succeeded)")
         else:
-            ui.error(
-                f"⚙️ Executor failed at step → see report. "
-                f"Plan: {plan_id}"
-            )
+            ui.error(f"⚙️ Executor failed at step → see report. Plan: {plan_id}")
         return report
 
     # ── Plan loading ───────────────────────────────────────────────────
@@ -258,12 +249,14 @@ class ExecutorAgent(BaseAgent):
         ]
 
         if result.error:
-            lines.extend([
-                "## 💦 Execution Error",
-                "",
-                f"```\n{result.error}\n```",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## 💦 Execution Error",
+                    "",
+                    f"```\n{result.error}\n```",
+                    "",
+                ]
+            )
 
         # Initial context summary
         if initial_context:
@@ -288,9 +281,7 @@ class ExecutorAgent(BaseAgent):
                 "skipped": "⏭",
                 "failed": "💧",
             }.get(step_result.status, "❔")
-            lines.append(
-                f"### Step {idx}: `{step.id}` — {emoji} {step_result.status}"
-            )
+            lines.append(f"### Step {idx}: `{step.id}` — {emoji} {step_result.status}")
             lines.append(f"- **Capability**: `{step.capability}`")
             lines.append(f"- **Adapter**: `{step.adapter}`")
             if step_result.duration_ms is not None:
@@ -304,16 +295,18 @@ class ExecutorAgent(BaseAgent):
 
         # Trace pointer (Phase 5C: parent + per-step children)
         if result.run_id:
-            lines.extend([
-                "## 🔍 Trace",
-                "",
-                f"- **Pipeline run id**: `{result.run_id}`",
-                "- Per-step LLM calls and artifacts are children of this "
-                "run in `llm_trace.sqlite`.",
-                "- Query: `SELECT * FROM runs WHERE parent_run_id = "
-                f"'{result.run_id}' ORDER BY started_at;`",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## 🔍 Trace",
+                    "",
+                    f"- **Pipeline run id**: `{result.run_id}`",
+                    "- Per-step LLM calls and artifacts are children of this "
+                    "run in `llm_trace.sqlite`.",
+                    "- Query: `SELECT * FROM runs WHERE parent_run_id = "
+                    f"'{result.run_id}' ORDER BY started_at;`",
+                    "",
+                ]
+            )
 
         return "\n".join(lines)
 
@@ -336,7 +329,6 @@ class ExecutorAgent(BaseAgent):
 
     def _error_report(self, message: str) -> str:
         body = f"# 💧 Executor Error\n\n{message}\n"
-        self._write_report("Error", body, "cmd",
-                            {"error": True})
+        self._write_report("Error", body, "cmd", {"error": True})
         ui.error(f"⚙️ Executor failed: {message.splitlines()[0][:120]}")
         return body

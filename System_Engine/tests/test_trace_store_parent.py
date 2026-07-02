@@ -1,10 +1,9 @@
 """Tests for TraceStore parent_run_id auto-detection (Phase 5C)."""
+
 import os
 import sqlite3
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import pytest
@@ -21,9 +20,11 @@ class TestParentRunIdAutoDetect:
         ts = _trace_store(tmp_path)
         with ts.run(intent="solo") as run_id:
             pass
-        row = sqlite3.connect(str(ts.db_path)).execute(
-            "SELECT parent_run_id FROM runs WHERE run_id = ?", (run_id,)
-        ).fetchone()
+        row = (
+            sqlite3.connect(str(ts.db_path))
+            .execute("SELECT parent_run_id FROM runs WHERE run_id = ?", (run_id,))
+            .fetchone()
+        )
         assert row[0] is None
 
     def test_nested_run_inherits_parent_from_contextvar(self, tmp_path):
@@ -44,11 +45,7 @@ class TestParentRunIdAutoDetect:
                 with ts.run(intent="c") as c_id:
                     pass
         conn = sqlite3.connect(str(ts.db_path))
-        chain = {
-            row[0]: row[1] for row in conn.execute(
-                "SELECT run_id, parent_run_id FROM runs"
-            )
-        }
+        chain = {row[0]: row[1] for row in conn.execute("SELECT run_id, parent_run_id FROM runs")}
         assert chain[a_id] is None
         assert chain[b_id] == a_id
         assert chain[c_id] == b_id
@@ -61,9 +58,11 @@ class TestParentRunIdAutoDetect:
         with ts.run(intent="ambient") as ambient_id:
             with ts.run(intent="child", parent_run_id=explicit_parent) as child_id:
                 pass
-        link = sqlite3.connect(str(ts.db_path)).execute(
-            "SELECT parent_run_id FROM runs WHERE run_id = ?", (child_id,)
-        ).fetchone()[0]
+        link = (
+            sqlite3.connect(str(ts.db_path))
+            .execute("SELECT parent_run_id FROM runs WHERE run_id = ?", (child_id,))
+            .fetchone()[0]
+        )
         assert link == explicit_parent
         assert link != ambient_id
 
@@ -110,7 +109,7 @@ class TestSchemaMigration:
         # ALTER TABLE ADD COLUMN raises OperationalError which we catch.
         ts2 = TraceStore(db_path=ts1.db_path, retention_days=0)
         # If we got this far without exception, the migration is idempotent.
-        with ts2.run(intent="x") as run_id:
+        with ts2.run(intent="x"):
             pass
         # And the column is queryable.
         conn = sqlite3.connect(str(ts2.db_path))
@@ -144,8 +143,8 @@ if __name__ == "__main__":
 
 # ── R7-E: a finalize-write failure must not mask the body exception ─────
 
+
 def test_run_body_exception_not_masked_by_finalize_db_error(tmp_path):
-    import contextlib
     ts = TraceStore(db_path=tmp_path / "trace.sqlite", retention_days=0)
 
     real_connect = ts._connect
@@ -169,15 +168,20 @@ def test_run_body_exception_not_masked_by_finalize_db_error(tmp_path):
 
 # ── R7-F: time-window indexes exist and are used (not full scans) ───────
 
+
 def test_ts_indexes_present_and_used(tmp_path):
     import sqlite3
+
     ts = TraceStore(db_path=tmp_path / "trace.sqlite", retention_days=30)
     con = sqlite3.connect(str(ts.db_path))
-    names = {r[0] for r in con.execute(
-        "SELECT name FROM sqlite_master WHERE type='index'"
-    )}
-    for idx in ("idx_artifacts_type_ts", "idx_llm_calls_stage_ts",
-                "idx_retrieval_events_ts", "idx_llm_calls_ts", "idx_artifacts_ts"):
+    names = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    for idx in (
+        "idx_artifacts_type_ts",
+        "idx_llm_calls_stage_ts",
+        "idx_retrieval_events_ts",
+        "idx_llm_calls_ts",
+        "idx_artifacts_ts",
+    ):
         assert idx in names, f"missing {idx}"
 
     def plan(q, p):
@@ -185,10 +189,14 @@ def test_ts_indexes_present_and_used(tmp_path):
 
     # Windowed analytics + prune queries must use an index, not a full scan.
     assert "USING INDEX" in plan(
-        "SELECT * FROM artifacts WHERE artifact_type=? AND ts>=? ORDER BY ts DESC", ("x", "2026-01-01"))
+        "SELECT * FROM artifacts WHERE artifact_type=? AND ts>=? ORDER BY ts DESC",
+        ("x", "2026-01-01"),
+    )
     assert "USING INDEX" in plan(
-        "SELECT * FROM llm_calls WHERE stage=? AND ts>=? ORDER BY ts DESC", ("x", "2026-01-01"))
+        "SELECT * FROM llm_calls WHERE stage=? AND ts>=? ORDER BY ts DESC", ("x", "2026-01-01")
+    )
     assert "USING INDEX" in plan(
-        "SELECT query_text FROM retrieval_events WHERE ts>=? ORDER BY ts DESC", ("2026-01-01",))
+        "SELECT query_text FROM retrieval_events WHERE ts>=? ORDER BY ts DESC", ("2026-01-01",)
+    )
     assert "SCAN" not in plan("DELETE FROM llm_calls WHERE ts<?", ("2026-01-01",))
     con.close()

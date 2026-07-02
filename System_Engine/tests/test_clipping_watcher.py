@@ -1,12 +1,11 @@
 """R7-G-2: ClippingWatcher processes off the watchdog dispatch thread."""
+
 import os
 import queue
-import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import watchers.clipping_watcher as cw_mod
@@ -32,7 +31,8 @@ def _img(path: Path):
 def test_canonical_sidecar_layout_archived(tmp_path, monkeypatch):
     w, raw, cons, warnings = _archiver(tmp_path, monkeypatch)
     (cons / "images" / "Doc").mkdir(parents=True)
-    md = cons / "Doc.md"; md.write_text("# x", encoding="utf-8")
+    md = cons / "Doc.md"
+    md.write_text("# x", encoding="utf-8")
     _img(cons / "images" / "Doc" / "a.jpeg")
 
     w._archive_markdown_with_sidecar_images(md)
@@ -48,7 +48,8 @@ def test_flat_imageonly_folder_fallback_archived(tmp_path, monkeypatch):
     images. It must still be archived (and silently)."""
     w, raw, cons, warnings = _archiver(tmp_path, monkeypatch)
     (cons / "Doc").mkdir()
-    md = cons / "Doc.md"; md.write_text("# x", encoding="utf-8")
+    md = cons / "Doc.md"
+    md.write_text("# x", encoding="utf-8")
     _img(cons / "Doc" / "_page_1_Picture_1.jpeg")
 
     w._archive_markdown_with_sidecar_images(md)
@@ -64,15 +65,16 @@ def test_flat_nonimage_folder_not_swept_but_warns(tmp_path, monkeypatch):
     leftover should be surfaced, not left silently."""
     w, raw, cons, warnings = _archiver(tmp_path, monkeypatch)
     (cons / "Doc").mkdir()
-    md = cons / "Doc.md"; md.write_text("# x", encoding="utf-8")
+    md = cons / "Doc.md"
+    md.write_text("# x", encoding="utf-8")
     (cons / "Doc" / "notes.txt").write_text("keep me", encoding="utf-8")
 
     w._archive_markdown_with_sidecar_images(md)
 
     assert (raw / "Doc.md").exists()
-    assert not (raw / "images" / "Doc").exists()   # not swept
-    assert (cons / "Doc").exists()                  # left in place
-    assert warnings and "Doc" in warnings[0]        # but surfaced
+    assert not (raw / "images" / "Doc").exists()  # not swept
+    assert (cons / "Doc").exists()  # left in place
+    assert warnings and "Doc" in warnings[0]  # but surfaced
 
 
 def _watcher():
@@ -100,7 +102,7 @@ def test_handle_event_enqueues_without_processing(tmp_path):
 
     assert str(f) in w._queued_paths
     assert w._wake.is_set()
-    assert drained == []                  # not processed on the dispatch thread
+    assert drained == []  # not processed on the dispatch thread
 
 
 def test_dotfile_and_unsupported_ignored(tmp_path):
@@ -109,7 +111,7 @@ def test_dotfile_and_unsupported_ignored(tmp_path):
         f = tmp_path / name
         f.write_text("x", encoding="utf-8")
         w._handle_event(SimpleNamespace(is_directory=False, src_path=str(f)))
-    assert w._queued_paths == set()       # .md dotfiles/@ and unsupported .txt skipped
+    assert w._queued_paths == set()  # .md dotfiles/@ and unsupported .txt skipped
     assert not w._wake.is_set()
 
 

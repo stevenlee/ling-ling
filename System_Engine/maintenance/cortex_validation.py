@@ -34,12 +34,12 @@ from core.config import (
 )
 from core.parser import parse_markdown_metadata
 from maintenance.cortex_consolidation import _is_candidate
-from services.cortex_store import load_all_pages, parse_cortex_page
+from services.cortex_store import parse_cortex_page
 
 
 @dataclass
 class ValidationReport:
-    verdict: str                 # "GREEN" | "YELLOW" | "RED"
+    verdict: str  # "GREEN" | "YELLOW" | "RED"
     red_flags: list[str] = field(default_factory=list)
     yellow_flags: list[str] = field(default_factory=list)
     stats: dict = field(default_factory=dict)
@@ -54,7 +54,7 @@ def run_validation(
     state_file: Path = None,
     bench_history: Path = None,
     report_dir: Path = None,
-    last_result=None,            # optional ConsolidationResult of the round
+    last_result=None,  # optional ConsolidationResult of the round
 ) -> ValidationReport:
     cortex_dir = cortex_dir or CORTEX_DIR
     insights_dir = insights_dir or INSIGHTS_DIR
@@ -67,8 +67,11 @@ def run_validation(
     stats: dict = {}
 
     # ── Tier 1: pipeline health (red lines) ──────────────────────────
-    all_files = [p for p in sorted(cortex_dir.glob("*.md")) if not p.stem.startswith("_")] \
-        if cortex_dir.exists() else []
+    all_files = (
+        [p for p in sorted(cortex_dir.glob("*.md")) if not p.stem.startswith("_")]
+        if cortex_dir.exists()
+        else []
+    )
     pages = []
     for path in all_files:
         page = parse_cortex_page(path)
@@ -85,7 +88,9 @@ def run_validation(
     seen_ids: dict[str, str] = {}
     for page in pages:
         if page.claim_id in seen_ids:
-            red.append(f"claim_id 重複：{page.claim_id}（{seen_ids[page.claim_id]} vs {page.path.name}）")
+            red.append(
+                f"claim_id 重複：{page.claim_id}（{seen_ids[page.claim_id]} vs {page.path.name}）"
+            )
         seen_ids[page.claim_id] = page.path.name
 
     # Index consistency: every page has chunks + a facet; no orphan facets.
@@ -96,7 +101,8 @@ def run_validation(
             red.append(f"{len(missing_facets)} 頁缺 facet：{missing_facets[:5]}")
         page_ids = {p.claim_id for p in pages}
         orphan_facets = [
-            t for t in facet_titles
+            t
+            for t in facet_titles
             if isinstance(t, str) and t.startswith("cortex-") and t not in page_ids
         ]
         if orphan_facets:
@@ -165,7 +171,7 @@ def run_validation(
             signals = meta.get("signals")
             if not isinstance(signals, dict):
                 continue
-            
+
             insights_with_signals += 1
             g_val = None
             g_raw = signals.get("groundedness")
@@ -192,10 +198,10 @@ def run_validation(
         stats["broken_link_insight_rate"] = round(broken_rate, 3)
         if broken_rate > 0.2:
             yellow.append(f"斷鏈 insight 比例 {broken_rate:.0%} > 20%")
-            
+
     if insights_with_signals > 0:
         stats["refute_coverage"] = round(refute_total / insights_with_signals, 3)
-        
+
     if refute_total:
         survival = refute_survived / refute_total
         stats["refute_survival_rate"] = round(survival, 3)
@@ -203,7 +209,7 @@ def run_validation(
             yellow.append(f"Refute 存活率 {survival:.0%}——反駁者可能太鬆")
         elif survival < 0.3:
             yellow.append(f"Refute 存活率 {survival:.0%}——insight 生成品質堪憂")
-            
+
     # Falsifiability distribution
     falsifiability_scores = [p.falsifiability for p in pages if p.falsifiability is not None]
     if falsifiability_scores:
@@ -219,7 +225,8 @@ def run_validation(
         trace_store = getattr(rag, "trace_store", None)
         if trace_store is not None and hasattr(trace_store, "recently_retrieved_titles"):
             hits = {
-                t for t in trace_store.recently_retrieved_titles(7)
+                t
+                for t in trace_store.recently_retrieved_titles(7)
                 if isinstance(t, str) and t.startswith("cortex-")
             }
             stats["cortex_retrieval_hits_7d"] = len(hits)

@@ -9,7 +9,6 @@ that the content has no strong visual structure. `as <type>` forces a type.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from agents.base_agent import BaseAgent
 from core.config import PAGES_DIR, WIKI_VAULT_DIR
@@ -51,7 +50,7 @@ class VisualizeAgent(BaseAgent):
             )[1]
 
         ui.set_status(f"🖼️ 視覺化：{title[:40]}")
-        
+
         if forced == "all":
             body = self._render_all(title, source, text)
             artifact_type_meta = "all"
@@ -61,7 +60,9 @@ class VisualizeAgent(BaseAgent):
             artifact_type_meta = result["type"]
 
         _, full_markdown = self._write_report(
-            title, body, "vis",
+            title,
+            body,
+            "vis",
             {"target": title, "artifact_type": artifact_type_meta},
         )
         ui.success(f"🖼️ 完成：{title} → {artifact_type_meta} → fromLingLing/")
@@ -77,13 +78,13 @@ class VisualizeAgent(BaseAgent):
         for t, desc in ARTIFACT_TYPES.items():
             if t == "none":
                 continue
-            
+
             result = build_artifact(self.llm, text, forced_type=t)
-            
+
             L.append(f"## {t}")
             L.append(f"> 類型說明：{desc}")
             L.append("")
-            
+
             if not result.get("artifact"):
                 L.append("**Not Applicable (不適用)**")
                 if t == "argument_map":
@@ -95,7 +96,7 @@ class VisualizeAgent(BaseAgent):
             L.append("")
             L.append("---")
             L.append("")
-        
+
         return "\n".join(L)
 
     def _render(self, title: str, source: str, result: dict) -> str:
@@ -108,12 +109,16 @@ class VisualizeAgent(BaseAgent):
             "",
         ]
         if t == "none":
-            L.append("這篇內容沒有明顯的視覺結構（流程／比較／時序／階層／論證）,"
-                     "硬畫成圖反而會誤導,因此不產生圖表。可改用 `@ling-visualize [[X]] as <type>` 指定類型。")
+            L.append(
+                "這篇內容沒有明顯的視覺結構（流程／比較／時序／階層／論證）,"
+                "硬畫成圖反而會誤導,因此不產生圖表。可改用 `@ling-visualize [[X]] as <type>` 指定類型。"
+            )
         elif not result.get("artifact"):
             if t == "argument_map":
-                L.append("這篇內容沒有可辨識的論證結構（不是在主張／論證什麼）,因此無法產生論證圖。"
-                         "論證圖適合評論、立場、申論型內容；說明或敘述型內容請改用其他類型。")
+                L.append(
+                    "這篇內容沒有可辨識的論證結構（不是在主張／論證什麼）,因此無法產生論證圖。"
+                    "論證圖適合評論、立場、申論型內容；說明或敘述型內容請改用其他類型。"
+                )
             else:
                 L.append("（產生圖表時驗證失敗,已略過以免輸出壞掉的圖。可重試或指定其他類型。）")
         else:

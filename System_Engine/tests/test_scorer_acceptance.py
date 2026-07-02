@@ -16,12 +16,10 @@ The chunks below were hand-curated:
 
 Acceptance bar: median GOOD score − median BAD score ≥ 3.
 """
+
 import os
 import statistics
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 import pytest
 
@@ -86,6 +84,7 @@ BAD_CHUNKS = [
 
 # ── Acceptance test ────────────────────────────────────────────────
 
+
 @pytest.mark.live_llm
 def test_scorer_separates_good_from_bad_by_at_least_3():
     """Real LLM call. Scorer must give GOOD chunks at least 3 points higher
@@ -95,19 +94,20 @@ def test_scorer_separates_good_from_bad_by_at_least_3():
         pytest.skip("LLM_PROVIDER env not set; cannot run live test")
 
     from services.llm_client import LLMClient
+
     client = LLMClient()
 
     def score_one(text):
         return coherence_score(text, score_fn=client.score_text_quality, runs=3)
 
     good_scores = [score_one(t).score for t in GOOD_CHUNKS]
-    bad_scores  = [score_one(t).score for t in BAD_CHUNKS]
+    bad_scores = [score_one(t).score for t in BAD_CHUNKS]
 
     print(f"\nGOOD chunk scores: {good_scores}")
     print(f"BAD  chunk scores: {bad_scores}")
 
     good_median = statistics.median(good_scores)
-    bad_median  = statistics.median(bad_scores)
+    bad_median = statistics.median(bad_scores)
     gap = good_median - bad_median
 
     print(f"Good median = {good_median}, Bad median = {bad_median}, gap = {gap}")

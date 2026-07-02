@@ -1,7 +1,5 @@
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 from services.profile_manager import ProfileManager, render_profile_markdown
 
@@ -14,9 +12,12 @@ def _write_profile(dir_path: Path, name: str, **kwargs):
 class TestProfileScan:
     def test_scan_parses_frontmatter(self, tmp_path):
         _write_profile(
-            tmp_path, "cookery",
-            persona="cookery-curator", template="cookery-recipe-card",
-            description="食譜", applicable_when="Recipes and cooking",
+            tmp_path,
+            "cookery",
+            persona="cookery-curator",
+            template="cookery-recipe-card",
+            description="食譜",
+            applicable_when="Recipes and cooking",
             operations=["digest_sources", "synthesize"],
         )
         pm = ProfileManager(tmp_path)
@@ -37,7 +38,9 @@ class TestProfileScan:
     def test_scan_skips_pending_localized_and_invalid(self, tmp_path):
         _write_profile(tmp_path, "good", persona="p", template="t")
         # Localized variant and underscore files must be ignored.
-        (tmp_path / "good.zh.md").write_text("---\npersona: x\ntemplate: y\n---\n", encoding="utf-8")
+        (tmp_path / "good.zh.md").write_text(
+            "---\npersona: x\ntemplate: y\n---\n", encoding="utf-8"
+        )
         (tmp_path / "_notes.md").write_text("---\npersona: x\ntemplate: y\n---\n", encoding="utf-8")
         # Missing template → invalid, skipped with a warning.
         (tmp_path / "broken.md").write_text("---\npersona: only\n---\n", encoding="utf-8")
@@ -128,22 +131,26 @@ class TestPendingQueue:
         pm = ProfileManager(profiles_dir)
         pm.queue_pending(
             profile_name="diary",
-            persona_name="diary-companion", persona_content="# P",
-            template_name="diary-entry", template_content="# T",
+            persona_name="diary-companion",
+            persona_content="# P",
+            template_name="diary-entry",
+            template_content="# T",
             notify_dir=notify_dir,
         )
 
         result = pm.approve_pending(
-            "diary", personas_dir=personas_dir, templates_dir=templates_dir,
+            "diary",
+            personas_dir=personas_dir,
+            templates_dir=templates_dir,
             notify_dir=notify_dir,
         )
 
         assert result["ok"], result["errors"]
         assert (personas_dir / "diary-companion.md").exists()
         assert (templates_dir / "diary-entry.md").exists()
-        assert pm.get("diary") is not None              # active after reload
+        assert pm.get("diary") is not None  # active after reload
         assert not (profiles_dir / "_pending" / "diary").exists()  # bundle removed
-        assert list(notify_dir.glob("*.md")) == []      # notice cleaned up
+        assert list(notify_dir.glob("*.md")) == []  # notice cleaned up
 
     def test_approve_pending_refuses_overwrite(self, tmp_path):
         profiles_dir = tmp_path / "Profiles"
@@ -153,12 +160,16 @@ class TestPendingQueue:
         pm = ProfileManager(profiles_dir)
         pm.queue_pending(
             profile_name="diary",
-            persona_name="diary-companion", persona_content="# P",
-            template_name="diary-entry", template_content="# T",
+            persona_name="diary-companion",
+            persona_content="# P",
+            template_name="diary-entry",
+            template_content="# T",
         )
 
         result = pm.approve_pending(
-            "diary", personas_dir=personas_dir, templates_dir=tmp_path / "Templates",
+            "diary",
+            personas_dir=personas_dir,
+            templates_dir=tmp_path / "Templates",
         )
 
         assert not result["ok"]
@@ -170,7 +181,9 @@ class TestPendingQueue:
     def test_approve_missing_bundle_reports_error(self, tmp_path):
         pm = ProfileManager(tmp_path / "Profiles")
         result = pm.approve_pending(
-            "ghost", personas_dir=tmp_path / "P", templates_dir=tmp_path / "T",
+            "ghost",
+            personas_dir=tmp_path / "P",
+            templates_dir=tmp_path / "T",
         )
         assert not result["ok"]
         assert "No pending bundle" in result["errors"][0]
@@ -180,14 +193,17 @@ class TestPendingQueue:
         pm = ProfileManager(profiles_dir)
         pm.queue_pending(
             profile_name="diary",
-            persona_name="diary-companion", persona_content="x",
-            template_name="diary-entry", template_content="y",
+            persona_name="diary-companion",
+            persona_content="x",
+            template_name="diary-entry",
+            template_content="y",
         )
         pm.reload()
         assert pm.get("diary") is None
 
 
 # ── R7-E: get() is case-insensitive even for mixed-case file stems ──────
+
 
 def test_mixed_case_profile_stem_is_resolvable(tmp_path):
     _write_profile(tmp_path, "Academic", persona="scholar", template="wiki-note")

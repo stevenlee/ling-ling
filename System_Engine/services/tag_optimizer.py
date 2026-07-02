@@ -7,6 +7,7 @@ from core.config import TAG_MAP_FILE
 from core.vault_utils import update_file_tags
 from core.parser import parse_markdown_metadata
 
+
 class TagOptimizer:
     def __init__(self, llm: LLMClient):
         self.llm = llm
@@ -14,8 +15,7 @@ class TagOptimizer:
 
     def _find_best_matches(self, keywords: list[str]) -> list[str]:
         """Find best matches from the tag dictionary or return the original keyword."""
-        existing_tags = self.tag_manager.get_all_tags()
-        
+
         final_tags = []
         for kw in keywords:
             # Check if this keyword is a known source (e.g., Chinese term)
@@ -27,11 +27,11 @@ class TagOptimizer:
                 final_tags.append(kw)
             else:
                 final_tags.append(TagManager.normalize(kw))
-                
+
                 # Auto-add to dictionary if it's not CJK (so it becomes a standard English tag)
                 if not TagManager.is_bilingual_needed(kw):
                     self.tag_manager.add_mapping(kw, kw)
-                
+
         return TagManager.normalize_list(final_tags)
 
     def generate_and_optimize(self, filepath: Path) -> bool:
@@ -47,7 +47,7 @@ class TagOptimizer:
         existing_tags = frontmatter.get("tags", [])
         if isinstance(existing_tags, str):
             existing_tags = [existing_tags]
-            
+
         existing_aliases = frontmatter.get("aliases", [])
         if isinstance(existing_aliases, str):
             existing_aliases = [existing_aliases]
@@ -60,19 +60,19 @@ class TagOptimizer:
             f"Existing dictionary sample: {list(self.tag_manager.get_all_tags())[:30]}\n\n"
             f"Document Content:\n{content[:4000]}"
         )
-        
+
         schema = {
             "type": "object",
             "properties": {
                 "tags": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of up to 5 relevant tags"
+                    "description": "List of up to 5 relevant tags",
                 }
             },
-            "required": ["tags"]
+            "required": ["tags"],
         }
-        
+
         logging.info(f"TagOptimizer: Generating tags for {filepath.name}...")
         try:
             res = self.llm.generate_structured(prompt, schema)
@@ -83,19 +83,19 @@ class TagOptimizer:
 
         # Combine existing and generated tags
         combined_raw_tags = existing_tags + generated_tags
-        
+
         # Map through dictionary
         mapped_tags = self._find_best_matches(combined_raw_tags)
-        
+
         # Move CJK tags to aliases
         final_tags, final_aliases = TagManager.move_cjk_to_aliases(mapped_tags, existing_aliases)
-        
+
         # Check if the combined set of aliases and tags has actually changed to avoid unnecessary writes
         old_tags_set = set(TagManager.normalize_list(existing_tags))
         old_aliases_set = set(existing_aliases)
         new_tags_set = set(final_tags)
         new_aliases_set = set(final_aliases)
-        
+
         if old_tags_set == new_tags_set and old_aliases_set == new_aliases_set:
             logging.info(f"TagOptimizer: No changes needed for {filepath.name}")
             return True

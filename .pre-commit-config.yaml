@@ -1,0 +1,25 @@
+# Enable with: venv/bin/pre-commit install
+#
+# Kept fast on purpose: ruff only. mypy and the test suite run via
+# `make typecheck` / `make test` (mypy in pre-commit is slow and flaky with
+# per-file invocation). ruff-format is NOT repo-wide enforced yet — it runs
+# on files as commits touch them, so formatting rolls in gradually without a
+# big-bang reformat commit.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-yaml
+        # Vault markdown/YAML lives in lings-desktop and is not code.
+        exclude: ^lings-desktop/
+      - id: end-of-file-fixer
+        files: \.py$
+      - id: trailing-whitespace
+        files: \.py$

@@ -1,12 +1,10 @@
 """R4: _complete_json — unified reasoning-channel re-roll for JSON calls."""
+
 import os
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
+
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import json
-import pytest
 
 from services.llm_client import LLMClient
 
@@ -31,6 +29,7 @@ def _client(replies):
 
 
 # ── object kind ──────────────────────────────────────────────────────
+
 
 def test_object_valid_first_try():
     c = _client([json.dumps({"verdict": "keep"})])
@@ -80,6 +79,7 @@ def test_object_two_misses_returns_empty():
 
 # ── array kind ───────────────────────────────────────────────────────
 
+
 def test_array_valid_first_try():
     c = _client([json.dumps([{"claim": "x"}])])
     out = c._complete_json(kind="array", system_prompt="s", user_msg="u")
@@ -103,6 +103,7 @@ def test_array_miss_then_recovers():
 
 # ── exception handling ───────────────────────────────────────────────
 
+
 def test_exception_then_recovers():
     c = _client([RuntimeError("transient"), json.dumps({"ok": 1})])
     out = c._complete_json(kind="object", system_prompt="s", user_msg="u")
@@ -119,10 +120,13 @@ def test_exception_both_attempts_returns_empty():
 
 # ── trace metadata passthrough ───────────────────────────────────────
 
+
 def test_stamps_json_attempt_in_trace_metadata():
     c = _client(["miss", json.dumps({"ok": 1})])
     c._complete_json(
-        kind="object", system_prompt="s", user_msg="u",
+        kind="object",
+        system_prompt="s",
+        user_msg="u",
         trace_context={"stage": "demo", "metadata": {"k": "v"}},
     )
     # Two attempts → two stamps, preserving the caller's own metadata.

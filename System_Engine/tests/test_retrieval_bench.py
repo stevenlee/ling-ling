@@ -1,8 +1,3 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
-
 from maintenance.retrieval_bench import _matches_expected, run_retrieval_bench
 
 
@@ -38,12 +33,16 @@ queries:
 """,
         encoding="utf-8",
     )
-    rag = FakeRAG({
-        "alpha": [result("Alpha Doc")],
-        "beta": [result("Other"), result("Beta Doc", cid="chunk_2")],
-    })
+    rag = FakeRAG(
+        {
+            "alpha": [result("Alpha Doc")],
+            "beta": [result("Other"), result("Beta Doc", cid="chunk_2")],
+        }
+    )
 
-    out = run_retrieval_bench(rag, bench_path=bench, auto_path=None, log_path=log, min_pass_rate=1.0)
+    out = run_retrieval_bench(
+        rag, bench_path=bench, auto_path=None, log_path=log, min_pass_rate=1.0
+    )
 
     assert out.status == "passed"
     assert out.passed == 2
@@ -67,7 +66,9 @@ def test_retrieval_bench_fails_below_threshold(tmp_path):
     )
     rag = FakeRAG({"alpha": [result("Alpha Doc")]})
 
-    out = run_retrieval_bench(rag, bench_path=bench, auto_path=None, log_path=log, min_pass_rate=0.8)
+    out = run_retrieval_bench(
+        rag, bench_path=bench, auto_path=None, log_path=log, min_pass_rate=0.8
+    )
 
     assert out.status == "failed"
     assert out.pass_rate == 0.0

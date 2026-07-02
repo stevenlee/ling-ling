@@ -21,7 +21,7 @@ import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -61,12 +61,12 @@ _CONTRADICTION_DENT = 0.2
 _CONFIDENCE_FLOOR = 0.1
 # Insight frontmatter keys that may carry the source titles (fail-open).
 _SOURCE_KEYS = ("related_docs", "related_titles", "target_titles", "sources")
-_WIKILINK_RE = re.compile(r'\[\[(.*?)\]\]')
+_WIKILINK_RE = re.compile(r"\[\[(.*?)\]\]")
 
 
 @dataclass
 class ConsolidationResult:
-    status: str                  # "succeeded" | "skipped"
+    status: str  # "succeeded" | "skipped"
     message: str
     created: int = 0
     merged: int = 0
@@ -127,9 +127,20 @@ def _now() -> str:
 class _Consolidator:
     """One night's run. Holds quotas, caches, and the in-memory page set."""
 
-    def __init__(self, llm, rag, *, cortex_dir, state, adjudication_cache,
-                 max_adjudications, top_k, sim_threshold, max_variants,
-                 strict: bool = False):
+    def __init__(
+        self,
+        llm,
+        rag,
+        *,
+        cortex_dir,
+        state,
+        adjudication_cache,
+        max_adjudications,
+        top_k,
+        sim_threshold,
+        max_variants,
+        strict: bool = False,
+    ):
         self.llm = llm
         self.rag = rag
         # Phase 4 un-merge feedback: in strict mode, equivalent verdicts
@@ -149,7 +160,7 @@ class _Consolidator:
         self.adjudications_used = 0
         self.created = 0
         self.merged = 0
-        self.firewalled = 0   # F1: reinforcements skipped as grounded self-agreement
+        self.firewalled = 0  # F1: reinforcements skipped as grounded self-agreement
         self.contradiction_links = 0
         self._refresh_page_embeddings()
 
@@ -230,8 +241,9 @@ class _Consolidator:
         except Exception as e:
             logging.warning(f"Cortex: indexing failed for {page.claim_id}: {e}")
 
-    def _merge_into(self, page: CortexPage, claim: str, evidence: dict,
-                    grounded_on: list[str] | None = None) -> None:
+    def _merge_into(
+        self, page: CortexPage, claim: str, evidence: dict, grounded_on: list[str] | None = None
+    ) -> None:
         """Reconsolidation: section-level mutations only, zero LLM calls.
 
         S grows by the spacing rule (cortex_decay.reinforce): a same-night
@@ -246,6 +258,7 @@ class _Consolidator:
         confidence; self-agreement cannot.
         """
         from services.cortex_decay import GAIN_REDISCOVERY, reinforce
+
         page.evidence.append(evidence)
         if grounded_on and page.claim_id in grounded_on:
             self.firewalled += 1
@@ -260,7 +273,7 @@ class _Consolidator:
         if claim != page.claim and claim not in page.variants:
             page.variants.append(claim)
             if len(page.variants) > self.max_variants:
-                page.variants = page.variants[-self.max_variants:]
+                page.variants = page.variants[-self.max_variants :]
         save_cortex_page(page)
         self.state["claim_embeddings"].pop(page.claim_id, None)  # updated changed
         self._index_page(page)
@@ -293,8 +306,15 @@ class _Consolidator:
         page.confidence = round(max(_CONFIDENCE_FLOOR, page.confidence - _CONTRADICTION_DENT), 4)
         page.updated = _now()
 
-    def process_claim(self, claim: str, summary: str, insight_name: str, sources: list[str],
-                      applies_when: str = "", grounded_on: list[str] | None = None) -> None:
+    def process_claim(
+        self,
+        claim: str,
+        summary: str,
+        insight_name: str,
+        sources: list[str],
+        applies_when: str = "",
+        grounded_on: list[str] | None = None,
+    ) -> None:
         grounded_on = list(grounded_on or [])
         evidence = {
             "insight": insight_name,
@@ -319,10 +339,7 @@ class _Consolidator:
 
         vec = self._embed(claim)
         if vec is not None:
-            scored = [
-                (self._sim(vec, pid), pid)
-                for pid in self.embeddings
-            ]
+            scored = [(self._sim(vec, pid), pid) for pid in self.embeddings]
             neighbors = sorted(
                 [(s, pid) for s, pid in scored if s >= self.sim_threshold],
                 reverse=True,
@@ -353,7 +370,9 @@ class _Consolidator:
         confidence = 0.5 if score is None else 0.3 + 0.4 * score
 
         if contradictions:
-            confidence = max(_CONFIDENCE_FLOOR, confidence - _CONTRADICTION_DENT * len(contradictions))
+            confidence = max(
+                _CONFIDENCE_FLOOR, confidence - _CONTRADICTION_DENT * len(contradictions)
+            )
 
         page = CortexPage(
             claim_id=claim_id,
@@ -414,6 +433,7 @@ class _Consolidator:
 
 # ── Candidate selection ───────────────────────────────────────────────
 
+
 def _is_candidate(meta: dict) -> bool:
     signals = meta.get("signals")
     if not isinstance(signals, dict):
@@ -463,12 +483,12 @@ def _insight_sources(meta: dict, body: str, pages_dir: Path, notes_dir: Path) ->
 
     # Wikilink penetration
     for match in _WIKILINK_RE.finditer(body):
-        link = match.group(1).split('|')[0].split('#')[0].strip()
+        link = match.group(1).split("|")[0].split("#")[0].strip()
         if not link or link in sources:
             continue
         if (pages_dir / f"{link}.md").exists() or (notes_dir / f"{link}.md").exists():
             sources.append(link)
-    
+
     # Deduplicate while preserving order, max 5
     seen = set()
     out = []
@@ -482,6 +502,7 @@ def _insight_sources(meta: dict, body: str, pages_dir: Path, notes_dir: Path) ->
 
 
 # ── Entry point ───────────────────────────────────────────────────────
+
 
 def run_consolidation(
     llm,
@@ -540,10 +561,17 @@ def run_consolidation(
         )
 
     from maintenance.cortex_ledger import is_adjudication_strict
+
     worker = _Consolidator(
-        llm, rag, cortex_dir=cortex_dir, state=state, adjudication_cache=cache,
-        max_adjudications=max_adjudications, top_k=top_k,
-        sim_threshold=sim_threshold, max_variants=max_variants,
+        llm,
+        rag,
+        cortex_dir=cortex_dir,
+        state=state,
+        adjudication_cache=cache,
+        max_adjudications=max_adjudications,
+        top_k=top_k,
+        sim_threshold=sim_threshold,
+        max_variants=max_variants,
         strict=is_adjudication_strict(),
     )
 
@@ -563,8 +591,12 @@ def run_consolidation(
                 if not isinstance(item, dict) or not isinstance(item.get("claim"), str):
                     continue
                 worker.process_claim(
-                    item["claim"], str(item.get("summary") or ""), path.name, sources,
-                    str(item.get("applies_when") or ""), grounded_on=grounded_on,
+                    item["claim"],
+                    str(item.get("summary") or ""),
+                    path.name,
+                    sources,
+                    str(item.get("applies_when") or ""),
+                    grounded_on=grounded_on,
                 )
                 claim_count += 1
         except Exception:
