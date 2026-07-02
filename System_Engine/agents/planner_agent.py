@@ -32,6 +32,11 @@ from services.planner_service import PlannerService
 class PlannerAgent(BaseAgent):
     """Produces declarative pipeline plans. Never executes them."""
 
+    ERROR_LABEL = "Planner Error"
+    ERROR_REPORT_TYPE = "ins-plan"
+    ERROR_META = {"error": True}
+    ERROR_STATUS = "🎐 Planner 失敗：{msg}"
+
     def execute(self, task_context: dict) -> str:
         user_directive = (task_context.get("user_directive") or "").strip()
         target_titles = task_context.get("target_titles") or []
@@ -51,7 +56,7 @@ class PlannerAgent(BaseAgent):
             forced_template=forced_template,
         )
         if not result.ok:
-            message = (result.error or "PlannerAgent: planning failed.")
+            message = result.error or "PlannerAgent: planning failed."
             if result.status == "empty_registry":
                 message = message.replace("PlannerService", "PlannerAgent")
             elif result.status in {"empty_response", "no_json", "invalid_schema"}:
@@ -109,8 +114,7 @@ class PlannerAgent(BaseAgent):
         title = f"{spec.description or spec.id}"
         self._write_report(title, report, "ins-plan", meta)
         ui.success(
-            f"🎐 Planner 完成：{spec.id}（{len(spec.steps)} 個步驟）"
-            f" → 用 `@ling-do {spec.id}` 執行"
+            f"🎐 Planner 完成：{spec.id}（{len(spec.steps)} 個步驟） → 用 `@ling-do {spec.id}` 執行"
         )
         return report
 
@@ -208,8 +212,10 @@ class PlannerAgent(BaseAgent):
             step_raw = self._raw_step(plan_dict, step.id)
             rationale = (step_raw.get("rationale") or "").strip()
             lines.append(f"### Step {idx}: `{step.id}`")
-            lines.append(f"- **Capability**: `{step.capability}`"
-                         + (" 💦 NOT in registry" if step.capability not in cap_names else ""))
+            lines.append(
+                f"- **Capability**: `{step.capability}`"
+                + (" 💦 NOT in registry" if step.capability not in cap_names else "")
+            )
             lines.append(f"- **Adapter**: `{step.adapter}`")
             if step.when:
                 lines.append(f"- **When**: `{step.when}`")
@@ -264,8 +270,7 @@ class PlannerAgent(BaseAgent):
         for finding in readiness.findings:
             scope = f"step `{finding.step_id}`" if finding.step_id else "plan"
             lines.append(
-                f"- **{finding.severity.upper()} `{finding.code}`** ({scope}): "
-                f"{finding.message}"
+                f"- **{finding.severity.upper()} `{finding.code}`** ({scope}): {finding.message}"
             )
             if finding.suggestion:
                 lines.append(f"  - Suggestion: {finding.suggestion}")
@@ -280,10 +285,3 @@ class PlannerAgent(BaseAgent):
         return {}
 
     # ── Error path ─────────────────────────────────────────────────────
-
-    def _error_report(self, message: str) -> str:
-        body = f"# 💧 Planner Error\n\n{message}\n"
-        self._write_report("Error", body, "ins-plan",
-                            {"error": True})
-        ui.error(f"🎐 Planner 失敗：{message[:120]}")
-        return body

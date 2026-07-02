@@ -35,6 +35,9 @@ class CounterAgent(BaseAgent):
       2. Tally:   deduplicate cross-chunk overlaps, produce a final count.
     """
 
+    ERROR_LABEL = "LingLens Error"
+    ERROR_REPORT_TYPE = "lens"
+
     def __init__(self, llm, rag=None):
         super().__init__(llm, rag)
         from core.config import THOUGHTFUL_USE_LLM_FOR_COUNTER, USE_THOUGHTFUL_SPLITTER
@@ -753,11 +756,6 @@ class CounterAgent(BaseAgent):
             lines.append(f"**Open in editor**: {physical_link}")
         lines.append("")
         return lines
-
-    def _error_report(self, message):
-        report = f"# 💧 LingLens Error\n\n{message}\n"
-        self._write_report("Error", report, "lens")
-        return report
 
     # ── Helpers ────────────────────────────────────────────────────────
 

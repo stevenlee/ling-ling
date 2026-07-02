@@ -10,6 +10,7 @@ from core.parser import (
     dump_markdown_with_metadata,
     run_markdown_quality_checks,
 )
+from core.ui import ui
 from core.utils import MtimeCache
 
 # Shared across all agent instances so a multi-strategy run only re-reads each
@@ -19,27 +20,65 @@ _PROMPT_CACHE = MtimeCache()
 # Fenced mermaid block: capture the inner code so we can repair it in-place
 # while preserving the surrounding text exactly (str.replace is fragile when
 # two identical broken blocks appear in one document).
-_MERMAID_BLOCK_RE = re.compile(r'```mermaid\n(.*?)\n```', re.DOTALL)
+_MERMAID_BLOCK_RE = re.compile(r"```mermaid\n(.*?)\n```", re.DOTALL)
 
 # Cheap signal that the body contains raw (un-fenced) mermaid code.
 _MERMAID_KEYWORDS = (
-    "graph TD", "graph LR", "graph TB", "graph BT", "graph RL",
-    "flowchart TD", "flowchart LR", "flowchart TB", "flowchart BT", "flowchart RL",
-    "sequenceDiagram", "classDiagram", "stateDiagram", "stateDiagram-v2",
-    "erDiagram", "gantt", "pie", "mindmap", "timeline", "journey",
+    "graph TD",
+    "graph LR",
+    "graph TB",
+    "graph BT",
+    "graph RL",
+    "flowchart TD",
+    "flowchart LR",
+    "flowchart TB",
+    "flowchart BT",
+    "flowchart RL",
+    "sequenceDiagram",
+    "classDiagram",
+    "stateDiagram",
+    "stateDiagram-v2",
+    "erDiagram",
+    "gantt",
+    "pie",
+    "mindmap",
+    "timeline",
+    "journey",
 )
 
 # Strip out mermaid `%%` comments and double-quoted labels before any
 # structural inspection: counting brackets in those regions is meaningless.
 _MERMAID_QUOTED_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
-_MERMAID_COMMENT_RE = re.compile(r'%%[^\n]*')
+_MERMAID_COMMENT_RE = re.compile(r"%%[^\n]*")
 
 
 class BaseAgent:
+    # _error_report knobs — override per agent. ERROR_STATUS is a ui.error
+    # template receiving the error's first line as {msg}; None = no status line.
+    ERROR_LABEL: str = "Agent Error"
+    ERROR_REPORT_TYPE: str = "cmd"
+    ERROR_META: dict | None = None
+    ERROR_STATUS: str | None = None
+
     def __init__(self, llm, rag=None):
         self.llm = llm
         self.rag = rag
         self.stats = {"input_chars": 0, "output_chars": 0}
+
+    def _error_report(self, message: str) -> str:
+        """Write a standard error report and return its body (was copy-pasted
+        across counter/planner/executor before P1)."""
+        body = f"# 💧 {self.ERROR_LABEL}\n\n{message}\n"
+        self._write_report(
+            "Error",
+            body,
+            self.ERROR_REPORT_TYPE,
+            dict(self.ERROR_META) if self.ERROR_META else None,
+        )
+        if self.ERROR_STATUS:
+            first_line = message.splitlines()[0][:120] if message else ""
+            ui.error(self.ERROR_STATUS.format(msg=first_line))
+        return body
 
     def _load_prompt(self, prompt_name: str) -> str:
         if not prompt_name.endswith(".md"):
@@ -98,16 +137,20 @@ class BaseAgent:
         pieces: list[str] = []
         cursor = 0
         for match in _MERMAID_BLOCK_RE.finditer(content):
-            pieces.append(content[cursor:match.start()])
+            pieces.append(content[cursor : match.start()])
             block = match.group(1)
             if self._is_mermaid_broken(block):
-                logging.info("Detected potentially broken Mermaid block. Attempting self-correction.")
+                logging.info(
+                    "Detected potentially broken Mermaid block. Attempting self-correction."
+                )
                 repaired = self._llm_repair_mermaid(block)
                 if repaired and not self._is_mermaid_broken(repaired):
                     pieces.append(f"```mermaid\n{repaired}\n```")
                     cursor = match.end()
                     continue
-                logging.warning("Mermaid self-correction rejected (still broken or empty); keeping original.")
+                logging.warning(
+                    "Mermaid self-correction rejected (still broken or empty); keeping original."
+                )
             pieces.append(match.group(0))
             cursor = match.end()
         pieces.append(content[cursor:])
@@ -146,7 +189,7 @@ class BaseAgent:
             return True
 
         # Catch truncated subgraph: `sub` followed by a non-ASCII string
-        if re.search(r'^\s*sub[^\x00-\x7F]+\s+', block, flags=re.IGNORECASE | re.MULTILINE):
+        if re.search(r"^\s*sub[^\x00-\x7F]+\s+", block, flags=re.IGNORECASE | re.MULTILINE):
             return True
 
         # Catch quoted node IDs: `"NodeA"[`
@@ -183,7 +226,9 @@ class BaseAgent:
         run_id = None
         if hasattr(self.llm, "current_trace_ids"):
             candidate_trace_ids = self.llm.current_trace_ids()
-            if isinstance(candidate_trace_ids, list) and all(isinstance(t, str) for t in candidate_trace_ids):
+            if isinstance(candidate_trace_ids, list) and all(
+                isinstance(t, str) for t in candidate_trace_ids
+            ):
                 trace_ids = candidate_trace_ids
         if hasattr(self.llm, "current_run_id"):
             candidate_run_id = self.llm.current_run_id()
@@ -195,19 +240,22 @@ class BaseAgent:
             metadata.setdefault("run_id", run_id)
 
         from core.config import RAG_EXPLAIN_ENABLED
+
         if RAG_EXPLAIN_ENABLED and run_id:
             appendix = self._build_rag_explain_appendix(run_id)
             if appendix:
                 body += appendix
 
-        metadata.update({
-            "title": title,
-            "type": report_type,
-            "engine_build": BUILD_DATE,
-            "date_created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "input_chars": self.stats["input_chars"],
-            "output_chars": len(body),
-        })
+        metadata.update(
+            {
+                "title": title,
+                "type": report_type,
+                "engine_build": BUILD_DATE,
+                "date_created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "input_chars": self.stats["input_chars"],
+                "output_chars": len(body),
+            }
+        )
 
         full_markdown = dump_markdown_with_metadata(metadata, body)
         safe_title = re.sub(r'[\\/*?:"<>|]', "-", title)
@@ -242,6 +290,7 @@ class BaseAgent:
             return ""
 
         import json
+
         lines = [
             "",
             "---",
@@ -249,15 +298,15 @@ class BaseAgent:
             "",
             "> [!NOTE]",
             "> This appendix explains the retrieval process and score breakdown for all queries executed in this run.",
-            ""
+            "",
         ]
-        
+
         for idx, event in enumerate(events, 1):
             query = event.get("query_text", "")
             top_k = event.get("top_k", 3)
             options_raw = event.get("options_json", "{}")
             results_raw = event.get("results_json", "[]")
-            
+
             try:
                 options = json.loads(options_raw)
             except Exception:
@@ -266,43 +315,51 @@ class BaseAgent:
                 results = json.loads(results_raw)
             except Exception:
                 results = []
-                
+
             lines.append(f"### Query {idx}: `{query}`")
             lines.append(f"- **Top K**: {top_k}")
-            lines.append(f"- **Filters & Options**: Hybrid={options.get('hybrid', False)}, Rerank={options.get('rerank', False)}, Diversity={options.get('diversity', 0.0)}")
+            lines.append(
+                f"- **Filters & Options**: Hybrid={options.get('hybrid', False)}, Rerank={options.get('rerank', False)}, Diversity={options.get('diversity', 0.0)}"
+            )
             lines.append("")
-            
+
             if not results:
                 lines.append("> No documents retrieved.")
                 lines.append("")
                 continue
-                
+
             lines.append("| Rank | Title | Source | Passed Layers | Breakdown Scores |")
             lines.append("|:---:|:---|:---|:---|:---|")
-            
+
             for r_idx, r in enumerate(results, start=1):
                 title = r.get("title", "Unknown")
                 source = r.get("source", "Unknown")
                 breakdown = r.get("retrieval_breakdown") or {}
-                
+
                 passed = ", ".join(breakdown.get("passed_layers", []))
-                
+
                 scores_list = []
                 if breakdown.get("vector_distance") is not None:
-                    scores_list.append(f"Vector Dist: {breakdown['vector_distance']:.4f} (#Rank {breakdown.get('vector_rank', '?')})")
+                    scores_list.append(
+                        f"Vector Dist: {breakdown['vector_distance']:.4f} (#Rank {breakdown.get('vector_rank', '?')})"
+                    )
                 if breakdown.get("bm25_score") is not None:
-                    scores_list.append(f"BM25 Score: {breakdown['bm25_score']:.2f} (#Rank {breakdown.get('bm25_rank', '?')})")
+                    scores_list.append(
+                        f"BM25 Score: {breakdown['bm25_score']:.2f} (#Rank {breakdown.get('bm25_rank', '?')})"
+                    )
                 if breakdown.get("rrf_score") is not None:
                     scores_list.append(f"RRF: {breakdown['rrf_score']:.4f}")
                 if breakdown.get("rerank_score") is not None:
-                    scores_list.append(f"Rerank: {breakdown['rerank_score']:.4f} (#Rank {breakdown.get('rerank_rank', '?')})")
+                    scores_list.append(
+                        f"Rerank: {breakdown['rerank_score']:.4f} (#Rank {breakdown.get('rerank_rank', '?')})"
+                    )
                 if breakdown.get("mmr_selected"):
                     scores_list.append("MMR Selected")
-                    
+
                 scores_str = "<br>".join(scores_list)
                 lines.append(f"| {r_idx} | [[{title}]] | `{source}` | `{passed}` | {scores_str} |")
             lines.append("")
-            
+
         return "\n".join(lines)
 
     def execute(self, task_context: dict):

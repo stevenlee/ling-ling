@@ -51,6 +51,11 @@ _PLAN_ID_TOKEN_RE = re.compile(
 class ExecutorAgent(BaseAgent):
     """Executes a previously-validated plan. No plan generation."""
 
+    ERROR_LABEL = "Executor Error"
+    ERROR_REPORT_TYPE = "cmd"
+    ERROR_META = {"error": True}
+    ERROR_STATUS = "⚙️ Executor failed: {msg}"
+
     def execute(self, task_context: dict) -> str:
         user_directive = (task_context.get("user_directive") or "").strip()
         plan_id = self._parse_plan_id(user_directive, task_context)
@@ -326,9 +331,3 @@ class ExecutorAgent(BaseAgent):
         return f"`{text}`"
 
     # ── Error path ─────────────────────────────────────────────────────
-
-    def _error_report(self, message: str) -> str:
-        body = f"# 💧 Executor Error\n\n{message}\n"
-        self._write_report("Error", body, "cmd", {"error": True})
-        ui.error(f"⚙️ Executor failed: {message.splitlines()[0][:120]}")
-        return body
