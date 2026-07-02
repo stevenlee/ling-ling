@@ -7,6 +7,7 @@ from pathlib import Path
 from agents.base_agent import BaseAgent
 from core.config import PAGES_DIR, RAW_CONSOLIDATE_DIR, WIKI_VAULT_DIR
 from core.parser import extract_json_array, extract_json_object, is_empty_json_literal
+from core.retrying import reroll
 from core.ui import ui
 from services.text_splitter import TextSplitter
 
@@ -329,33 +330,34 @@ class CounterAgent(BaseAgent):
             "- If zero instances found, return an empty array: []\n"
             "- Return ONLY the JSON array, nothing else.\n"
         )
-        instances = []
+
         # Reasoning models intermittently emit the whole reply into the
         # reasoning channel without the final JSON array — retry once before
         # treating the chunk as empty. A literal [] in the reply is a genuine
         # zero, not a parse failure.
-        for attempt in range(2):
-            try:
-                # JSON output: opt out of the template/persona axes, or the
-                # default wiki-note template (STRICT ADHERENCE) overrides the
-                # JSON instruction and the model writes a note instead.
-                raw = self.llm.answer_query(
-                    user_prompt,
-                    wiki_context="",
-                    custom_instruction=system_prompt,
-                    forced_template="none",
-                    persona="none",
-                )
-            except Exception as e:
-                ui.error(f"      💧 Chunk {part} extraction 失敗: {e}")
-                logging.error(f"LingLens extraction failed for chunk {part}: {e}")
-                return []
-            instances = extract_json_array(raw)
-            if instances or is_empty_json_literal(raw, "array"):
-                break
-            logging.warning(
-                f"LingLens chunk {part}: reply had no JSON array (attempt {attempt + 1})."
+        def _attempt(attempt: int):
+            # JSON output: opt out of the template/persona axes, or the
+            # default wiki-note template (STRICT ADHERENCE) overrides the
+            # JSON instruction and the model writes a note instead.
+            raw = self.llm.answer_query(
+                user_prompt,
+                wiki_context="",
+                custom_instruction=system_prompt,
+                forced_template="none",
+                persona="none",
             )
+            found = extract_json_array(raw)
+            if found or is_empty_json_literal(raw, "array"):
+                return found
+            logging.warning(f"LingLens chunk {part}: reply had no JSON array (attempt {attempt}).")
+            return None
+
+        try:
+            instances = reroll(_attempt, lambda r: r is not None, attempts=2, fallback=[])
+        except Exception as e:
+            ui.error(f"      💧 Chunk {part} extraction 失敗: {e}")
+            logging.error(f"LingLens extraction failed for chunk {part}: {e}")
+            return []
         for inst in instances:
             inst["source_part"] = part
         return instances
@@ -394,29 +396,33 @@ class CounterAgent(BaseAgent):
             "}\n"
             "Return ONLY the JSON object.\n"
         )
+
         # Same reasoning-channel hazard as _extract_from_chunk: gemma may emit
         # the reply into the reasoning channel without the JSON object. Retry
         # once before falling back to the cruder local dedup.
-        for attempt in range(2):
-            try:
-                # JSON output: same template/persona opt-out as _extract_from_chunk.
-                raw = self.llm.answer_query(
-                    user_prompt,
-                    wiki_context="",
-                    custom_instruction=system_prompt,
-                    forced_template="none",
-                    persona="none",
-                )
-                tally = extract_json_object(raw)
-                if tally and "total_count" in tally:
-                    return tally
-                logging.warning(
-                    f"LingLens tally: reply had no usable JSON object (attempt {attempt + 1})."
-                )
-            except Exception as e:
-                logging.error(f"LingLens tally pass failed (attempt {attempt + 1}): {e}")
+        def _attempt(attempt: int):
+            # JSON output: same template/persona opt-out as _extract_from_chunk.
+            raw = self.llm.answer_query(
+                user_prompt,
+                wiki_context="",
+                custom_instruction=system_prompt,
+                forced_template="none",
+                persona="none",
+            )
+            tally = extract_json_object(raw)
+            if tally and "total_count" in tally:
+                return tally
+            logging.warning(f"LingLens tally: reply had no usable JSON object (attempt {attempt}).")
+            return None
 
-        return self._build_tally_locally(concept, all_instances)
+        tally = reroll(
+            _attempt,
+            lambda r: r is not None,
+            attempts=2,
+            swallow_errors=True,
+            on_error=lambda a, e: logging.error(f"LingLens tally pass failed (attempt {a}): {e}"),
+        )
+        return tally if tally is not None else self._build_tally_locally(concept, all_instances)
 
     @staticmethod
     def _build_tally_locally(concept, instances):

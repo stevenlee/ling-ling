@@ -7,6 +7,8 @@ from xml.etree import ElementTree as ET
 
 import requests
 
+from core.retrying import retry_call
+
 
 # Politeness: minimum seconds between consecutive requests to the SAME external
 # source. The pipeline hits each source once (or N times) per keyword in a tight
@@ -43,27 +45,26 @@ class ResearchPipeline:
 
     def _get_with_retry(self, url: str, headers: dict, timeout: int = 20, retries: int = 3):
         """GET with retry: exponential backoff on HTTP 429, fixed backoff on other transient errors."""
-        last_exc = None
-        for attempt in range(retries):
-            try:
-                resp = requests.get(url, headers=headers, timeout=timeout)
-                resp.raise_for_status()
-                return resp
-            except requests.exceptions.HTTPError as e:
-                last_exc = e
+
+        def _is_retryable(e: Exception) -> bool:
+            if isinstance(e, requests.exceptions.HTTPError):
                 status = e.response.status_code if e.response is not None else None
-                if status == 429 and attempt < retries - 1:
-                    time.sleep(2**attempt + 2)
-                    continue
-                raise
-            except requests.exceptions.RequestException as e:
-                last_exc = e
-                if attempt < retries - 1:
-                    time.sleep(2)
-                    continue
-                raise
-        if last_exc:
-            raise last_exc
+                return status == 429
+            return isinstance(e, requests.exceptions.RequestException)
+
+        def _delay(attempt: int, e: Exception) -> float:
+            if isinstance(e, requests.exceptions.HTTPError):
+                return 2 ** (attempt - 1) + 2  # 429: exponential
+            return 2.0  # other transient network errors: fixed
+
+        def _get():
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+
+        return retry_call(
+            _get, retries=retries, is_retryable=_is_retryable, delay_fn=_delay, jitter=0
+        )
 
     @staticmethod
     def _norm(s: str) -> str:

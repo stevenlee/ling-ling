@@ -46,6 +46,7 @@ from core.parser import (
     strip_body_frontmatter,
     clean_llm_response,
 )
+from core.retrying import reroll, retry_call
 from core.utils import MtimeCache, digest_value_to_text
 from services.capability_manager import CapabilityManager
 from services.trace_store import TraceStore, elapsed_ms, usage_to_counts
@@ -395,32 +396,26 @@ class LLMClient:
         backoff_factor: float = 2.0,
         retry_meta: dict,
     ) -> tuple[str, int | None, int | None, int | None]:
-        import random
+        def _record_attempt(attempt: int):
+            retry_meta["retry_attempts"] = attempt
 
-        attempts = 0
+        def _record_error(attempt: int, e: Exception):
+            retry_meta["retry_last_error"] = str(e)
+            if _is_transient_llm_error(e):
+                retry_meta["retry_transient"] = True
 
-        while attempts < retries:
-            attempts += 1
-            retry_meta["retry_attempts"] = attempts
-            try:
-                return self._complete_provider_text_once(
-                    system_prompt, user_msg, temperature, max_tokens
-                )
-            except Exception as e:
-                retry_meta["retry_last_error"] = str(e)
-                if _is_transient_llm_error(e):
-                    retry_meta["retry_transient"] = True
-                    if attempts < retries:
-                        delay = initial_delay * (backoff_factor ** (attempts - 1))
-                        jitter = random.uniform(0, 0.2 * delay)
-                        total_delay = delay + jitter
-                        logging.warning(
-                            f"LLM provider call failed transiently (attempt {attempts}/{retries}): {e}. "
-                            f"Retrying in {total_delay:.2f} seconds..."
-                        )
-                        time.sleep(total_delay)
-                        continue
-                raise e
+        return retry_call(
+            lambda: self._complete_provider_text_once(
+                system_prompt, user_msg, temperature, max_tokens
+            ),
+            retries=retries,
+            initial_delay=initial_delay,
+            backoff_factor=backoff_factor,
+            is_retryable=_is_transient_llm_error,
+            on_attempt=_record_attempt,
+            on_error=_record_error,
+            log_label="LLM provider call",
+        )
 
     @staticmethod
     def _gemini_usage_counts(response: Any) -> tuple[int | None, int | None, int | None]:
@@ -1655,44 +1650,50 @@ class LLMClient:
             '{"score": <float 0.0, 0.5, or 1.0>, "falsifier": "<specific observation that refutes it, <=200 chars>", '
             '"falsifier_zh": "<the same falsifier translated into Traditional Chinese (繁體中文), <=200 chars>"}'
         )
-        fallback = {"score": None, "falsifier": ""}
-        # Transport retries live in _complete_text; this loop covers a
+
+        # Transport retries live in _complete_text; this re-roll covers a
         # different failure — reasoning models intermittently return empty
         # or unparseable text without raising. One re-roll usually lands.
-        for attempt in range(2):
-            try:
-                raw = self._complete_text(
-                    system_prompt=system_prompt,
-                    user_msg=f"Claim: {claim}",
-                    temperature=0.1,
-                    max_tokens=None,  # reasoning models need thinking room
-                    trace_context={
-                        "stage": "assess_falsifiability",
-                        "metadata": {"attempt": attempt + 1},
-                    },
-                )
-                parsed = extract_json_object(raw)
-                if isinstance(parsed, dict):
-                    score = parsed.get("score")
-                    if isinstance(score, (int, float)) and not isinstance(score, bool):
-                        falsifier = str(parsed.get("falsifier") or "").strip()[:200]
-                        # 英文為主、中文輔助：append the zh gloss when present
-                        # so the report stays readable for the user.
-                        zh = str(parsed.get("falsifier_zh") or "").strip()[:200]
-                        if zh and zh != falsifier:
-                            falsifier = f"{falsifier}（{zh}）"
-                        # Clamp: an out-of-range score must not leak into the
-                        # confidence formula (0.3 + 0.4*s) and blow past 1.0.
-                        return {
-                            "score": max(0.0, min(1.0, float(score))),
-                            "falsifier": falsifier,
-                        }
-                logging.warning(
-                    f"assess_falsifiability: unparseable output (attempt {attempt + 1})"
-                )
-            except Exception as e:
-                logging.warning(f"assess_falsifiability failed (attempt {attempt + 1}): {e}")
-        return fallback
+        def _attempt(attempt: int) -> dict | None:
+            raw = self._complete_text(
+                system_prompt=system_prompt,
+                user_msg=f"Claim: {claim}",
+                temperature=0.1,
+                max_tokens=None,  # reasoning models need thinking room
+                trace_context={
+                    "stage": "assess_falsifiability",
+                    "metadata": {"attempt": attempt},
+                },
+            )
+            parsed = extract_json_object(raw)
+            if isinstance(parsed, dict):
+                score = parsed.get("score")
+                if isinstance(score, (int, float)) and not isinstance(score, bool):
+                    falsifier = str(parsed.get("falsifier") or "").strip()[:200]
+                    # 英文為主、中文輔助：append the zh gloss when present
+                    # so the report stays readable for the user.
+                    zh = str(parsed.get("falsifier_zh") or "").strip()[:200]
+                    if zh and zh != falsifier:
+                        falsifier = f"{falsifier}（{zh}）"
+                    # Clamp: an out-of-range score must not leak into the
+                    # confidence formula (0.3 + 0.4*s) and blow past 1.0.
+                    return {
+                        "score": max(0.0, min(1.0, float(score))),
+                        "falsifier": falsifier,
+                    }
+            logging.warning(f"assess_falsifiability: unparseable output (attempt {attempt})")
+            return None
+
+        return reroll(
+            _attempt,
+            lambda r: r is not None,
+            attempts=2,
+            fallback={"score": None, "falsifier": ""},
+            swallow_errors=True,
+            on_error=lambda a, e: logging.warning(
+                f"assess_falsifiability failed (attempt {a}): {e}"
+            ),
+        )
 
     def assess_falsifiability(self, claim: str) -> dict:
         """Assess whether a claim is falsifiable (has empirical content).
