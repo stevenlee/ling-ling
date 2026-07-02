@@ -687,6 +687,17 @@ class TestOverquotedNode:
         assert once == twice
         assert fixes == []
 
+    def test_asymmetric_doubled_quote_runs(self):
+        # Real regression (Non-Invasive Brain Recordings Part 9): the LLM
+        # emitted `"B1[""label"]""` — doubled quotes on the outer edges that
+        # repair_mermaid_double_quotes left behind. Runs of quotes at each
+        # position must all collapse to the canonical form.
+        body = 'graph TD\n    subgraph "研究核心領域"\n        "B1[""序列處理 (CTC)"]""\n    end'
+        result, fixes = self._q(body)
+        assert 'B1["序列處理 (CTC)"]' in result
+        assert '""' not in result and '"B1[' not in result
+        assert any(f["type"] == "stripped_mermaid_overquoted_node" for f in fixes)
+
 
 # ── Mindmap bracket neutralization ─────────────────────────────────
 

@@ -555,7 +555,13 @@ def repair_mermaid_quoted_node_ids(text: str) -> tuple[str, list[dict]]:
 # `repair_mermaid_quoted_node_ids` misses it (there's no `"` between id and the
 # shape opener), so the outer quotes survive and break the line. Strip them back
 # to a bare `id["label"]`. Handles the `[]`, `()` and `{}` shapes.
-_MERMAID_OVERQUOTED_NODE_RE = re.compile(r'"([A-Za-z_]\w*)([\[\(\{])"([^"\n]*)"([\]\)\}])"')
+# Each quote position is `"+` (one OR MORE): LLMs emit asymmetric quote runs
+# like `"B1[""序列處理"]""`, and repair_mermaid_double_quotes can leave a
+# stray `""` on the outer edges. Matching runs — not exactly one quote —
+# collapses every such variant to the canonical `id["label"]`. A well-formed
+# `id["label"]` has NO leading quote before the id, so it never matches
+# (idempotent).
+_MERMAID_OVERQUOTED_NODE_RE = re.compile(r'"+([A-Za-z_]\w*)([\[\(\{])"+([^"\n]*)"+([\]\)\}])"*')
 _MERMAID_SHAPE_CLOSERS = {"[": "]", "(": ")", "{": "}"}
 
 
