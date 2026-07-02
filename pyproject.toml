@@ -105,7 +105,6 @@ check_untyped_defs = false
 [[tool.mypy.overrides]]
 module = [
     "agents.counter_agent",
-    "agents.insight_agent",
     "agents.linter_agent",
     "agents.planner_agent",
     "agents.tag_patrol_agent",
