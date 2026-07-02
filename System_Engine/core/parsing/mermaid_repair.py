@@ -994,6 +994,66 @@ def repair_mermaid_mindmap_labels(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+# ─── Mermaid: mindmap math degradation ────────────────────────────────
+
+
+def repair_mermaid_mindmap_math(text: str) -> tuple[str, list[dict]]:
+    r"""Degrade ``$$…$$`` / ``$…$`` math in ``mindmap`` node text to plain text.
+
+    Unlike flowchart labels (whose ``$$…$$`` Obsidian renders via KaTeX, so
+    repair_mermaid_latex_labels PRESERVES them), mindmap does NOT render math —
+    a node like ``顯著性 $$p < 10^{-6}$$`` shows the literal ``$$…$$`` string.
+    Here each math span is converted to readable plain text
+    (``顯著性 p < 10^(-6)``, ``WER $$\approx$$ 0.39`` → ``WER ≈ 0.39``) via the
+    same _mermaid_latex_to_plaintext used for degraded flowchart math.
+
+    mindmap-fence-scoped (the same math is left alone in flowchart/graph
+    fences). Runs BEFORE bracket neutralization so any residual ``()`` the
+    degrade leaves (``10^(-6)``) is then neutralized to full-width like other
+    mindmap punctuation. Idempotent — once degraded there is no ``$`` left.
+    """
+    if not text or "mindmap" not in text or "$" not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+    is_mindmap = False
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+            is_mindmap = _peek_mermaid_kind(lines, idx).startswith("mindmap")
+            out.append(line)
+            continue
+        if in_mermaid and stripped == "```":
+            in_mermaid = False
+            is_mindmap = False
+            out.append(line)
+            continue
+
+        if in_mermaid and is_mindmap and "$" in line:
+            new_line = _MERMAID_MATH_SPAN_RE.sub(
+                lambda m: _mermaid_latex_to_plaintext(m.group(0)), line
+            )
+            if new_line != line:
+                fixes.append(
+                    _make_fix(
+                        "degraded_mindmap_math",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
+            out.append(new_line)
+        else:
+            out.append(line)
+
+    return "\n".join(out), fixes
+
+
 # ─── Mermaid: mindmap bracket neutralization ──────────────────────────
 
 _MINDMAP_HALF_TO_FULL = {

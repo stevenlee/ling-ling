@@ -777,6 +777,45 @@ class TestMindmapBrackets:
         assert fixes == []
 
 
+class TestMindmapMath:
+    """mindmap doesn't render KaTeX, so `$$…$$` shows as a literal string —
+    degrade it to plain text (unlike flowchart labels, which keep the math)."""
+
+    def _q(self, body):
+        from core.parser import repair_mermaid_mindmap_math
+
+        return repair_mermaid_mindmap_math(f"```mermaid\n{body}\n```")
+
+    def test_degrades_symbol_and_superscript(self):
+        result, fixes = self._q(
+            "mindmap\n  root((R))\n    WER $$\\approx$$ 0.39\n    顯著性 $$p < 10^{-6}$$"
+        )
+        assert "WER ≈ 0.39" in result
+        assert "p < 10^(-6)" in result  # $$ stripped, {} → ^(...)
+        assert "$" not in result.replace("```", "")
+        assert any(f["type"] == "degraded_mindmap_math" for f in fixes)
+
+    def test_inline_single_dollar_math(self):
+        result, _ = self._q("mindmap\n  root((R))\n    秩 $r$")
+        assert "秩 r" in result and "$" not in result.replace("```", "")
+
+    def test_non_mindmap_math_untouched(self):
+        # flowchart math is rendered by Obsidian — this pass must not touch it.
+        body = 'graph TD\n    N["增長率 $$\\alpha$$"]'
+        result, fixes = self._q(body)
+        assert "$$\\alpha$$" in result
+        assert fixes == []
+
+    def test_idempotent(self):
+        from core.parser import repair_mermaid_mindmap_math
+
+        body = "mindmap\n  root((R))\n    顯著性 $$p < 10^{-6}$$"
+        once, _ = self._q(body)
+        twice, fixes = repair_mermaid_mindmap_math(once)
+        assert once == twice
+        assert fixes == []
+
+
 # ── classDiagram structural repair ─────────────────────────────────
 
 
