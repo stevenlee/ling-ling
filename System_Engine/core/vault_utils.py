@@ -567,11 +567,9 @@ def get_note_content(title_or_path) -> str:
 
 def update_note_with_meta(filepath: Path, body: str, meta: dict):
     """Write a note, merging supplied meta over any existing frontmatter."""
-    from core.parser import dump_markdown_with_metadata, parse_markdown_metadata
+    from core.markdown_doc import MarkdownDocument
 
-    existing_meta = {}
-    if filepath.exists():
-        existing_meta = parse_markdown_metadata(filepath.read_text(encoding="utf-8"))
-
-    existing_meta.update(meta)
-    filepath.write_text(dump_markdown_with_metadata(existing_meta, body), encoding="utf-8")
+    doc = MarkdownDocument.load(filepath) if filepath.exists() else MarkdownDocument(path=filepath)
+    doc.meta.update(meta)
+    doc.body = body
+    doc.save(filepath)

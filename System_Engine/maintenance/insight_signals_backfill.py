@@ -18,10 +18,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.config import INSIGHTS_DIR
-from core.parser import dump_markdown_with_metadata, parse_markdown_metadata, strip_body_frontmatter
+from core.markdown_doc import MarkdownDocument
 from services.insight_signals import compute_signals
 
-_MIRROR_NAME_RE = re.compile(r'^\[(?P<stamp>[^\]]*)\]\[(?P<related>[^\]]*)\]\[(?P<cmd>[^\]]*)\]')
+_MIRROR_NAME_RE = re.compile(r"^\[(?P<stamp>[^\]]*)\]\[(?P<related>[^\]]*)\]\[(?P<cmd>[^\]]*)\]")
 
 
 @dataclass
@@ -45,7 +45,9 @@ def _related_titles(path: Path, meta: dict) -> list[str]:
     return []
 
 
-def backfill_signals(rag, llm, *, insights_dir: Path = None, run_refute: bool = True) -> BackfillResult:
+def backfill_signals(
+    rag, llm, *, insights_dir: Path = None, run_refute: bool = True
+) -> BackfillResult:
     insights_dir = insights_dir or INSIGHTS_DIR
     result = BackfillResult()
     if not insights_dir.exists():
@@ -55,17 +57,19 @@ def backfill_signals(rag, llm, *, insights_dir: Path = None, run_refute: bool = 
         result.scanned += 1
         try:
             text = path.read_text(encoding="utf-8")
-            meta = parse_markdown_metadata(text)
+            doc = MarkdownDocument.from_text(text, path=path)
+            meta = doc.meta
             if isinstance(meta.get("signals"), dict):
                 result.skipped_signed += 1
                 continue
 
-            body, _ = strip_body_frontmatter(text)
             signals = compute_signals(
                 text, _related_titles(path, meta), rag, llm, run_refute=run_refute
             )
             meta["signals"] = {
-                "groundedness": round(signals.groundedness, 4) if signals.groundedness is not None else None,
+                "groundedness": round(signals.groundedness, 4)
+                if signals.groundedness is not None
+                else None,
                 "novelty": round(signals.novelty, 4) if signals.novelty is not None else None,
                 "bridging": round(signals.bridging, 4) if signals.bridging is not None else None,
                 "refute_verdict": signals.refute_verdict,
@@ -73,7 +77,7 @@ def backfill_signals(rag, llm, *, insights_dir: Path = None, run_refute: bool = 
             meta["signals_version"] = 1
             meta["signals_backfilled"] = True
 
-            path.write_text(dump_markdown_with_metadata(meta, body), encoding="utf-8")
+            doc.save()
             result.backfilled += 1
             logging.info(f"Signals backfilled: {path.name}")
         except Exception as e:

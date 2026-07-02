@@ -33,9 +33,9 @@ from core.config import (
 from core.parser import (
     dump_markdown_with_metadata,
     parse_markdown_metadata,
-    strip_body_frontmatter,
     run_markdown_quality_checks,
 )
+from core.markdown_doc import MarkdownDocument
 from core.ui import ui
 from core.utils import digest_value_to_text
 from core.vault_utils import update_wiki_index
@@ -1107,15 +1107,13 @@ class IngestionPipeline:
         # B1 resume state: persist the carry-forward pending_concepts and the
         # structured digest into the note's frontmatter, so an interrupted run
         # can resume from disk (skip-existing) without re-calling the LLM.
-        meta = parse_markdown_metadata(body_full)
-        body_only, _ = strip_body_frontmatter(body_full)
-        meta["pending_concepts"] = pending_concepts or ""
+        doc = MarkdownDocument.from_text(body_full, path=page_path)
+        doc.meta["pending_concepts"] = pending_concepts or ""
         if isinstance(digest, dict):
-            meta["part_digest"] = digest
+            doc.meta["part_digest"] = digest
         if chunk is not None:
-            meta["part_chunk_hash"] = self._chunk_fingerprint(chunk)
-        updated = dump_markdown_with_metadata(meta, body_only)
-        page_path.write_text(updated, encoding="utf-8")
+            doc.meta["part_chunk_hash"] = self._chunk_fingerprint(chunk)
+        updated = doc.save()
 
         title = ingest_result.get("_title") or page_path.stem
         tags = ingest_result.get("_tags") or ingest_result.get("tags", [])
