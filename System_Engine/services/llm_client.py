@@ -46,6 +46,7 @@ from core.parser import (
     strip_body_frontmatter,
     clean_llm_response,
 )
+from core.json_extract import salvage_json_array
 from core.retrying import reroll, retry_call
 from core.utils import MtimeCache, digest_value_to_text
 from services.capability_manager import CapabilityManager
@@ -1890,38 +1891,9 @@ class LLMClient:
             logging.error(f"Failed to generate keywords: {e}")
             return ["General Topic"]
 
-    @staticmethod
-    def _parse_json_array(text: str) -> list:
-        """Best-effort extraction of a JSON array from an LLM response.
-
-        Tolerant of common local-model failure modes: ```json fences, a tail
-        truncated at the output-token limit (no closing ]), or a single
-        malformed object. The fast path parses the whole array; on failure it
-        SALVAGES individual top-level objects so one cut-off/bad entry doesn't
-        discard the entire list (the old behaviour — a single glitch anywhere
-        returned [], which then looked like "the LLM produced nothing").
-        """
-        import json
-        import re
-
-        match = re.search(r"\[.*\]", text, re.DOTALL)
-        if match:
-            try:
-                parsed = json.loads(match.group(0))
-                if isinstance(parsed, list):
-                    return parsed
-            except Exception:
-                pass
-        # Salvage: parse each flat {...} object independently, keeping successes.
-        objs = []
-        for om in re.finditer(r"\{[^{}]*\}", text, re.DOTALL):
-            try:
-                obj = json.loads(om.group(0))
-                if isinstance(obj, dict):
-                    objs.append(obj)
-            except Exception:
-                continue
-        return objs
+    # Truncation/malformed-entry-tolerant array parse; logic lives in
+    # core.json_extract (P1). Kept as a staticmethod for existing callers/tests.
+    _parse_json_array = staticmethod(salvage_json_array)
 
     @staticmethod
     def _md_cell(text) -> str:

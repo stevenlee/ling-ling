@@ -30,10 +30,8 @@ twice in a row.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-from typing import Iterable
 
 import yaml
 
@@ -49,15 +47,16 @@ def _get_tag_manager():
     if _tag_manager_instance is None:
         from core.tag_manager import TagManager
         from core.config import TAG_MAP_FILE
+
         _tag_manager_instance = TagManager(TAG_MAP_FILE)
     return _tag_manager_instance
 
 
 # ─── Frontmatter ───────────────────────────────────────────────────────
 
-_FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*(?:\n|$)', re.DOTALL)
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", re.DOTALL)
 # Body hashtag: `#word` preceded by SOL or whitespace.  CJK ranges included.
-_HASHTAG_RE = re.compile(r'(?:^|\s)#([\w一-鿿]+)')
+_HASHTAG_RE = re.compile(r"(?:^|\s)#([\w一-鿿]+)")
 
 
 def parse_markdown_metadata(content: str) -> dict:
@@ -86,7 +85,7 @@ def parse_markdown_metadata(content: str) -> dict:
                         tags.update(t.strip() for t in value.split(","))
                 else:
                     metadata[key] = value
-        remaining = content[fm.end():]
+        remaining = content[fm.end() :]
 
     tags.update(_HASHTAG_RE.findall(remaining))
 
@@ -113,22 +112,22 @@ def dump_markdown_with_metadata(metadata: dict, content: str) -> str:
 # ─── Mermaid: shared regexes ───────────────────────────────────────────
 
 MERMAID_START_RE = re.compile(
-    r'^\s*(graph\s+(?:TD|TB|BT|RL|LR)|flowchart\s+(?:TD|TB|BT|RL|LR)|'
-    r'sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|mindmap|timeline)\b',
+    r"^\s*(graph\s+(?:TD|TB|BT|RL|LR)|flowchart\s+(?:TD|TB|BT|RL|LR)|"
+    r"sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|mindmap|timeline)\b",
     re.IGNORECASE,
 )
 
-MARKDOWN_BOUNDARY_RE = re.compile(r'^\s*(#{1,6}\s+|---\s*$|\*\*\*\s*$|___\s*$)')
+MARKDOWN_BOUNDARY_RE = re.compile(r"^\s*(#{1,6}\s+|---\s*$|\*\*\*\s*$|___\s*$)")
 
 MERMAID_CONTINUATION_RE = re.compile(
-    r'^\s*('
-    r'graph\b|flowchart\b|subgraph\b|end\b|style\b|classDef\b|class\b|'
-    r'click\b|linkStyle\b|direction\b|sequenceDiagram\b|participant\b|'
-    r'note\b|activate\b|deactivate\b|alt\b|else\b|opt\b|loop\b|par\b|'
-    r'stateDiagram\b|stateDiagram-v2\b|erDiagram\b|journey\b|gantt\b|'
-    r'pie\b|mindmap\b|timeline\b|section\b|title\b|%%|'
+    r"^\s*("
+    r"graph\b|flowchart\b|subgraph\b|end\b|style\b|classDef\b|class\b|"
+    r"click\b|linkStyle\b|direction\b|sequenceDiagram\b|participant\b|"
+    r"note\b|activate\b|deactivate\b|alt\b|else\b|opt\b|loop\b|par\b|"
+    r"stateDiagram\b|stateDiagram-v2\b|erDiagram\b|journey\b|gantt\b|"
+    r"pie\b|mindmap\b|timeline\b|section\b|title\b|%%|"
     r'[\w".()[\]{}:/ -]+\s*(?:-->|---|-.->|==>|--|:|\|)'
-    r')',
+    r")",
     re.IGNORECASE,
 )
 
@@ -136,47 +135,47 @@ MERMAID_CONTINUATION_RE = re.compile(
 # Order matters: longer/more-specific openers first so we never match e.g. `[`
 # inside an actual `[[` opener.
 _MERMAID_SHAPES: tuple[tuple[str, str], ...] = (
-    ("[[", "]]"),   # subroutine
-    ("[(", ")]"),   # cylinder
-    ("[/", "/]"),   # parallelogram-alt
-    ("[\\", "\\]"), # parallelogram
+    ("[[", "]]"),  # subroutine
+    ("[(", ")]"),  # cylinder
+    ("[/", "/]"),  # parallelogram-alt
+    ("[\\", "\\]"),  # parallelogram
     ("[/", "\\]"),  # trapezoid
     ("[\\", "/]"),  # trapezoid-alt
-    ("((", "))"),   # circle
-    ("{{", "}}"),   # hexagon
-    ("([", "])"),   # stadium
-    (">",  "]"),    # asymmetric
-    ("[",  "]"),    # rectangle
-    ("(",  ")"),    # round
-    ("{",  "}"),    # rhombus
+    ("((", "))"),  # circle
+    ("{{", "}}"),  # hexagon
+    ("([", "])"),  # stadium
+    (">", "]"),  # asymmetric
+    ("[", "]"),  # rectangle
+    ("(", ")"),  # round
+    ("{", "}"),  # rhombus
 )
 
 # Node IDs must start with a word/CJK character — never with `-`. Allowing
 # leading `-` lets the walker match arrow operators like `-->` as if they were
 # node ids, which combined with the `>...]` asymmetric shape silently
 # corrupts `A[X] --> B[Y]` into `A["X"] -->"B[Y"]`.
-_MERMAID_NODE_HEAD_RE = re.compile(r'[\w一-鿿][\w\-一-鿿]*')
+_MERMAID_NODE_HEAD_RE = re.compile(r"[\w一-鿿][\w\-一-鿿]*")
 _QUOTED_NODE_DEF_RE = re.compile(r'^(\s*)\"([\w\-一-鿿]+)\s*([\[\({>][^"]*[\]\)}])\"(\s*)$')
-_MERMAID_CONN_ARROW_PAT = r'(?:-->|---|-.->|==>|--[xo]|-\.-|==)'
+_MERMAID_CONN_ARROW_PAT = r"(?:-->|---|-.->|==>|--[xo]|-\.-|==)"
 _MERMAID_CONN_START_QUOTED_ID_RE = re.compile(
-    r'^(\s*)\"([\w\-一-鿿]+)\"\s*(' + _MERMAID_CONN_ARROW_PAT + r')'
+    r"^(\s*)\"([\w\-一-鿿]+)\"\s*(" + _MERMAID_CONN_ARROW_PAT + r")"
 )
 _MERMAID_CONN_END_QUOTED_ID_RE = re.compile(
-    r'(' + _MERMAID_CONN_ARROW_PAT + r')\s*\"([\w\-一-鿿]+)\"(\s*(?:%%.*)?)$'
+    r"(" + _MERMAID_CONN_ARROW_PAT + r")\s*\"([\w\-一-鿿]+)\"(\s*(?:%%.*)?)$"
 )
 # Same two anchors, but the quoted endpoint may hold ANY text (spaces,
 # punctuation) — i.e. a label that cannot be a bare node id. ``[^"\n]`` keeps
 # each match to a single endpoint and never spans the arrow to the other side.
 _MERMAID_CONN_START_QUOTED_LABEL_RE = re.compile(
-    r'^(\s*)\"([^"\n]+)\"\s*(' + _MERMAID_CONN_ARROW_PAT + r')'
+    r'^(\s*)\"([^"\n]+)\"\s*(' + _MERMAID_CONN_ARROW_PAT + r")"
 )
 _MERMAID_CONN_END_QUOTED_LABEL_RE = re.compile(
-    r'(' + _MERMAID_CONN_ARROW_PAT + r')\s*\"([^"\n]+)\"(\s*(?:%%.*)?)$'
+    r"(" + _MERMAID_CONN_ARROW_PAT + r')\s*\"([^"\n]+)\"(\s*(?:%%.*)?)$'
 )
 # A quoted endpoint whose text is a legal bare id (no spaces/punctuation) is
 # left to the strip pass — `"A1" --> "B1"` → `A1 --> B1`, which renders
 # identically and keeps the id stable for bare-id cross-references elsewhere.
-_MERMAID_BARE_ID_RE = re.compile(r'^[\w\-一-鿿]+$')
+_MERMAID_BARE_ID_RE = re.compile(r"^[\w\-一-鿿]+$")
 # A quoted node *declaration* whose id text can't be a bare id, e.g.
 # `"First Edition (1908)"["第一版"]`. The quoted string is the node id (a label
 # follows in the shape); it must map to the SAME synthesized id the node's edges
@@ -185,9 +184,7 @@ _MERMAID_BARE_ID_RE = re.compile(r'^[\w\-一-鿿]+$')
 _MERMAID_QUOTED_DECL_RE = re.compile(r'^(\s*)"([^"\n]+)"(?=[\[\(\{>])')
 # `style "X" ...` / `class "X" ...` / `click "X" ...` — the quoted token is a
 # node id reference, so it must resolve to the same synthesized id as the node.
-_MERMAID_QUOTED_STYLE_TARGET_RE = re.compile(
-    r'^(\s*)(style|class|click)\s+"([^"\n]+)"'
-)
+_MERMAID_QUOTED_STYLE_TARGET_RE = re.compile(r'^(\s*)(style|class|click)\s+"([^"\n]+)"')
 # quadrantChart data point: `<name>: [x, y]`. Mermaid requires the point name in
 # double quotes; the LLM routinely drops them (esp. for CJK/space names), which
 # fails the whole chart. Lookahead skips lines whose name is already quoted or a
@@ -198,14 +195,14 @@ _MERMAID_QUADRANT_POINT_RE = re.compile(
 # Pre-scan: collect ids already used in a fence so a synthesized id can't
 # collide with an author's node. Leading id, or id immediately before a shape.
 _MERMAID_EXISTING_ID_RE = re.compile(
-    r'(?:^\s*|' + _MERMAID_CONN_ARROW_PAT + r'\s*)([\w\-一-鿿]+)(?=\s|[\[\(\{>]|$)'
+    r"(?:^\s*|" + _MERMAID_CONN_ARROW_PAT + r"\s*)([\w\-一-鿿]+)(?=\s|[\[\(\{>]|$)"
 )
 # Synthesized ids are forced to pure ASCII (the generation prompt mandates
 # English-only ids). A label with no usable ASCII — e.g. an all-CJK endpoint —
 # slugs to empty and falls back to a synthetic `node`/`node_1` id; the CJK text
 # survives in the bracketed label. `\w` would keep CJK/accented chars, so we
 # restrict to the ASCII id alphabet explicitly.
-_MERMAID_ID_SLUG_RE = re.compile(r'[^A-Za-z0-9_]')
+_MERMAID_ID_SLUG_RE = re.compile(r"[^A-Za-z0-9_]")
 # classDiagram declaration: `class Id`, optional `["label"]`, optional `{` body
 # opener. Used to dedup repeated declarations and to know which ids already
 # exist before hoisting inline labels.
@@ -229,7 +226,7 @@ _CLASSDIAGRAM_BODY_OPEN_RE = re.compile(
 LATEX_CR_COMMAND_RE = re.compile("\r" + r"(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b")
 
 # Finds `${\displaystyle ... $` blocks for unclosed brace repair
-UNCLOSED_LATEX_DISPLAY_RE = re.compile(r'\$\{\\displaystyle(.*?)(?<!\\)\$', re.DOTALL)
+UNCLOSED_LATEX_DISPLAY_RE = re.compile(r"\$\{\\displaystyle(.*?)(?<!\\)\$", re.DOTALL)
 
 # Other JSON-escape collisions affecting LaTeX commands. When LLMs emit
 # LaTeX inside a JSON string, they often forget to escape the backslash;
@@ -240,9 +237,9 @@ UNCLOSED_LATEX_DISPLAY_RE = re.compile(r'\$\{\\displaystyle(.*?)(?<!\\)\$', re.D
 # Both `\r` and the alternates below operate on the control characters
 # left behind by JSON decoding, not on literal backslashes.
 _LATEX_ESCAPE_COLLISIONS: tuple[tuple[str, str, str], ...] = (
-    ("\x08", "b", "repaired_latex_backspace"),       # \b → \binom, \big, ...
-    ("\x0c", "f", "repaired_latex_form_feed"),       # \f → \frac, \forall, ...
-    ("\x0b", "v", "repaired_latex_vertical_tab"),    # \v → \vec, \vee, ...
+    ("\x08", "b", "repaired_latex_backspace"),  # \b → \binom, \big, ...
+    ("\x0c", "f", "repaired_latex_form_feed"),  # \f → \frac, \forall, ...
+    ("\x0b", "v", "repaired_latex_vertical_tab"),  # \v → \vec, \vee, ...
 )
 
 # Mermaid (Obsidian's parser) cannot render LaTeX/KaTeX math inside node
@@ -254,35 +251,111 @@ _LATEX_ESCAPE_COLLISIONS: tuple[tuple[str, str, str], ...] = (
 #
 # `\command{X}` wrappers that only style their argument collapse to `X`.
 _MERMAID_LATEX_WRAPPERS = (
-    "mathcal", "mathbb", "mathbf", "mathrm", "mathsf", "mathit", "mathfrak",
-    "boldsymbol", "operatorname", "textbf", "textit", "textrm", "text", "bm",
+    "mathcal",
+    "mathbb",
+    "mathbf",
+    "mathrm",
+    "mathsf",
+    "mathit",
+    "mathfrak",
+    "boldsymbol",
+    "operatorname",
+    "textbf",
+    "textit",
+    "textrm",
+    "text",
+    "bm",
 )
 # `\command` symbols map to a Unicode glyph. Longest names first so the
 # word-boundary match never lets `\in` shadow `\infty`.
 _MERMAID_LATEX_SYMBOLS: dict[str, str] = {
-    "Rightarrow": "⇒", "rightarrow": "→", "Leftarrow": "⇐", "leftarrow": "←",
-    "leftrightarrow": "↔", "mapsto": "↦", "implies": "⇒", "iff": "⇔",
-    "subseteq": "⊆", "supseteq": "⊇", "subset": "⊂", "supset": "⊃",
-    "notin": "∉", "infty": "∞", "forall": "∀", "exists": "∃", "nabla": "∇",
-    "partial": "∂", "approx": "≈", "equiv": "≡", "cong": "≅", "neq": "≠",
-    "leq": "≤", "geq": "≥", "times": "×", "cdot": "·", "div": "÷", "pm": "±",
-    "oplus": "⊕", "otimes": "⊗", "cup": "∪", "cap": "∩", "land": "∧",
-    "lor": "∨", "neg": "¬", "sqrt": "√", "sum": "Σ", "prod": "Π", "int": "∫",
-    "to": "→", "in": "∈",
-    "ldots": "…", "cdots": "…", "dotsc": "…", "dotsb": "…", "dots": "…",
-    "vdots": "⋮", "ddots": "⋱", "langle": "⟨", "rangle": "⟩",
-    "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
-    "zeta": "ζ", "eta": "η", "theta": "θ", "iota": "ι", "kappa": "κ",
-    "lambda": "λ", "mu": "μ", "nu": "ν", "xi": "ξ", "rho": "ρ", "sigma": "σ",
-    "tau": "τ", "phi": "φ", "chi": "χ", "psi": "ψ", "omega": "ω",
-    "Gamma": "Γ", "Delta": "Δ", "Theta": "Θ", "Lambda": "Λ", "Xi": "Ξ",
-    "Sigma": "Σ", "Phi": "Φ", "Psi": "Ψ", "Omega": "Ω", "Pi": "Π",
+    "Rightarrow": "⇒",
+    "rightarrow": "→",
+    "Leftarrow": "⇐",
+    "leftarrow": "←",
+    "leftrightarrow": "↔",
+    "mapsto": "↦",
+    "implies": "⇒",
+    "iff": "⇔",
+    "subseteq": "⊆",
+    "supseteq": "⊇",
+    "subset": "⊂",
+    "supset": "⊃",
+    "notin": "∉",
+    "infty": "∞",
+    "forall": "∀",
+    "exists": "∃",
+    "nabla": "∇",
+    "partial": "∂",
+    "approx": "≈",
+    "equiv": "≡",
+    "cong": "≅",
+    "neq": "≠",
+    "leq": "≤",
+    "geq": "≥",
+    "times": "×",
+    "cdot": "·",
+    "div": "÷",
+    "pm": "±",
+    "oplus": "⊕",
+    "otimes": "⊗",
+    "cup": "∪",
+    "cap": "∩",
+    "land": "∧",
+    "lor": "∨",
+    "neg": "¬",
+    "sqrt": "√",
+    "sum": "Σ",
+    "prod": "Π",
+    "int": "∫",
+    "to": "→",
+    "in": "∈",
+    "ldots": "…",
+    "cdots": "…",
+    "dotsc": "…",
+    "dotsb": "…",
+    "dots": "…",
+    "vdots": "⋮",
+    "ddots": "⋱",
+    "langle": "⟨",
+    "rangle": "⟩",
+    "alpha": "α",
+    "beta": "β",
+    "gamma": "γ",
+    "delta": "δ",
+    "epsilon": "ε",
+    "zeta": "ζ",
+    "eta": "η",
+    "theta": "θ",
+    "iota": "ι",
+    "kappa": "κ",
+    "lambda": "λ",
+    "mu": "μ",
+    "nu": "ν",
+    "xi": "ξ",
+    "rho": "ρ",
+    "sigma": "σ",
+    "tau": "τ",
+    "phi": "φ",
+    "chi": "χ",
+    "psi": "ψ",
+    "omega": "ω",
+    "Gamma": "Γ",
+    "Delta": "Δ",
+    "Theta": "Θ",
+    "Lambda": "Λ",
+    "Xi": "Ξ",
+    "Sigma": "Σ",
+    "Phi": "Φ",
+    "Psi": "Ψ",
+    "Omega": "Ω",
+    "Pi": "Π",
 }
 _MERMAID_LATEX_WRAPPER_RE = re.compile(
-    r'\\+\s*(?:' + "|".join(_MERMAID_LATEX_WRAPPERS) + r')\s*\{([^{}]*)\}'
+    r"\\+\s*(?:" + "|".join(_MERMAID_LATEX_WRAPPERS) + r")\s*\{([^{}]*)\}"
 )
 _MERMAID_LATEX_SYMBOL_RES: tuple[tuple[re.Pattern, str], ...] = tuple(
-    (re.compile(r'\\+' + re.escape(name) + r'\b'), glyph)
+    (re.compile(r"\\+" + re.escape(name) + r"\b"), glyph)
     # Longest command names first so `\infty` isn't partially eaten by `\in`.
     for name, glyph in sorted(
         _MERMAID_LATEX_SYMBOLS.items(), key=lambda kv: len(kv[0]), reverse=True
@@ -291,7 +364,7 @@ _MERMAID_LATEX_SYMBOL_RES: tuple[tuple[re.Pattern, str], ...] = tuple(
 # `_{sub}` / `^{sup}` → keep the marker; wrap multi-char scripts in parens so
 # grouping survives (`y^{m-1}` → `y^(m-1)`, not the ambiguous `y^m-1`). A
 # single-char script drops its braces (`y^{2}` → `y^2`).
-_MERMAID_LATEX_SCRIPT_RE = re.compile(r'([_^])\{([^{}]*)\}')
+_MERMAID_LATEX_SCRIPT_RE = re.compile(r"([_^])\{([^{}]*)\}")
 
 
 def _mermaid_script_repl(m: "re.Match") -> str:
@@ -299,18 +372,20 @@ def _mermaid_script_repl(m: "re.Match") -> str:
     # Parenthesize only when grouping is ambiguous — an operator or space inside
     # (`y^{m-1}` → `y^(m-1)`). Plain word/number scripts read fine bare
     # (`T_{New}` → `T_New`, `x^{2}` → `x^2`).
-    if re.search(r'[-+*/ ,]', content):
+    if re.search(r"[-+*/ ,]", content):
         return f"{marker}({content})"
     return f"{marker}{content}"
+
+
 # Any backslash command we don't have a glyph for: drop it entirely.
-_MERMAID_LATEX_UNKNOWN_CMD_RE = re.compile(r'\\+[a-zA-Z]+')
+_MERMAID_LATEX_UNKNOWN_CMD_RE = re.compile(r"\\+[a-zA-Z]+")
 # A stray backslash that is NOT escaping a double-quote (`\"` is a legitimate
 # mermaid label escape and must survive).
 _MERMAID_LATEX_STRAY_SLASH_RE = re.compile(r'\\(?!")')
 # A math span inside a label: `$$...$$` (mermaid's KaTeX delimiter) or a single
 # `$...$`. Mermaid only renders the `$$...$$` form, so single-`$` math is
 # normalized up to `$$...$$`; existing `$$...$$` is matched first and kept.
-_MERMAID_MATH_SPAN_RE = re.compile(r'\$\$.+?\$\$|\$[^$\n]+?\$')
+_MERMAID_MATH_SPAN_RE = re.compile(r"\$\$.+?\$\$|\$[^$\n]+?\$")
 
 # LaTeX commands whose leading `\<letter>` was eaten by a JSON escape collision
 # (`\t`/`\n`/`\f`/`\r`/`\b`/`\v`) AND whose control char was later flattened to a
@@ -322,20 +397,21 @@ _MERMAID_MATH_SPAN_RE = re.compile(r'\$\$.+?\$\$|\$[^$\n]+?\$')
 # only multi-char, unambiguous tails are included — single-letter tails like
 # `o` (`\to`) / `u` (`\nu`) are too easily real variables and are left alone.
 _LATEX_MATH_COMMAND_RECOVERIES: tuple[tuple[re.Pattern, str], ...] = tuple(
-    (re.compile(pat), repl) for pat, repl in (
-        (r'(?<![\\A-Za-z])rac(?=\{)', r'\\frac'),
-        (r'(?<![\\A-Za-z])inom(?=\{)', r'\\binom'),
-        (r'(?<![\\A-Za-z])ec(?=\{)', r'\\vec'),
-        (r'(?<![\\A-Za-z])ightarrow(?![A-Za-z])', r'\\rightarrow'),
-        (r'(?<![\\A-Za-z])riangle(?![A-Za-z])', r'\\triangle'),
-        (r'(?<![\\A-Za-z])orall(?![A-Za-z])', r'\\forall'),
-        (r'(?<![\\A-Za-z])heta(?![A-Za-z])', r'\\theta'),
-        (r'(?<![\\A-Za-z])imes(?![A-Za-z])', r'\\times'),
-        (r'(?<![\\A-Za-z])abla(?![A-Za-z])', r'\\nabla'),
-        (r'(?<![\\A-Za-z])eta(?![A-Za-z])', r'\\beta'),
-        (r'(?<![\\A-Za-z])ho(?![A-Za-z])', r'\\rho'),
-        (r'(?<![\\A-Za-z])au(?![A-Za-z])', r'\\tau'),
-        (r'(?<![\\A-Za-z])eq(?![A-Za-z])', r'\\neq'),
+    (re.compile(pat), repl)
+    for pat, repl in (
+        (r"(?<![\\A-Za-z])rac(?=\{)", r"\\frac"),
+        (r"(?<![\\A-Za-z])inom(?=\{)", r"\\binom"),
+        (r"(?<![\\A-Za-z])ec(?=\{)", r"\\vec"),
+        (r"(?<![\\A-Za-z])ightarrow(?![A-Za-z])", r"\\rightarrow"),
+        (r"(?<![\\A-Za-z])riangle(?![A-Za-z])", r"\\triangle"),
+        (r"(?<![\\A-Za-z])orall(?![A-Za-z])", r"\\forall"),
+        (r"(?<![\\A-Za-z])heta(?![A-Za-z])", r"\\theta"),
+        (r"(?<![\\A-Za-z])imes(?![A-Za-z])", r"\\times"),
+        (r"(?<![\\A-Za-z])abla(?![A-Za-z])", r"\\nabla"),
+        (r"(?<![\\A-Za-z])eta(?![A-Za-z])", r"\\beta"),
+        (r"(?<![\\A-Za-z])ho(?![A-Za-z])", r"\\rho"),
+        (r"(?<![\\A-Za-z])au(?![A-Za-z])", r"\\tau"),
+        (r"(?<![\\A-Za-z])eq(?![A-Za-z])", r"\\neq"),
     )
 )
 
@@ -395,17 +471,19 @@ def repair_latex_carriage_returns(text: str) -> tuple[str, list[dict]]:
     parts: list[str] = []
     last_end = 0
     for match in LATEX_CR_COMMAND_RE.finditer(text):
-        parts.append(text[last_end:match.start()])
+        parts.append(text[last_end : match.start()])
         before = match.group(0)
         after = "\\r" + match.group(1)
         parts.append(after)
         line_no = text.count("\n", 0, match.start()) + 1
-        fixes.append(_make_fix(
-            "repaired_latex_carriage_return",
-            line=line_no,
-            before=before,
-            after=after,
-        ))
+        fixes.append(
+            _make_fix(
+                "repaired_latex_carriage_return",
+                line=line_no,
+                before=before,
+                after=after,
+            )
+        )
         last_end = match.end()
     if not fixes:
         return text, []
@@ -415,44 +493,43 @@ def repair_latex_carriage_returns(text: str) -> tuple[str, list[dict]]:
 
 def repair_unclosed_latex_display(text: str) -> tuple[str, list[dict]]:
     """Repair missing closing brace in `${\\displaystyle ... $` math blocks.
-    
+
     LLMs sometimes output `${\\displaystyle X$` instead of `${\\displaystyle X}$`.
-    This pass counts braces between `${` and the next `$` and inserts a closing 
+    This pass counts braces between `${` and the next `$` and inserts a closing
     brace if one is missing.
     """
     if not text or "${\\displaystyle" not in text:
         return text, []
-        
+
     fixes: list[dict] = []
     parts: list[str] = []
     last_end = 0
-    
+
     for match in UNCLOSED_LATEX_DISPLAY_RE.finditer(text):
         content = match.group(1)
         full_math = "${\\displaystyle" + content
-        if full_math.count('{') > full_math.count('}'):
-            diff = full_math.count('{') - full_math.count('}')
+        if full_math.count("{") > full_math.count("}"):
+            diff = full_math.count("{") - full_math.count("}")
             before = match.group(0)
             after = full_math + ("}" * diff) + "$"
-            
-            parts.append(text[last_end:match.start()])
+
+            parts.append(text[last_end : match.start()])
             parts.append(after)
-            
+
             line_no = text.count("\n", 0, match.start()) + 1
-            fixes.append(_make_fix(
-                "repaired_unclosed_latex_display",
-                line=line_no,
-                before=before,
-                after=after
-            ))
+            fixes.append(
+                _make_fix(
+                    "repaired_unclosed_latex_display", line=line_no, before=before, after=after
+                )
+            )
             last_end = match.end()
         else:
-            parts.append(text[last_end:match.end()])
+            parts.append(text[last_end : match.end()])
             last_end = match.end()
-            
+
     if not fixes:
         return text, []
-        
+
     parts.append(text[last_end:])
     return "".join(parts), fixes
 
@@ -486,18 +563,20 @@ def repair_latex_escape_collisions(text: str) -> tuple[str, list[dict]]:
         any_match = False
         for match in pattern.finditer(cleaned):
             any_match = True
-            parts.append(cleaned[last_end:match.start()])
+            parts.append(cleaned[last_end : match.start()])
             suffix = match.group(1)
             before = control_char + suffix
             after = f"\\{latex_letter}{suffix}"
             parts.append(after)
             line_no = cleaned.count("\n", 0, match.start()) + 1
-            fixes.append(_make_fix(
-                fix_type,
-                line=line_no,
-                before=before,
-                after=after,
-            ))
+            fixes.append(
+                _make_fix(
+                    fix_type,
+                    line=line_no,
+                    before=before,
+                    after=after,
+                )
+            )
             last_end = match.end()
         if any_match:
             parts.append(cleaned[last_end:])
@@ -507,6 +586,7 @@ def repair_latex_escape_collisions(text: str) -> tuple[str, list[dict]]:
 
 
 # ─── Mermaid: label quoting ────────────────────────────────────────────
+
 
 def _strip_mermaid_comment(line: str) -> str:
     """Return the portion of a mermaid line before any `%%` comment."""
@@ -546,7 +626,7 @@ def _quote_labels_in_line(line: str) -> tuple[str, bool]:
     untouched.
     """
     code_part = _strip_mermaid_comment(line)
-    comment_part = line[len(code_part):]
+    comment_part = line[len(code_part) :]
     if not code_part.strip():
         return line, False
 
@@ -562,7 +642,7 @@ def _quote_labels_in_line(line: str) -> tuple[str, bool]:
             i += 1
             while i < n and code_part[i] != '"':
                 if code_part[i] == "\\" and i + 1 < n:
-                    out.append(code_part[i:i + 2])
+                    out.append(code_part[i : i + 2])
                     i += 2
                     continue
                 out.append(code_part[i])
@@ -607,11 +687,11 @@ def _quote_labels_in_line(line: str) -> tuple[str, bool]:
                     out.append(closer)
                     changed = True
                 else:
-                    out.append(code_part[i:close_at + len(closer)])
+                    out.append(code_part[i : close_at + len(closer)])
             else:
                 # Empty label (e.g. `A[]`): preserve the shape verbatim.
                 # Without this the span was silently dropped (audit R7-E).
-                out.append(code_part[i:close_at + len(closer)])
+                out.append(code_part[i : close_at + len(closer)])
             i = close_at + len(closer)
             matched = True
             break
@@ -628,7 +708,7 @@ def _quote_labels_in_line(line: str) -> tuple[str, bool]:
 # Matches lines like `sub定的 "title"` or `sub動 "title"` — the LLM truncated
 # `subgraph` and glued CJK (or other non-ASCII) text after `sub`.
 _SUBGRAPH_BROKEN_RE = re.compile(
-    r'^(\s*)sub([^\x00-\x7F]+)\s+(.*)',
+    r"^(\s*)sub([^\x00-\x7F]+)\s+(.*)",
     re.IGNORECASE,
 )
 # ASCII malformations of the keyword: `sub graph "t"` (split by space) or
@@ -636,7 +716,7 @@ _SUBGRAPH_BROKEN_RE = re.compile(
 # group requires at least one space or extra `sub`, so a valid `subgraph`
 # (just `sub`+`graph`, nothing between) never matches.
 _SUBGRAPH_ASCII_MALFORMED_RE = re.compile(
-    r'^(\s*)sub(?:\s+|sub)+graph\b(.*)$',
+    r"^(\s*)sub(?:\s+|sub)+graph\b(.*)$",
     re.IGNORECASE,
 )
 
@@ -679,12 +759,14 @@ def repair_mermaid_subgraph_keyword(text: str) -> tuple[str, list[dict]]:
                 a = _SUBGRAPH_ASCII_MALFORMED_RE.match(line)
                 new_line = f"{a.group(1)}subgraph{a.group(2)}" if a else line
             if new_line != line:
-                fixes.append(_make_fix(
-                    "repaired_mermaid_subgraph_keyword",
-                    line=idx + 1,
-                    before=line,
-                    after=new_line,
-                ))
+                fixes.append(
+                    _make_fix(
+                        "repaired_mermaid_subgraph_keyword",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
             out.append(new_line)
         else:
             out.append(line)
@@ -697,8 +779,8 @@ def repair_mermaid_subgraph_keyword(text: str) -> tuple[str, list[dict]]:
 # `"NodeId"[` — the LLM wrapped a valid ASCII node identifier in quotes.
 # Mermaid requires bare identifiers: `NodeId["label"]`, not `"NodeId"["label"]`.
 _QUOTED_NODE_ID_SHAPE_RE = re.compile(
-    r'"([A-Za-z_]\w*(?:-\w+)*)"'    # "varName" or "my-node"
-    r'(?=[\[\(\{>])'                 # lookahead: immediately followed by shape opener
+    r'"([A-Za-z_]\w*(?:-\w+)*)"'  # "varName" or "my-node"
+    r"(?=[\[\(\{>])"  # lookahead: immediately followed by shape opener
 )
 
 
@@ -729,14 +811,16 @@ def repair_mermaid_quoted_node_ids(text: str) -> tuple[str, list[dict]]:
             continue
 
         if in_mermaid:
-            new_line = _QUOTED_NODE_ID_SHAPE_RE.sub(r'\1', line)
+            new_line = _QUOTED_NODE_ID_SHAPE_RE.sub(r"\1", line)
             if new_line != line:
-                fixes.append(_make_fix(
-                    "stripped_mermaid_quoted_node_id",
-                    line=idx + 1,
-                    before=line,
-                    after=new_line,
-                ))
+                fixes.append(
+                    _make_fix(
+                        "stripped_mermaid_quoted_node_id",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
             out.append(new_line)
         else:
             out.append(line)
@@ -751,9 +835,7 @@ def repair_mermaid_quoted_node_ids(text: str) -> tuple[str, list[dict]]:
 # `repair_mermaid_quoted_node_ids` misses it (there's no `"` between id and the
 # shape opener), so the outer quotes survive and break the line. Strip them back
 # to a bare `id["label"]`. Handles the `[]`, `()` and `{}` shapes.
-_MERMAID_OVERQUOTED_NODE_RE = re.compile(
-    r'"([A-Za-z_]\w*)([\[\(\{])"([^"\n]*)"([\]\)\}])"'
-)
+_MERMAID_OVERQUOTED_NODE_RE = re.compile(r'"([A-Za-z_]\w*)([\[\(\{])"([^"\n]*)"([\]\)\}])"')
 _MERMAID_SHAPE_CLOSERS = {"[": "]", "(": ")", "{": "}"}
 
 
@@ -792,12 +874,14 @@ def repair_mermaid_overquoted_node(text: str) -> tuple[str, list[dict]]:
         if in_mermaid and '"' in line:
             new_line = _MERMAID_OVERQUOTED_NODE_RE.sub(_repl, line)
             if new_line != line:
-                fixes.append(_make_fix(
-                    "stripped_mermaid_overquoted_node",
-                    line=idx + 1,
-                    before=line,
-                    after=new_line,
-                ))
+                fixes.append(
+                    _make_fix(
+                        "stripped_mermaid_overquoted_node",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
             out.append(new_line)
         else:
             out.append(line)
@@ -810,9 +894,9 @@ def repair_mermaid_overquoted_node(text: str) -> tuple[str, list[dict]]:
 # `[""label""]` or `(""label"")` — LLM emitted two layers of quotes inside
 # a shape, which breaks the mermaid parser completely.
 _DOUBLE_QUOTE_SHAPE_RE = re.compile(
-    r'([\[\(\{>])""'    # shape opener + ""
-    r'(.*?)'            # label content (non-greedy)
-    r'""([\]\)\}])'     # "" + shape closer
+    r'([\[\(\{>])""'  # shape opener + ""
+    r"(.*?)"  # label content (non-greedy)
+    r'""([\]\)\}])'  # "" + shape closer
 )
 
 
@@ -845,12 +929,14 @@ def repair_mermaid_double_quotes(text: str) -> tuple[str, list[dict]]:
         if in_mermaid and '""' in line:
             new_line = _DOUBLE_QUOTE_SHAPE_RE.sub(r'\1"\2"\3', line)
             if new_line != line:
-                fixes.append(_make_fix(
-                    "repaired_mermaid_double_quotes",
-                    line=idx + 1,
-                    before=line,
-                    after=new_line,
-                ))
+                fixes.append(
+                    _make_fix(
+                        "repaired_mermaid_double_quotes",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
             out.append(new_line)
         else:
             out.append(line)
@@ -921,14 +1007,14 @@ def repair_mermaid_quoted_endpoint_labels(text: str) -> tuple[str, list[dict]]:
                 return m.group(0)
             nid = _synthesize_node_id(label, label_to_id, used_ids)
             labeled_ids.add(nid)
-            return f'{m.group(1)}{nid}'
+            return f"{m.group(1)}{nid}"
 
         def repl_style(m: re.Match) -> str:
             target = m.group(3)
             if _MERMAID_BARE_ID_RE.match(target):
                 return m.group(0)
             nid = _synthesize_node_id(target, label_to_id, used_ids)
-            return f'{m.group(1)}{m.group(2)} {nid}'
+            return f"{m.group(1)}{m.group(2)} {nid}"
 
         def repl_start(m: re.Match) -> str:
             label = m.group(2)
@@ -936,7 +1022,7 @@ def repair_mermaid_quoted_endpoint_labels(text: str) -> tuple[str, list[dict]]:
                 return m.group(0)
             nid = _synthesize_node_id(label, label_to_id, used_ids)
             if nid in labeled_ids:
-                return f'{m.group(1)}{nid} {m.group(3)}'
+                return f"{m.group(1)}{nid} {m.group(3)}"
             return f'{m.group(1)}{nid}["{label}"] {m.group(3)}'
 
         def repl_end(m: re.Match) -> str:
@@ -945,7 +1031,7 @@ def repair_mermaid_quoted_endpoint_labels(text: str) -> tuple[str, list[dict]]:
                 return m.group(0)
             nid = _synthesize_node_id(label, label_to_id, used_ids)
             if nid in labeled_ids:
-                return f'{m.group(1)} {nid}{m.group(3)}'
+                return f"{m.group(1)} {nid}{m.group(3)}"
             return f'{m.group(1)} {nid}["{label}"]{m.group(3)}'
 
         new = _MERMAID_QUOTED_DECL_RE.sub(repl_decl, line)
@@ -953,12 +1039,14 @@ def repair_mermaid_quoted_endpoint_labels(text: str) -> tuple[str, list[dict]]:
         new = _MERMAID_CONN_START_QUOTED_LABEL_RE.sub(repl_start, new)
         new = _MERMAID_CONN_END_QUOTED_LABEL_RE.sub(repl_end, new)
         if new != line:
-            fixes.append(_make_fix(
-                "bracketed_mermaid_quoted_endpoint",
-                line=idx + 1,
-                before=line,
-                after=new,
-            ))
+            fixes.append(
+                _make_fix(
+                    "bracketed_mermaid_quoted_endpoint",
+                    line=idx + 1,
+                    before=line,
+                    after=new,
+                )
+            )
         return new
 
     idx = 0
@@ -972,7 +1060,7 @@ def repair_mermaid_quoted_endpoint_labels(text: str) -> tuple[str, list[dict]]:
             # Seed used_ids with every id already present in this fence so a
             # synthesized id never collides with an author's node.
             used_ids = set()
-            for look in lines[idx + 1:]:
+            for look in lines[idx + 1 :]:
                 if look.strip() == "```":
                     break
                 used_ids.update(_MERMAID_EXISTING_ID_RE.findall(_strip_mermaid_comment(look)))
@@ -997,7 +1085,7 @@ def _peek_mermaid_kind(lines: list[str], fence_idx: int) -> str:
     whose syntax they'd corrupt (notably ``mindmap``, which is indentation-based
     and rejects flowchart-style quoted labels). Returns '' if the fence is empty.
     """
-    for look in lines[fence_idx + 1:]:
+    for look in lines[fence_idx + 1 :]:
         s = look.strip()
         if not s:
             continue
@@ -1045,19 +1133,21 @@ def repair_mermaid_label_quotes(text: str) -> tuple[str, list[dict]]:
             new_line, changed = _quote_labels_in_line(pre_processed)
 
             # Strip quotes around node IDs on connection lines
-            conn_line = _MERMAID_CONN_START_QUOTED_ID_RE.sub(r'\1\2 \3', new_line)
-            conn_line = _MERMAID_CONN_END_QUOTED_ID_RE.sub(r'\1 \2\3', conn_line)
+            conn_line = _MERMAID_CONN_START_QUOTED_ID_RE.sub(r"\1\2 \3", new_line)
+            conn_line = _MERMAID_CONN_END_QUOTED_ID_RE.sub(r"\1 \2\3", conn_line)
             if conn_line != new_line:
                 new_line = conn_line
                 changed = True
 
             if pre_processed != line or changed:
-                fixes.append(_make_fix(
-                    "quoted_mermaid_labels",
-                    line=idx + 1,
-                    before=line,
-                    after=new_line,
-                ))
+                fixes.append(
+                    _make_fix(
+                        "quoted_mermaid_labels",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
                 out.append(new_line)
             else:
                 out.append(line)
@@ -1104,12 +1194,14 @@ def repair_mermaid_mindmap_labels(text: str) -> tuple[str, list[dict]]:
 
         if in_mermaid and is_mindmap and '"' in line:
             new_line = line.replace('"', "")
-            fixes.append(_make_fix(
-                "stripped_mindmap_quotes",
-                line=idx + 1,
-                before=line,
-                after=new_line,
-            ))
+            fixes.append(
+                _make_fix(
+                    "stripped_mindmap_quotes",
+                    line=idx + 1,
+                    before=line,
+                    after=new_line,
+                )
+            )
             out.append(new_line)
         else:
             out.append(line)
@@ -1120,13 +1212,23 @@ def repair_mermaid_mindmap_labels(text: str) -> tuple[str, list[dict]]:
 # ─── Mermaid: mindmap bracket neutralization ──────────────────────────
 
 _MINDMAP_HALF_TO_FULL = {
-    "(": "（", ")": "）", "[": "［", "]": "］", "{": "｛", "}": "｝",
+    "(": "（",
+    ")": "）",
+    "[": "［",
+    "]": "］",
+    "{": "｛",
+    "}": "｝",
 }
 # Mindmap node shapes, longest/double markers first so `((` isn't shadowed by
 # `(`. A shape wraps the WHOLE label; brackets there are syntax, not text.
 _MINDMAP_SHAPE_PAIRS = (
-    ("((", "))"), ("))", "(("), ("{{", "}}"),
-    ("[", "]"), ("(", ")"), (")", "("), ("{", "}"),
+    ("((", "))"),
+    ("))", "(("),
+    ("{{", "}}"),
+    ("[", "]"),
+    ("(", ")"),
+    (")", "("),
+    ("{", "}"),
 )
 
 
@@ -1145,11 +1247,14 @@ def _fix_mindmap_brackets(content: str) -> str:
     """
     if not any(c in content for c in "()[]{}"):
         return content
-    head, rest = re.match(r'^([\w\-]*)(.*)$', content, re.UNICODE).groups()
+    head, rest = re.match(r"^([\w\-]*)(.*)$", content, re.UNICODE).groups()
     for open_, close_ in _MINDMAP_SHAPE_PAIRS:
-        if (rest.startswith(open_) and rest.endswith(close_)
-                and len(rest) >= len(open_) + len(close_)):
-            inner = rest[len(open_):len(rest) - len(close_)]
+        if (
+            rest.startswith(open_)
+            and rest.endswith(close_)
+            and len(rest) >= len(open_) + len(close_)
+        ):
+            inner = rest[len(open_) : len(rest) - len(close_)]
             return f"{head}{open_}{_neutralize_brackets(inner)}{close_}"
     return f"{head}{_neutralize_brackets(rest)}"
 
@@ -1184,16 +1289,18 @@ def repair_mermaid_mindmap_brackets(text: str) -> tuple[str, list[dict]]:
             continue
 
         if in_mermaid and is_mindmap and line.strip() and any(c in line for c in "()[]{}"):
-            indent = line[:len(line) - len(line.lstrip())]
+            indent = line[: len(line) - len(line.lstrip())]
             new_content = _fix_mindmap_brackets(line.strip())
             new_line = f"{indent}{new_content}"
             if new_line != line:
-                fixes.append(_make_fix(
-                    "neutralized_mindmap_brackets",
-                    line=idx + 1,
-                    before=line,
-                    after=new_line,
-                ))
+                fixes.append(
+                    _make_fix(
+                        "neutralized_mindmap_brackets",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
             out.append(new_line)
         else:
             out.append(line)
@@ -1243,12 +1350,14 @@ def repair_mermaid_quadrant_points(text: str) -> tuple[str, list[dict]]:
             if m:
                 new_line = f'{m.group(1)}"{m.group(2)}": {m.group(3)}'
                 if new_line != line:
-                    fixes.append(_make_fix(
-                        "quoted_quadrant_point",
-                        line=idx + 1,
-                        before=line,
-                        after=new_line,
-                    ))
+                    fixes.append(
+                        _make_fix(
+                            "quoted_quadrant_point",
+                            line=idx + 1,
+                            before=line,
+                            after=new_line,
+                        )
+                    )
                     out.append(new_line)
                     continue
         out.append(line)
@@ -1319,17 +1428,19 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
                 idx = start + 1
                 continue
             full = "\n".join(block)
-            inner = full[full.index("{") + 1:full.rindex("}")]
-            if re.sub(r'[{}<>\s]', "", inner) == "":
+            inner = full[full.index("{") + 1 : full.rindex("}")]
+            if re.sub(r"[{}<>\s]", "", inner) == "":
                 # No real member/stereotype — degrade to a bare declaration.
                 label = bopen.group(3) or ""
-                bare = f'{bopen.group(1)}class {bopen.group(2)}{label}'
-                fixes.append(_make_fix(
-                    "stripped_empty_classdiagram_body",
-                    line=base_line + start,
-                    before=full,
-                    after=bare,
-                ))
+                bare = f"{bopen.group(1)}class {bopen.group(2)}{label}"
+                fixes.append(
+                    _make_fix(
+                        "stripped_empty_classdiagram_body",
+                        line=base_line + start,
+                        before=full,
+                        after=bare,
+                    )
+                )
                 out.append(bare)
             else:
                 out.extend(block)
@@ -1340,11 +1451,13 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
         if decl:
             key = line.strip()
             if key in seen_decls:
-                fixes.append(_make_fix(
-                    "deduped_classdiagram_decl",
-                    line=base_line + idx,
-                    before=line,
-                ))
+                fixes.append(
+                    _make_fix(
+                        "deduped_classdiagram_decl",
+                        line=base_line + idx,
+                        before=line,
+                    )
+                )
                 idx += 1
                 continue  # drop the exact-duplicate declaration
             seen_decls.add(key)
@@ -1363,18 +1476,20 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
 
         new_line = _CLASSDIAGRAM_INLINE_LABEL_RE.sub(_hoist, line)
         if new_line != line:
-            fixes.append(_make_fix(
-                "hoisted_classdiagram_inline_label",
-                line=base_line + idx,
-                before=line,
-                after=new_line,
-            ))
+            fixes.append(
+                _make_fix(
+                    "hoisted_classdiagram_inline_label",
+                    line=base_line + idx,
+                    before=line,
+                    after=new_line,
+                )
+            )
         out.append(new_line)
         idx += 1
 
     if hoisted:
         decls = [f'{indent}class {cid}["{label}"]' for cid, label in hoisted]
-        out[header_idx + 1:header_idx + 1] = decls
+        out[header_idx + 1 : header_idx + 1] = decls
 
     return out, fixes
 
@@ -1400,7 +1515,7 @@ def repair_mermaid_classdiagram(text: str) -> tuple[str, list[dict]]:
             while j < n and lines[j].strip() != "```":
                 j += 1
             if _peek_mermaid_kind(lines, i).startswith("classdiagram"):
-                new_body, body_fixes = _repair_classdiagram_body(lines[i + 1:j], i + 2)
+                new_body, body_fixes = _repair_classdiagram_body(lines[i + 1 : j], i + 2)
                 out.append(line)
                 out.extend(new_body)
                 if j < n:
@@ -1459,17 +1574,18 @@ def _consolidate_math_in_label(s: str) -> str:
     if not spans:
         return s
     bodies = [
-        _restore_math_commands(m.group(0)[2:-2] if m.group(0).startswith("$$")
-                               else m.group(0)[1:-1])
+        _restore_math_commands(
+            m.group(0)[2:-2] if m.group(0).startswith("$$") else m.group(0)[1:-1]
+        )
         for m in spans
     ]
     scores = [_math_complexity(b) for b in bodies]
     best = max(range(len(spans)), key=lambda i: scores[i])
-    keep_math = scores[best] > 0            # nothing worth rendering → all plain
+    keep_math = scores[best] > 0  # nothing worth rendering → all plain
     out: list[str] = []
     last = 0
     for i, m in enumerate(spans):
-        out.append(s[last:m.start()])
+        out.append(s[last : m.start()])
         if i == best and keep_math:
             out.append(f"$${bodies[i]}$$")
         else:
@@ -1507,7 +1623,7 @@ def _normalize_math_in_mermaid_line(line: str) -> tuple[str, str | None]:
                 j += 2
                 continue
             j += 1
-        inner = line[i + 1:j]
+        inner = line[i + 1 : j]
         if "$" in inner:
             new_inner = _consolidate_math_in_label(inner)
             if new_inner != inner:
@@ -1555,12 +1671,14 @@ def repair_mermaid_latex_labels(text: str) -> tuple[str, list[dict]]:
         if in_mermaid:
             new_line, action = _normalize_math_in_mermaid_line(line)
             if action:
-                fixes.append(_make_fix(
-                    action,
-                    line=idx + 1,
-                    before=line,
-                    after=new_line,
-                ))
+                fixes.append(
+                    _make_fix(
+                        action,
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
             out.append(new_line)
         else:
             out.append(line)
@@ -1570,7 +1688,7 @@ def repair_mermaid_latex_labels(text: str) -> tuple[str, list[dict]]:
 
 # ─── Mermaid: fence repair ────────────────────────────────────────────
 
-_FENCE_RE = re.compile(r'^```(\w*)\s*$')
+_FENCE_RE = re.compile(r"^```(\w*)\s*$")
 
 
 def _is_mermaid_continuation(line: str) -> bool:
@@ -1621,11 +1739,13 @@ def repair_mermaid_fences(text: str) -> tuple[str, list[dict]]:
                     and not MARKDOWN_BOUNDARY_RE.match(following)
                     and _is_mermaid_continuation(following)
                 ):
-                    fixes.append(_make_fix(
-                        "ignored_premature_mermaid_close",
-                        line=i + 1,
-                        before=line,
-                    ))
+                    fixes.append(
+                        _make_fix(
+                            "ignored_premature_mermaid_close",
+                            line=i + 1,
+                            before=line,
+                        )
+                    )
                     i += 1
                     continue
 
@@ -1641,12 +1761,14 @@ def repair_mermaid_fences(text: str) -> tuple[str, list[dict]]:
             and stripped.lower() == "mermaid"
             and MERMAID_START_RE.match(peek_next_nonempty(i + 1))
         ):
-            fixes.append(_make_fix(
-                "wrapped_bare_mermaid",
-                line=i + 1,
-                before=line,
-                after="```mermaid",
-            ))
+            fixes.append(
+                _make_fix(
+                    "wrapped_bare_mermaid",
+                    line=i + 1,
+                    before=line,
+                    after="```mermaid",
+                )
+            )
             out.append("```mermaid")
             i += 1
 
@@ -1662,9 +1784,13 @@ def repair_mermaid_fences(text: str) -> tuple[str, list[dict]]:
                     break
 
                 following = peek_next_nonempty(i + 1)
-                if not cs and following and (
-                    MARKDOWN_BOUNDARY_RE.match(following)
-                    or not _is_mermaid_continuation(following)
+                if (
+                    not cs
+                    and following
+                    and (
+                        MARKDOWN_BOUNDARY_RE.match(following)
+                        or not _is_mermaid_continuation(following)
+                    )
                 ):
                     i += 1
                     break
@@ -1684,17 +1810,20 @@ def repair_mermaid_fences(text: str) -> tuple[str, list[dict]]:
         i += 1
 
     if in_fence and fence_lang == "mermaid":
-        fixes.append(_make_fix(
-            "closed_unterminated_mermaid",
-            line=n,
-            after="```",
-        ))
+        fixes.append(
+            _make_fix(
+                "closed_unterminated_mermaid",
+                line=n,
+                after="```",
+            )
+        )
         out.append("```")
 
     return "\n".join(out), fixes
 
 
 # ─── Misc cleanup ──────────────────────────────────────────────────────
+
 
 def strip_body_frontmatter(text: str) -> tuple[str, list[dict]]:
     """Remove accidental YAML frontmatter from an LLM-generated body.
@@ -1709,7 +1838,7 @@ def strip_body_frontmatter(text: str) -> tuple[str, list[dict]]:
         return "", []
     text_stripped = text.strip()
     match = re.match(
-        r'^---\s*\n(.*?)\n---\s*(?:\n|$)',
+        r"^---\s*\n(.*?)\n---\s*(?:\n|$)",
         text_stripped,
         flags=re.DOTALL,
     )
@@ -1723,22 +1852,25 @@ def strip_body_frontmatter(text: str) -> tuple[str, list[dict]]:
     if not isinstance(parsed, dict):
         return text, []
     full_block = text_stripped[: match.end()]
-    cleaned = text_stripped[match.end():].lstrip()
-    return cleaned, [_make_fix(
-        "removed_body_frontmatter",
-        line=1,
-        before=full_block,
-    )]
+    cleaned = text_stripped[match.end() :].lstrip()
+    return cleaned, [
+        _make_fix(
+            "removed_body_frontmatter",
+            line=1,
+            before=full_block,
+        )
+    ]
 
 
 # ─── Markdown: Table formatting ──────────────────────────────────────────
 
 # Match table separator row: e.g. `|---|`, `|:--|--:|`, etc.
-_TABLE_SEP_RE = re.compile(r'^\|?[\s\-\:\.\|]+\|?$')
+_TABLE_SEP_RE = re.compile(r"^\|?[\s\-\:\.\|]+\|?$")
+
 
 def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
     """Fix common LLM markdown table errors.
-    
+
     1. Align separator column counts with the header.
     2. Align data row column counts with the header (append empty columns).
     3. Hide interspersed non-table text that breaks table rendering using HTML comments.
@@ -1749,21 +1881,21 @@ def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
     lines = text.splitlines()
     out = []
     fixes = []
-    
+
     in_table = False
     expected_pipes = 0
-    
+
     i = 0
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
-        
+
         # If we are not in a table
         if not in_table:
             if stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2:
                 # Lookahead to see if next line is a separator
                 if i + 1 < len(lines):
-                    next_stripped = lines[i+1].strip()
+                    next_stripped = lines[i + 1].strip()
                     # A separator a previous pass hid in a comment leaves the
                     # table headerless and unrenderable (and the data rows below
                     # never register as a table). Unwrap and restore a clean
@@ -1774,13 +1906,15 @@ def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
                     if sep != next_stripped and sep.startswith("|") and _TABLE_SEP_RE.match(sep):
                         cols = stripped.count("|") - 1
                         clean_sep = "|" + "|".join([" --- " for _ in range(cols)]) + "|"
-                        fixes.append(_make_fix(
-                            "restored_hidden_table_separator",
-                            line=i+2,
-                            before=lines[i+1],
-                            after=clean_sep,
-                        ))
-                        lines[i+1] = clean_sep
+                        fixes.append(
+                            _make_fix(
+                                "restored_hidden_table_separator",
+                                line=i + 2,
+                                before=lines[i + 1],
+                                after=clean_sep,
+                            )
+                        )
+                        lines[i + 1] = clean_sep
                         next_stripped = clean_sep
                     if next_stripped.startswith("|") and _TABLE_SEP_RE.match(next_stripped):
                         in_table = True
@@ -1791,22 +1925,24 @@ def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
             out.append(line)
             i += 1
             continue
-            
+
         # If we ARE in a table
         if stripped.startswith("|") and stripped.endswith("|"):
             pipes = stripped.count("|")
-            
+
             # Separator row
             if _TABLE_SEP_RE.match(stripped) and not any(c.isalnum() for c in stripped):
                 if pipes != expected_pipes:
                     cols = expected_pipes - 1
                     new_line = "|" + "|".join([" --- " for _ in range(cols)]) + "|"
-                    fixes.append(_make_fix(
-                        "repaired_table_separator_columns",
-                        line=i+1,
-                        before=line,
-                        after=new_line,
-                    ))
+                    fixes.append(
+                        _make_fix(
+                            "repaired_table_separator_columns",
+                            line=i + 1,
+                            before=line,
+                            after=new_line,
+                        )
+                    )
                     out.append(new_line)
                 else:
                     out.append(line)
@@ -1815,12 +1951,14 @@ def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
                 if pipes < expected_pipes:
                     diff = expected_pipes - pipes
                     new_line = line.rstrip() + "".join(["   |" for _ in range(diff)])
-                    fixes.append(_make_fix(
-                        "repaired_table_data_columns",
-                        line=i+1,
-                        before=line,
-                        after=new_line,
-                    ))
+                    fixes.append(
+                        _make_fix(
+                            "repaired_table_data_columns",
+                            line=i + 1,
+                            before=line,
+                            after=new_line,
+                        )
+                    )
                     out.append(new_line)
                 else:
                     out.append(line)
@@ -1830,7 +1968,7 @@ def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
             out.append(line)
             i += 1
         else:
-            indent = line[:len(line) - len(line.lstrip())]
+            indent = line[: len(line) - len(line.lstrip())]
 
             # Unwrap any HTML-comment layers a previous quality pass may have
             # added, so re-running this check never nests them
@@ -1846,13 +1984,16 @@ def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
             if inner.endswith("|") and inner.count("|") >= 2:
                 repaired = f"{indent}{inner if inner.startswith('|') else '| ' + inner}"
                 if repaired != line:
-                    fixes.append(_make_fix(
-                        "restored_hidden_table_row" if was_comment
-                        else "repaired_table_row_missing_leading_pipe",
-                        line=i+1,
-                        before=line,
-                        after=repaired,
-                    ))
+                    fixes.append(
+                        _make_fix(
+                            "restored_hidden_table_row"
+                            if was_comment
+                            else "repaired_table_row_missing_leading_pipe",
+                            line=i + 1,
+                            before=line,
+                            after=repaired,
+                        )
+                    )
                 lines[i] = repaired
                 continue  # re-process the now well-formed row; do not advance i
 
@@ -1861,19 +2002,21 @@ def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
             if was_comment:
                 collapsed = f"{indent}<!-- {inner} -->"
                 if collapsed != line:
-                    fixes.append(_make_fix(
-                        "collapsed_nested_table_comment",
-                        line=i+1,
-                        before=line,
-                        after=collapsed,
-                    ))
+                    fixes.append(
+                        _make_fix(
+                            "collapsed_nested_table_comment",
+                            line=i + 1,
+                            before=line,
+                            after=collapsed,
+                        )
+                    )
                 out.append(collapsed)
                 i += 1
                 continue
 
             # Interspersed text detection
             table_continues = False
-            for look in range(i+1, min(i+6, len(lines))):
+            for look in range(i + 1, min(i + 6, len(lines))):
                 if lines[look].strip().startswith("|") and lines[look].strip().endswith("|"):
                     table_continues = True
                     break
@@ -1881,12 +2024,14 @@ def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
                     break
 
             if table_continues:
-                fixes.append(_make_fix(
-                    "hidden_interspersed_table_text",
-                    line=i+1,
-                    before=line,
-                    after=f"<!-- {line} -->",
-                ))
+                fixes.append(
+                    _make_fix(
+                        "hidden_interspersed_table_text",
+                        line=i + 1,
+                        before=line,
+                        after=f"<!-- {line} -->",
+                    )
+                )
                 # To prevent breaking blockquotes or lists inside HTML comments, we just wrap it simply
                 out.append(f"<!-- {line} -->")
                 i += 1
@@ -1900,11 +2045,12 @@ def repair_markdown_tables(text: str) -> tuple[str, list[dict]]:
 
 # ─── Markdown: bold spacing ────────────────────────────────────────────
 
-_BOLD_BLOCK_RE = re.compile(r'(?<!\*)\*\*(.+?)\*\*(?!\*)')
+_BOLD_BLOCK_RE = re.compile(r"(?<!\*)\*\*(.+?)\*\*(?!\*)")
+
 
 def repair_markdown_bold_spacing(text: str) -> tuple[str, list[dict]]:
     """Ensure spaces around bold **text** for Obsidian compatibility.
-    
+
     Obsidian (and some standard markdown parsers) requires spaces around
     `**` when mixed with CJK characters to reliably parse bold blocks.
     This turns `強調**XYZ**的` into `強調 **XYZ** 的`.
@@ -1915,51 +2061,76 @@ def repair_markdown_bold_spacing(text: str) -> tuple[str, list[dict]]:
     fixes: list[dict] = []
     new_text = []
     last_end = 0
-    
+
     for match in _BOLD_BLOCK_RE.finditer(text):
         start = match.start()
         end = match.end()
         inner = match.group(1)
-        
+
         if not inner.strip():
             continue
-            
-        char_before = text[start-1] if start > 0 else " "
+
+        char_before = text[start - 1] if start > 0 else " "
         char_after = text[end] if end < len(text) else " "
-        
+
         needs_space_before = char_before not in (" ", "\n", "\t", "*", "「", "『", "(", "[")
-        needs_space_after = char_after not in (" ", "\n", "\t", "*", "」", "』", ")", "]", "，", "。", "！", "？", ",", ".", "!", "?", "：", ":", "；", ";")
-        
+        needs_space_after = char_after not in (
+            " ",
+            "\n",
+            "\t",
+            "*",
+            "」",
+            "』",
+            ")",
+            "]",
+            "，",
+            "。",
+            "！",
+            "？",
+            ",",
+            ".",
+            "!",
+            "?",
+            "：",
+            ":",
+            "；",
+            ";",
+        )
+
         if not needs_space_before and not needs_space_after:
             continue
-            
+
         res = ""
         if needs_space_before:
             res += " "
         res += f"**{inner}**"
         if needs_space_after:
             res += " "
-            
+
         new_text.append(text[last_end:start])
         new_text.append(res)
-        
+
         line_no = text.count("\n", 0, start) + 1
-        fixes.append(_make_fix(
-            "repaired_bold_spacing",
-            line=line_no,
-            before=match.group(0),
-            after=res,
-        ))
+        fixes.append(
+            _make_fix(
+                "repaired_bold_spacing",
+                line=line_no,
+                before=match.group(0),
+                after=res,
+            )
+        )
         last_end = end
-        
+
     if not fixes:
         return text, []
-        
+
     new_text.append(text[last_end:])
     return "".join(new_text), fixes
 
 
-def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> tuple[str, list[dict]]:
+def run_markdown_quality_checks(
+    text: str, strip_frontmatter: bool = False
+) -> tuple[str, list[dict]]:
     """Run deterministic cleanup passes. Idempotent.
 
     Returns `(cleaned_text, fixes)`. Each fix is a structured dict:
@@ -1975,46 +2146,47 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
     pipeline: list = []
     if strip_frontmatter:
         pipeline.append(strip_body_frontmatter)
-    pipeline.extend([
-        repair_latex_carriage_returns,
-        repair_latex_escape_collisions,
-        repair_unclosed_latex_display,
-        repair_mermaid_fences,
-        repair_mermaid_subgraph_keyword,
-        repair_mermaid_quoted_node_ids,
-        repair_mermaid_overquoted_node,
-        repair_mermaid_double_quotes,
-        repair_mermaid_quoted_endpoint_labels,
-        repair_mermaid_label_quotes,
-        repair_mermaid_mindmap_labels,
-        repair_mermaid_mindmap_brackets,
-        repair_mermaid_quadrant_points,
-        repair_mermaid_classdiagram,
-        repair_mermaid_latex_labels,
-        repair_markdown_tables,
-        repair_markdown_bold_spacing,
-    ])
+    pipeline.extend(
+        [
+            repair_latex_carriage_returns,
+            repair_latex_escape_collisions,
+            repair_unclosed_latex_display,
+            repair_mermaid_fences,
+            repair_mermaid_subgraph_keyword,
+            repair_mermaid_quoted_node_ids,
+            repair_mermaid_overquoted_node,
+            repair_mermaid_double_quotes,
+            repair_mermaid_quoted_endpoint_labels,
+            repair_mermaid_label_quotes,
+            repair_mermaid_mindmap_labels,
+            repair_mermaid_mindmap_brackets,
+            repair_mermaid_quadrant_points,
+            repair_mermaid_classdiagram,
+            repair_mermaid_latex_labels,
+            repair_markdown_tables,
+            repair_markdown_bold_spacing,
+        ]
+    )
 
     for step in pipeline:
         cleaned, applied = step(cleaned)
         fixes.extend(applied)
 
     # Line-level trailing whitespace: count affected lines for traceability.
-    affected_lines = [
-        i + 1 for i, line in enumerate(cleaned.split("\n"))
-        if line != line.rstrip()
-    ]
+    affected_lines = [i + 1 for i, line in enumerate(cleaned.split("\n")) if line != line.rstrip()]
     if affected_lines:
         stripped = "\n".join(line.rstrip() for line in cleaned.split("\n"))
-        fixes.append(_make_fix(
-            "trailing_whitespace",
-            line=affected_lines[0],
-            before=f"{len(affected_lines)} line(s) affected",
-        ))
+        fixes.append(
+            _make_fix(
+                "trailing_whitespace",
+                line=affected_lines[0],
+                before=f"{len(affected_lines)} line(s) affected",
+            )
+        )
         cleaned = stripped
 
     # Collapse 3+ blank lines down to 2.
-    collapsed = re.sub(r'\n{3,}', '\n\n', cleaned)
+    collapsed = re.sub(r"\n{3,}", "\n\n", cleaned)
     if collapsed != cleaned:
         fixes.append(_make_fix("excessive_blank_lines"))
         cleaned = collapsed
@@ -2022,7 +2194,7 @@ def run_markdown_quality_checks(text: str, strip_frontmatter: bool = False) -> t
     return cleaned.strip(), fixes
 
 
-_OUTER_FENCE_RE = re.compile(r'^```(\w*)\n(.*?)\n```$', re.DOTALL | re.IGNORECASE)
+_OUTER_FENCE_RE = re.compile(r"^```(\w*)\n(.*?)\n```$", re.DOTALL | re.IGNORECASE)
 _CONTAINER_LANGS = frozenset({"", "markdown", "md", "txt", "text", "markdown-math"})
 
 
@@ -2042,99 +2214,11 @@ def clean_llm_response(text: str) -> str:
 
 # ─── JSON extraction ───────────────────────────────────────────────────
 
-_FENCED_JSON_RE = re.compile(r'```(?:json)?\s*\n(.*?)\n```', re.DOTALL | re.IGNORECASE)
-
-
-def _candidate_payloads(text: str) -> Iterable[str]:
-    """Yield candidate JSON payloads: fenced first (if present), then raw."""
-    fenced = _FENCED_JSON_RE.search(text)
-    if fenced:
-        yield fenced.group(1).strip()
-    yield text.strip()
-
-
-# A backslash that does NOT begin a valid JSON escape (`\" \\ \/ \b \f \n \r \t`
-# or `\uXXXX`). LLMs routinely emit LaTeX/math (`$\Delta \chi^2$`, `\mathcal`,
-# `\frac`) — and Windows paths — inside JSON string values, where `\D` / `\c`
-# are illegal escapes that make json.loads reject the WHOLE object. argument_map
-# on academic content was silently producing nothing for exactly this reason.
-_ILLEGAL_JSON_ESCAPE_RE = re.compile(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})')
-
-
-def _loads_lenient(candidate: str):
-    """json.loads, retried once with illegal backslash-escapes doubled.
-
-    Strict parse first (so valid JSON is never altered); only on failure do we
-    repair `\\X`→`\\\\X` for any X that isn't a legal escape and reparse. Returns
-    the parsed value or raises the original error."""
-    try:
-        return json.loads(candidate)
-    except Exception:
-        repaired = _ILLEGAL_JSON_ESCAPE_RE.sub(r'\\\\', candidate)
-        return json.loads(repaired)   # may raise — caller handles
-
-
-def extract_json_array(text: str) -> list:
-    """Extract a JSON array of dicts from LLM output."""
-    if not text:
-        return []
-    for candidate in _candidate_payloads(text):
-        try:
-            parsed = _loads_lenient(candidate)
-        except Exception:
-            parsed = None
-        if isinstance(parsed, list):
-            return [item for item in parsed if isinstance(item, dict)]
-        match = re.search(r'\[.*\]', candidate, re.DOTALL)
-        if match:
-            try:
-                parsed = _loads_lenient(match.group(0))
-            except Exception:
-                continue
-            if isinstance(parsed, list):
-                return [item for item in parsed if isinstance(item, dict)]
-    return []
-
-
-def extract_json_object(text: str) -> dict:
-    """Extract a JSON object from LLM output."""
-    if not text:
-        return {}
-    decoder = json.JSONDecoder()
-    for candidate in _candidate_payloads(text):
-        try:
-            parsed = _loads_lenient(candidate)
-        except Exception:
-            parsed = None
-        if isinstance(parsed, dict):
-            return parsed
-        # Embedded object: raw_decode from each `{`, strict first then with
-        # illegal backslash-escapes repaired (same LaTeX/path failure mode).
-        for variant in (candidate, _ILLEGAL_JSON_ESCAPE_RE.sub(r'\\\\', candidate)):
-            for match in re.finditer(r'\{', variant):
-                try:
-                    parsed, _ = decoder.raw_decode(variant[match.start():])
-                except Exception:
-                    continue
-                if isinstance(parsed, dict):
-                    return parsed
-    return {}
-
-
-_CODE_FENCE_RE = re.compile(r'^```(?:json)?\s*|\s*```$', re.IGNORECASE)
-
-
-def is_empty_json_literal(text: str, kind: str = "array") -> bool:
-    """True only when the WHOLE reply is a genuine empty JSON literal.
-
-    Distinguishes a real empty answer (the model emitted `[]` / `{}`, perhaps
-    fenced or padded) from a parse miss whose text merely *contains* `[]`/`{}`
-    as a substring (e.g. `{"items": []}`). Callers use this to decide whether
-    a re-roll is warranted: a substring check wrongly suppresses the retry and
-    masks parse failures (audit B1).
-    """
-    if not text:
-        return False
-    stripped = _CODE_FENCE_RE.sub("", text.strip()).strip()
-    stripped = re.sub(r"\s+", "", stripped)
-    return stripped == ("[]" if kind == "array" else "{}")
+# Moved to core/json_extract.py (P1). Re-exported here so existing
+# `from core.parser import extract_json_*` call sites keep working until the
+# P2a parser split retires this facade.
+from core.json_extract import (  # noqa: E402,F401
+    extract_json_array,
+    extract_json_object,
+    is_empty_json_literal,
+)
