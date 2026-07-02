@@ -346,7 +346,10 @@ class TestEndToEndIngestion:
         monkeypatch.setattr(
             ip_mod, "PROFILES_PENDING_DIR", tmp_path / "Scripture" / "Profiles" / "_pending"
         )
-        monkeypatch.setattr(ip_mod, "FROM_LLM_DIR", from_llm)
+        # FROM_LLM_DIR user (queue_new_profile) moved to profile_routing in P2d.
+        from services.ingest import profile_routing as pr_mod
+
+        monkeypatch.setattr(pr_mod, "FROM_LLM_DIR", from_llm)
 
         import core.vault_utils as vu_mod
 

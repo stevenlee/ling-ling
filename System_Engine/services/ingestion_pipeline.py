@@ -18,7 +18,6 @@ from pathlib import Path
 from core.config import (
     FACET_INDEX_ENABLED,
     FACET_MAX_PER_DOC,
-    FROM_LLM_DIR,
     INDEX_FILE,
     PAGES_DIR,
     PROFILES_DIR,
@@ -39,36 +38,21 @@ from core.markdown_doc import MarkdownDocument
 from core.ui import ui
 from core.utils import digest_value_to_text
 from core.vault_utils import update_wiki_index
+from services.ingest.critique_loop import SynthesisCritiqueLoop, parse_verdict
+from services.ingest.digest_format import PART_DIGEST_HEADER as _PART_DIGEST_HEADER
+from services.ingest.digest_format import format_digest_appendix as _format_digest_appendix
+from services.ingest.digest_format import format_one_digest as _format_one_digest_fn
+from services.ingest.part_state import PartState
+from services.ingest.profile_routing import ProfileRouter
 from services.profile_manager import ProfileManager
 from services.text_splitter import TextSplitter
 
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 _FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n?", re.DOTALL)
-_PART_DIGEST_HEADER = "## 🧩 Part Digest Appendix"
 # Auto-attached learning-artifact section (visual_router). Prefix shared by all
 # emitted sections so re-runs can strip and regenerate them idempotently.
 _ARTIFACT_HEADER = "## 🖼️ 學習輔助"
-_CRITIQUE_HEADER = "## 🔍 Quality Critique"
-# Verdicts come from Operations/critique.md ("keep, revise, or reject").
-# The model is allowed to use either English or zh-translated equivalents, and
-# often wraps the keyword in prose ("應修正 (revise)" — observed live on
-# gemma), so allow a short gap after the colon and take the first keyword on
-# the line. A negated revise ("不需修正") counts as keep.
-_VERDICT_RE = re.compile(
-    r"(?im)^\**\s*Overall\s+Verdict\**\s*[:：][^\n]{0,40}?(keep|revise|reject|保留|修訂|修正|重做|拒絕)",
-)
-_VERDICT_NEGATION_RE = re.compile(r"(不需|不必|無需|无需|毋須|毋须)\s*$")
-_VERDICT_NORMALISE = {
-    "keep": "keep",
-    "保留": "keep",
-    "revise": "revise",
-    "修訂": "revise",
-    "修正": "revise",
-    "reject": "reject",
-    "重做": "reject",
-    "拒絕": "reject",
-}
 
 
 class IngestionPipeline:
@@ -203,105 +187,8 @@ class IngestionPipeline:
     # ── Profile routing ──────────────────────────────────────────────
 
     def _resolve_routing(self, meta: dict, content: str, source_filepath: Path) -> dict:
-        """Resolve synthesis persona/template via the profile registry.
-
-        Resolution layers, highest priority first:
-          1. Explicit frontmatter overrides (`synthesis_persona`,
-             `synthesis_template`, or a `profile` name).
-          2. A registered profile matching `document_type`/`type`, else the
-             LLM's closed-choice pick among registered profiles.
-          3. The `default` profile; Scripture settings as the last resort.
-
-        Unknown document kinds trigger a pending-review bundle (never
-        activated silently) and fall back to layer 3 for this run.
-        """
-        synthesis_persona = meta.get("synthesis_persona")
-        synthesis_template = meta.get("synthesis_template")
-
-        pm = self.load_profiles()
-        profile = None
-        layer = "frontmatter_override"
-        pending_queued = False
-        doc_type = meta.get("document_type") or meta.get("type")
-        doc_type = doc_type.lower().strip() if isinstance(doc_type, str) else None
-
-        if not (synthesis_persona and synthesis_template):
-            # Layer 1b: explicit profile name in frontmatter.
-            profile = pm.get(meta.get("profile")) or pm.get(doc_type)
-            layer = "frontmatter_profile"
-
-            # Layer 2: closed-choice LLM selection among registered profiles.
-            if profile is None:
-                content_prefix = self._classification_prefix(content)
-                choice = self.llm.select_profile(
-                    source_filepath.name, content_prefix, pm.selection_options()
-                )
-                if isinstance(choice, str) and choice != "none":
-                    profile = pm.get(choice)
-                    layer = "llm_selection"
-
-                # No fit: draft a new bundle for review, then fall through to
-                # the default profile for this run (quality over immediacy).
-                if profile is None:
-                    pending_queued = self._queue_new_profile(
-                        pm, doc_type, source_filepath, content_prefix
-                    )
-
-            # Layer 3: the default profile.
-            if profile is None:
-                profile = pm.get("default")
-                layer = "default_profile" if profile else "settings_fallback"
-            if profile is not None:
-                synthesis_persona = synthesis_persona or profile.persona
-                synthesis_template = synthesis_template or profile.template
-
-        doc_config = {
-            "ingest_persona": meta.get("ingest_persona") or "translator",
-            "ingest_template": meta.get("ingest_template") or "translation-rpt",
-            "synthesis_persona": synthesis_persona or settings.AGENT_ROLE or "none",
-            "synthesis_template": synthesis_template or settings.USE_TEMPLATE or "wiki-note",
-            "doc_type": doc_type or (profile.name if profile else "default"),
-            "profile": profile.name if profile else None,
-            "operations": list(profile.operations) if profile else [],
-        }
-        self._record_routing_decision(
-            source_filepath, doc_config, layer=layer, pending_queued=pending_queued
-        )
-        return doc_config
-
-    def _record_routing_decision(
-        self,
-        source_filepath: Path,
-        doc_config: dict,
-        *,
-        layer: str,
-        pending_queued: bool,
-    ) -> None:
-        """Persist the routing outcome as a `routing_decision` artifact.
-
-        Layers: frontmatter_override / frontmatter_profile / llm_selection /
-        default_profile / settings_fallback. The routing health report
-        aggregates these to surface fallback rates and unused profiles.
-        """
-        if not hasattr(self.llm, "trace_store"):
-            return
-        try:
-            self.llm.trace_store.record_artifact(
-                path=source_filepath,
-                artifact_type="routing_decision",
-                title=source_filepath.name,
-                metadata={
-                    "layer": layer,
-                    "profile": doc_config.get("profile"),
-                    "doc_type": doc_config.get("doc_type"),
-                    "synthesis_persona": doc_config.get("synthesis_persona"),
-                    "synthesis_template": doc_config.get("synthesis_template"),
-                    "fellback_to_default": layer in ("default_profile", "settings_fallback"),
-                    "pending_queued": pending_queued,
-                },
-            )
-        except Exception as e:
-            logging.debug(f"Routing decision trace write failed: {e}")
+        """Resolve synthesis persona/template (see services.ingest.profile_routing)."""
+        return ProfileRouter(self.llm).resolve(self.load_profiles(), meta, content, source_filepath)
 
     @staticmethod
     def _template_stamp(template_name: str | None) -> dict:
@@ -324,64 +211,6 @@ class IngestionPipeline:
         except Exception as e:
             logging.debug(f"Template stamp failed for {template_name}: {e}")
         return stamp
-
-    @staticmethod
-    def _classification_prefix(content: str) -> str:
-        """First 500 chars of the body, with any frontmatter stripped."""
-        clean_content = content
-        if content.startswith("---"):
-            match = _FRONTMATTER_RE.match(content)
-            if match:
-                clean_content = content[match.end() :]
-        return clean_content[:500]
-
-    def _queue_new_profile(
-        self,
-        pm: ProfileManager,
-        doc_type: str | None,
-        source_filepath: Path,
-        content_prefix: str,
-    ) -> bool:
-        """Draft persona/template/profile for an unrecognized category into
-        _pending/. Fail-soft: routing falls back to `default` regardless.
-        Returns True when a new bundle was queued."""
-        try:
-            category = doc_type or self.llm.classify_document(source_filepath.name, content_prefix)
-            if not isinstance(category, str):
-                return False
-            category = re.sub(r"[^a-z0-9\-]", "", category.lower().strip())
-            if not category or pm.get(category) or pm.has_pending(category):
-                return False
-
-            gen = self.llm.generate_persona_and_template(category)
-            if not isinstance(gen, dict) or "Mock" in type(gen).__name__:
-                return False
-            persona_name = gen.get("persona_name")
-            persona_content = gen.get("persona_content")
-            template_name = gen.get("template_name")
-            template_content = gen.get("template_content")
-            if not all(
-                isinstance(v, str) and v
-                for v in (persona_name, persona_content, template_name, template_content)
-            ):
-                return False
-
-            persona_name = re.sub(r"[^a-zA-Z0-9\-]", "", persona_name.replace(".md", ""))
-            template_name = re.sub(r"[^a-zA-Z0-9\-]", "", template_name.replace(".md", ""))
-            pm.queue_pending(
-                profile_name=category,
-                persona_name=persona_name,
-                persona_content=persona_content,
-                template_name=template_name,
-                template_content=template_content,
-                description=f"Auto-generated for {category}",
-                notify_dir=FROM_LLM_DIR,
-            )
-            ui.info(f"🧾 新類型「{category}」的 Profile 草稿已送審 (fromLingLing)")
-            return True
-        except Exception as e:
-            logging.warning(f"Profile draft generation failed: {e}")
-            return False
 
     def ingest_to_wiki(
         self,
@@ -580,13 +409,13 @@ class IngestionPipeline:
         ui.set_status(f"Stitching: {base_title}...")
         stitched_path = self._write_stitched_article(
             base_title,
-            part_state["part_paths"],
-            part_state["master_tags"],
+            part_state.part_paths,
+            part_state.master_tags,
             len(content),
-            part_state["total_output_chars"],
+            part_state.total_output_chars,
         )
         if stitched_path:
-            part_state["navigation_items"].append(
+            part_state.navigation_items.append(
                 f"- [[{base_title} (Stitched)]]: 忠實接合版，保留 Part notes 的主要內容"
             )
 
@@ -613,13 +442,8 @@ class IngestionPipeline:
         index_content: str,
         chunk_metas: list[dict] | None = None,
         doc_config: dict | None = None,
-    ) -> dict:
-        master_tags: list = []
-        pending_concepts = ""
-        part_digests: list = []
-        part_paths: list[Path] = []
-        navigation_items: list[str] = []
-        total_output_chars = 0
+    ) -> PartState:
+        state = PartState()
         total = len(chunks)
 
         for i, chunk in enumerate(chunks):
@@ -630,21 +454,21 @@ class IngestionPipeline:
             resumed = self._resume_part(part_path, chunk)
             if resumed is not None:
                 ui.set_status(f"Resuming: Part {i + 1}/{total} already distilled")
-                if not master_tags and resumed["tags"]:
-                    master_tags = resumed["tags"]
-                pending_concepts = resumed["pending_concepts"]
+                if not state.master_tags and resumed["tags"]:
+                    state.master_tags = resumed["tags"]
+                state.pending_concepts = resumed["pending_concepts"]
                 if resumed["part_digest"]:
-                    part_digests.append(resumed["part_digest"])
+                    state.part_digests.append(resumed["part_digest"])
                     nav = digest_value_to_text(resumed["part_digest"].get("thesis")) or ""
-                    navigation_items.append(f"- [[{base_title} (Part {i + 1})]]: {nav[:140]}")
-                part_paths.append(part_path)
+                    state.navigation_items.append(f"- [[{base_title} (Part {i + 1})]]: {nav[:140]}")
+                state.part_paths.append(part_path)
                 continue
 
             ui.set_status(f"Distilling Part {i + 1} of {total}...")
 
             context_hint = f"Part {i + 1}/{total}."
-            if i > 0 and pending_concepts:
-                context_hint += f" Previously you identified these pending concepts: {pending_concepts}. Please focus on them."
+            if i > 0 and state.pending_concepts:
+                context_hint += f" Previously you identified these pending concepts: {state.pending_concepts}. Please focus on them."
             if i < total - 1:
                 context_hint += " Since more parts follow, PLEASE include a 'pending_concepts' field in your YAML."
 
@@ -652,7 +476,7 @@ class IngestionPipeline:
             part_info = {
                 "current": i + 1,
                 "total": total,
-                "master_tags": master_tags,
+                "master_tags": state.master_tags,
                 "context_hint": context_hint,
                 "defer_rag": True,
                 "defer_index": True,
@@ -669,34 +493,34 @@ class IngestionPipeline:
             if not result:
                 continue
 
-            if not master_tags and result.get("tags"):
-                master_tags = result["tags"]
-            pending_concepts = result.get("pending_concepts", "")
+            if not state.master_tags and result.get("tags"):
+                state.master_tags = result["tags"]
+            state.pending_concepts = result.get("pending_concepts", "")
 
             part_content = result.get("content", "")
-            total_output_chars += len(part_content)
+            state.total_output_chars += len(part_content)
             digest = self.llm.generate_part_digest(
                 base_title,
                 i + 1,
                 total,
                 chunk,
                 part_content,
-                pending_concepts,
+                state.pending_concepts,
             )
-            part_digests.append(digest)
+            state.part_digests.append(digest)
             self._append_part_digest_to_note(
                 result,
                 digest,
                 section_path=part_info.get("section_path"),
                 part_content=part_content,
-                pending_concepts=pending_concepts,
+                pending_concepts=state.pending_concepts,
                 chunk=chunk,
             )
             self._index_digest_facets(
                 result.get("_page_path"),
                 result.get("_title"),
                 digest,
-                tags=master_tags,
+                tags=state.master_tags,
             )
 
             nav_summary = (
@@ -704,19 +528,12 @@ class IngestionPipeline:
             )
             if not nav_summary:
                 nav_summary = part_content.strip().split("\n")[0][:100]
-            navigation_items.append(f"- [[{base_title} (Part {i + 1})]]: {nav_summary[:140]}")
+            state.navigation_items.append(f"- [[{base_title} (Part {i + 1})]]: {nav_summary[:140]}")
 
             if result.get("_page_path"):
-                part_paths.append(Path(result["_page_path"]))
+                state.part_paths.append(Path(result["_page_path"]))
 
-        return {
-            "master_tags": master_tags,
-            "pending_concepts": pending_concepts,
-            "part_digests": part_digests,
-            "part_paths": part_paths,
-            "navigation_items": navigation_items,
-            "total_output_chars": total_output_chars,
-        }
+        return state
 
     def _write_synthesis(
         self,
@@ -725,7 +542,7 @@ class IngestionPipeline:
         content: str,
         chunks: list[str],
         source_spans: list[dict],
-        part_state: dict,
+        part_state: PartState,
         doc_config: dict | None = None,
     ) -> Path:
         from core.version import BUILD_DATE
@@ -743,9 +560,9 @@ class IngestionPipeline:
         critique_section = outcome["section"]
         critique_verdict = outcome["verdict"]
 
-        digest_appendix = self.format_digest_appendix(part_state["part_digests"])
-        master_tags = part_state["master_tags"]
-        nav_block = "\n".join(part_state["navigation_items"])
+        digest_appendix = self.format_digest_appendix(part_state.part_digests)
+        master_tags = part_state.master_tags
+        nav_block = "\n".join(part_state.navigation_items)
         syn_nav = (
             f"\n\n---\n## 🔗 原始溯源\n"
             f"*   📚 **[[{base_title} (Stitched)|查看忠實接合版 (Stitched)]]**\n"
@@ -772,7 +589,7 @@ class IngestionPipeline:
             f"## 🗺️ Knowledge Map\n(Tags: {tag_line})\n\n"
             f"## 📊 System Metadata\n"
             f"- **Original Content Size**: {len(content)} chars\n"
-            f"- **Generated Content Size**: {part_state['total_output_chars']} chars\n"
+            f"- **Generated Content Size**: {part_state.total_output_chars} chars\n"
             f"- **Total Parts**: {len(chunks)}\n"
             f"- **Model**: {self.llm.model}\n"
             f"- **Status**: #PerfectPitch\n"
@@ -788,7 +605,7 @@ class IngestionPipeline:
             "date_completed": datetime.now().strftime("%Y-%m-%d"),
             "model": self.llm.model,
             "input_chars": len(content),
-            "output_chars": part_state["total_output_chars"],
+            "output_chars": part_state.total_output_chars,
             "parts_count": len(chunks),
             "part_source_map": source_spans,
             "synthesis_pipeline": "structured-digest-v1",
@@ -824,72 +641,32 @@ class IngestionPipeline:
         self.rag.add_document(synthesis_file, base_title, final_content, tags=final_meta["tags"])
         return synthesis_file
 
-    # ── Critique post-step ───────────────────────────────────────────
-
-    _VERDICT_RANK = {"keep": 2, "revise": 1, "reject": 0, None: -1}
+    # ── Critique post-step (logic: services/ingest/critique_loop.py) ──
 
     def _synthesize_with_critique_retry(
         self,
         base_title: str,
-        part_state: dict,
+        part_state,
         syn_template,
         syn_persona,
     ) -> dict:
-        """Generate the synthesis, then act on the critique verdict.
-
-        An explicit revise/reject verdict triggers up to
-        SYNTHESIS_CRITIQUE_MAX_RETRIES regenerations with the critique
-        findings fed back. A retry is adopted only when its verdict ranks
-        strictly higher (keep > revise > reject > unparseable); an
-        unparseable first verdict never triggers a retry. Worst case adds
-        one synthesis + one critique call per retry (local model).
-
-        Returns {"text", "fixes", "section", "verdict", "attempts",
-        "verdict_history"}.
-        """
-
-        def attempt(feedback: str | None) -> dict:
-            # Pass critique_feedback only when set, so doubles of the LLM
-            # client that predate the kwarg keep working on the normal path.
-            extra = {"critique_feedback": feedback} if feedback is not None else {}
-            text = self.llm.generate_synthesis(
-                base_title,
-                part_state["part_digests"],
-                part_state["pending_concepts"],
-                template=syn_template,
-                persona=syn_persona,
-                **extra,
-            )
-            text, fixes = run_markdown_quality_checks(text, strip_frontmatter=True)
-            # Critique runs against the same digests the synthesis was
-            # generated from — so any drift away from the sources surfaces.
-            section, verdict = self._run_synthesis_critique(
-                base_title, text, part_state["part_digests"]
-            )
-            return {"text": text, "fixes": fixes, "section": section, "verdict": verdict}
-
-        current = attempt(None)
-        attempts = 1
-        history = [current["verdict"]]
-
-        retries_left = SYNTHESIS_CRITIQUE_MAX_RETRIES
-        while current["verdict"] in ("revise", "reject") and retries_left > 0:
-            retries_left -= 1
-            feedback = current["section"].removeprefix(_CRITIQUE_HEADER).strip()
-            retry = attempt(feedback)
-            attempts += 1
-            history.append(retry["verdict"])
-            if self._VERDICT_RANK[retry["verdict"]] > self._VERDICT_RANK[current["verdict"]]:
-                current = retry
-            else:
-                logging.info(
-                    f"Critique retry for {base_title} did not improve "
-                    f"({history[-2]} → {history[-1]}); keeping the original synthesis."
-                )
-
-        current["attempts"] = attempts
-        current["verdict_history"] = history
-        return current
+        """Delegate to SynthesisCritiqueLoop; accepts PartState or the legacy
+        dict shape (tests pass dicts). Flags are read HERE so monkeypatching
+        this module's SYNTHESIS_CRITIQUE_* keeps working."""
+        if isinstance(part_state, PartState):
+            digests, pending = part_state.part_digests, part_state.pending_concepts
+        else:
+            digests = part_state["part_digests"]
+            pending = part_state["pending_concepts"]
+        return SynthesisCritiqueLoop(self.llm).run(
+            base_title,
+            part_digests=digests,
+            pending_concepts=pending,
+            template=syn_template,
+            persona=syn_persona,
+            enabled=SYNTHESIS_CRITIQUE_ENABLED,
+            max_retries=SYNTHESIS_CRITIQUE_MAX_RETRIES,
+        )
 
     def _run_synthesis_critique(
         self,
@@ -897,45 +674,11 @@ class IngestionPipeline:
         synthesis_text: str,
         part_digests: list,
     ) -> tuple[str, str | None]:
-        """Critique the synthesis against its part digests. Fail-soft.
+        return SynthesisCritiqueLoop(self.llm).critique_once(
+            base_title, synthesis_text, part_digests, enabled=SYNTHESIS_CRITIQUE_ENABLED
+        )
 
-        Returns (body_section, verdict). `body_section` is the empty string
-        when critique is disabled or fails, so the caller can splice it in
-        unconditionally. `verdict` is one of "keep" / "revise" / "reject"
-        if parseable, else None.
-        """
-        if not SYNTHESIS_CRITIQUE_ENABLED:
-            return "", None
-        if not part_digests or not synthesis_text.strip():
-            return "", None
-
-        sources = "\n\n".join(self.llm.format_digest_for_prompt(d) for d in part_digests)
-        try:
-            critique = self.llm.critique_text(
-                candidate=synthesis_text,
-                sources=sources,
-                focus="Source-grounding, specificity preservation, and contradiction surfacing.",
-            )
-        except Exception as e:
-            logging.warning(f"Critique failed for {base_title}: {e}")
-            return "", None
-
-        if not critique or not critique.strip() or critique.startswith("Critique failed"):
-            return "", None
-
-        verdict = self._parse_verdict(critique)
-        section = f"{_CRITIQUE_HEADER}\n\n{critique.strip()}\n\n"
-        return section, verdict
-
-    @staticmethod
-    def _parse_verdict(critique: str) -> str | None:
-        m = _VERDICT_RE.search(critique)
-        if not m:
-            return None
-        verdict = _VERDICT_NORMALISE.get(m.group(1).strip().lower())
-        if verdict == "revise" and _VERDICT_NEGATION_RE.search(critique[: m.start(1)]):
-            return "keep"
-        return verdict
+    _parse_verdict = staticmethod(parse_verdict)
 
     @staticmethod
     def _dedupe_quality_fixes(fixes: list) -> list:
@@ -950,65 +693,10 @@ class IngestionPipeline:
             out.append(fix)
         return out
 
-    # ── Digest formatting ────────────────────────────────────────────
+    # ── Digest formatting (logic: services/ingest/digest_format.py) ──
 
-    def format_digest_appendix(self, part_digests: list) -> str:
-        if not part_digests:
-            return ""
-
-        lines = [
-            _PART_DIGEST_HEADER,
-            "",
-            "> 每個 Part 的結構化摘要。這是 Ling Ling 進行總合成前的中間理解，可用來檢查 final synthesis 是否有根據。",
-            "",
-        ]
-
-        for index, digest in enumerate(part_digests, 1):
-            lines.extend(self._format_one_digest(index, digest))
-
-        return "\n".join(lines).strip()
-
-    @staticmethod
-    def _format_one_digest(index: int, digest) -> list[str]:
-        if isinstance(digest, str):
-            return [f"### Part {index}", "", digest.strip(), ""]
-        if not isinstance(digest, dict):
-            return [f"### Part {index}", "", str(digest or "(empty digest)"), ""]
-
-        def clean_list(values):
-            if not values:
-                return []
-            if isinstance(values, str):
-                values = [values]
-            return [t for v in values if (t := digest_value_to_text(v))]
-
-        def bullet_block(label: str, values) -> list[str]:
-            items = clean_list(values)
-            if not items:
-                return []
-            block = [f"- **{label}**:"]
-            block.extend(f"  - {item}" for item in items)
-            return block
-
-        part_number = digest.get("part", index)
-        title = digest.get("title") or f"Part {part_number}"
-        out = [f"### Part {part_number}: {title}", ""]
-
-        thesis = digest_value_to_text(digest.get("thesis", ""))
-        if thesis:
-            out.append(f"- **Thesis**: {thesis}")
-
-        out.extend(bullet_block("Key Points", digest.get("key_points", [])))
-        out.extend(bullet_block("Evidence", digest.get("evidence", [])))
-        out.extend(bullet_block("Terms", digest.get("terms", [])))
-        out.extend(bullet_block("Open Questions", digest.get("open_questions", [])))
-
-        handoff = digest_value_to_text(digest.get("handoff", ""))
-        if handoff:
-            out.append(f"- **Handoff**: {handoff}")
-
-        out.append("")
-        return out
+    format_digest_appendix = staticmethod(_format_digest_appendix)
+    _format_one_digest = staticmethod(_format_one_digest_fn)
 
     @staticmethod
     def _chunk_fingerprint(chunk: str) -> str:

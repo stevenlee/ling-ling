@@ -134,7 +134,6 @@ module = [
     "services.cortex_decay",
     "services.cortex_store",
     "services.embedding_cache",
-    "services.ingestion_pipeline",
     "services.insight_signals",
     "services.learning_artifacts",
     "services.media_processor",

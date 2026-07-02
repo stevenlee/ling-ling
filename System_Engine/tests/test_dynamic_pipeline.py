@@ -125,7 +125,9 @@ def _setup_vault(monkeypatch, tmp_path, profiles: dict[str, tuple[str, str]] | N
     monkeypatch.setattr(
         "services.ingestion_pipeline.PROFILES_PENDING_DIR", profiles_dir / "_pending"
     )
-    monkeypatch.setattr("services.ingestion_pipeline.FROM_LLM_DIR", from_llm)
+    # queue_new_profile (the only FROM_LLM_DIR user here) moved to the
+    # routing unit in P2d — the pipeline module no longer has that name.
+    monkeypatch.setattr("services.ingest.profile_routing.FROM_LLM_DIR", from_llm)
     monkeypatch.setattr("services.ingestion_pipeline.update_wiki_index", MagicMock())
     monkeypatch.setattr("services.ingestion_pipeline.PAGES_DIR", tmp_path / "pages")
     monkeypatch.setattr("services.ingestion_pipeline.INDEX_FILE", tmp_path / "index.md")
