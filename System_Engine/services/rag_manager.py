@@ -1,11 +1,9 @@
 import os
+from typing import Any
 import hashlib
 from pathlib import Path
 import chromadb
-from chromadb.utils import embedding_functions
 import logging
-import time
-from functools import wraps
 from datetime import datetime
 
 from core.config import (
@@ -22,174 +20,43 @@ from core.config import (
     CROSS_LINGUAL_ENABLED,
     CROSS_LINGUAL_TARGET_LANGS,
     WIKI_VAULT_DIR,
-    USE_THOUGHTFUL_SPLITTER
+    USE_THOUGHTFUL_SPLITTER,
 )
 from core.tag_manager import TagManager
-from services.embedding_cache import CachedEmbeddingFunction
-from services.bm25_index import BM25Index, rrf_merge
+from services.bm25_index import BM25Index
+from services.rag import retrieval
+from services.rag.chroma_store import (
+    build_where_clause,
+    check_metadata_mismatch,
+    ensure_collection,
+    retry_on_db_lock,
+    sanitize_tag_key,
+)
+from services.rag.chunk_meta import ChunkMetadata
+from services.rag.embedding import (  # noqa: F401  (re-exported: tests/maintenance import these)
+    GeminiEmbeddingFunction,
+    OllamaEmbeddingFunction,
+    build_embedding_function,
+    get_effective_model_name,
+)
 
 OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "http://localhost:11434/v1")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 
-def _vec_has_nan(vec) -> bool:
-    """True if any element is NaN (NaN != itself). Guards against embedding
-    backends that emit NaN for pathological inputs."""
-    return any(x != x for x in vec)
-
-# Decorator to handle temporary database locks in SQLite
-def retry_on_db_lock(retries=3, delay=1):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            last_err = None
-            for i in range(retries):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    if "database is locked" in str(e).lower() or "timeout" in str(e).lower():
-                        logging.warning(f"Database locked, retrying {i+1}/{retries}...")
-                        time.sleep(delay * (i + 1))
-                        last_err = e
-                    else:
-                        raise e
-            raise last_err
-        return wrapper
-    return decorator
-
-
-def get_effective_model_name(provider: str, model: str | None) -> str:
-    if provider == "local":
-        return "all-MiniLM-L6-v2"
-    if provider == "ollama":
-        return model or "nomic-embed-text"
-    if provider == "gemini":
-        return model or "text-embedding-004"
-    return model or "unknown"
-
-
-class GeminiEmbeddingFunction(chromadb.EmbeddingFunction):
-    def __init__(self, api_key: str, model_name: str = "text-embedding-004"):
-        from google import genai
-        self.client = genai.Client(api_key=api_key)
-        self.model_name = model_name
-
-    def __call__(self, input: list[str]) -> list[list[float]]:
-        response = self.client.models.embed_content(
-            model=self.model_name,
-            contents=input,
-        )
-        return [emb.values for emb in response.embeddings]
-
-    def embed_query(self, input: list[str]) -> list[list[float]]:
-        return self(input)
-
-    def name(self) -> str:
-        return "GeminiEmbeddingFunction"
-
-
-class OllamaEmbeddingFunction(chromadb.EmbeddingFunction):
-    def __init__(self, api_base: str, model_name: str = "nomic-embed-text", max_chars: int = 1200):
-        self.api_url = f"{api_base.rstrip('/')}/api/embed"
-        self.model_name = model_name
-        # Per-input char cap to avoid Ollama context-length 400s. Sized to the
-        # model: nomic's context is short (~1200), bge-m3 holds 8192 tokens so
-        # it gets a far larger cap. Too small a cap silently embeds only the
-        # head of each chunk (the bug that crippled vector retrieval). 0 = none.
-        self.max_chars = max_chars
-
-    def _embed(self, batch: list[str]) -> list[list[float]] | None:
-        """POST one batch. Returns embeddings, or None on an HTTP error (e.g.
-        Ollama's 500 ``json: unsupported value: NaN`` — bge-m3 occasionally
-        emits a NaN embedding for a specific input). Raises only on transport
-        errors, so the caller's transient-retry path still applies."""
-        import requests
-        resp = requests.post(
-            self.api_url,
-            json={"model": self.model_name, "input": batch},
-            timeout=60,
-        )
-        if resp.status_code != 200:
-            # Recoverable upstream: __call__ falls back to per-item embedding and
-            # _embed_resilient substitutes a placeholder for the bad input. Log at
-            # debug so a handled NaN-500 doesn't masquerade as an error; a genuine
-            # outage still surfaces via _embed_resilient's "all inputs failed" raise.
-            logging.debug(f"Ollama embedding HTTP {resp.status_code}: {resp.text[:200]}")
-            return None
-        return resp.json()["embeddings"]
-
-    def __call__(self, input: list[str]) -> list[list[float]]:
-        safe_input = [
-            (text[:self.max_chars] if self.max_chars and self.max_chars > 0 else text)
-            for text in input
-        ]
-        try:
-            embs = self._embed(safe_input)
-        except Exception as e:
-            logging.error(f"Ollama embedding failed for model {self.model_name}: {e}")
-            raise
-        if (embs is not None and len(embs) == len(safe_input)
-                and not any(_vec_has_nan(e) for e in embs)):
-            return embs
-        # bge-m3 intermittently emits NaN for one specific input, and Ollama
-        # then 500s the ENTIRE batch — silently losing a document's whole facet
-        # / chunk set. Isolate per-item so one bad input can't drop the rest.
-        logging.warning(
-            f"Ollama embedding: a batch of {len(safe_input)} hit a NaN/error; "
-            f"isolating per-item (model {self.model_name})."
-        )
-        return self._embed_resilient(safe_input)
-
-    def _embed_resilient(self, safe_input: list[str]) -> list[list[float]]:
-        out: list[list[float] | None] = [None] * len(safe_input)
-        dim: int | None = None
-        bad: list[int] = []
-        for i, text in enumerate(safe_input):
-            try:
-                e = self._embed([text])
-            except Exception:
-                e = None
-            if e and len(e) == 1 and not _vec_has_nan(e[0]):
-                out[i] = e[0]
-                dim = dim or len(e[0])
-            else:
-                bad.append(i)
-        if bad and len(bad) == len(safe_input):
-            # Every item failed on its own — this is an outage, not an
-            # input-specific NaN. Don't mask it with placeholders; raise so the
-            # caller's retry / skip-and-log path handles it honestly.
-            raise RuntimeError(
-                f"Ollama embedding failed for all {len(safe_input)} inputs (model {self.model_name})"
-            )
-        for i in bad:
-            logging.warning(
-                "Ollama embedding produced NaN/error for one input; substituted a "
-                f"placeholder vector so the batch still indexes. text={safe_input[i][:100]!r}"
-            )
-            placeholder = [0.0] * (dim or 0)
-            if placeholder:
-                placeholder[0] = 1.0   # unit vector: valid cosine, avoids zero-norm NaN
-            out[i] = placeholder
-        return out  # type: ignore[return-value]
-
-    def embed_query(self, input: list[str]) -> list[list[float]]:
-        return self(input)
-
-    def name(self) -> str:
-        return "OllamaEmbeddingFunction"
-
-
 class RAGManager:
-    def __init__(self, db_path: str = None, skip_config_check: bool = False):
+    def __init__(self, db_path: str | None = None, skip_config_check: bool = False):
         from core.config import DATABASE_DIR
+
         self.db_dir = (DATABASE_DIR / db_path) if db_path else DATABASE_DIR
         self.db_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Initialize persistent client
         self.client = chromadb.PersistentClient(path=str(self.db_dir))
 
         # Initialize trace store
         from services.trace_store import TraceStore
+
         self.trace_store = TraceStore()
 
         # Optional cross-lingual query translator, injected post-construction
@@ -197,98 +64,37 @@ class RAGManager:
         # e.g. LLMClient.translate_query. Wired in main.py / the bench harness.
         self.translator = None
 
-        # Initialize embedding function based on configuration
-        if EMBEDDING_PROVIDER == "gemini":
-            if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
-                raise ValueError("GEMINI_API_KEY is not configured but gemini embedding provider is selected.")
-            self.ef = GeminiEmbeddingFunction(api_key=GEMINI_API_KEY, model_name=EMBEDDING_MODEL or "text-embedding-004")
-        elif EMBEDDING_PROVIDER == "ollama":
-            api_base = OLLAMA_API_BASE
-            if api_base.endswith("/v1"):
-                api_base = api_base[:-3]
-            ollama_model = EMBEDDING_MODEL or "nomic-embed-text"
-            # Auto-size the truncation cap to the model when not set explicitly:
-            # nomic's short context needs ~1200; long-context models (bge-m3,
-            # 8192 tokens) get a generous cap so chunks aren't head-truncated.
-            cap = EMBEDDING_MAX_CHARS
-            if cap <= 0:
-                # nomic: short context (~1200 safe). bge-m3 & other long-context
-                # models: 8000 covers the corpus (p90≈5862, CHUNK_SIZE=5000) and
-                # sits within bge-m3's 8192-token window — verified no 400s.
-                cap = 1200 if "nomic" in ollama_model.lower() else 8000
-            self.ef = OllamaEmbeddingFunction(
-                api_base=api_base, model_name=ollama_model, max_chars=cap
-            )
-        else:
-            self.ef = embedding_functions.DefaultEmbeddingFunction()
+        # Embedding function: provider dispatch + cache wrap live in
+        # services/rag/embedding.py (P2e).
+        self.ef = build_embedding_function(
+            provider=EMBEDDING_PROVIDER,
+            model=EMBEDDING_MODEL,
+            ollama_api_base=OLLAMA_API_BASE,
+            gemini_api_key=GEMINI_API_KEY,
+            max_chars=EMBEDDING_MAX_CHARS,
+            cache_enabled=EMBEDDING_CACHE_ENABLED,
+            cache_db_path=self.db_dir / "embedding_cache.sqlite",
+        )
 
-        # Wrap with persistent cache so re-embedding the same text (after
-        # wipe, provider swap, or partial reindex) is a SQLite lookup
-        # rather than a fresh model call. Disable via EMBEDDING_CACHE_ENABLED=false.
-        if EMBEDDING_CACHE_ENABLED:
-            self.ef = CachedEmbeddingFunction(
-                inner=self.ef,
-                model_name=get_effective_model_name(EMBEDDING_PROVIDER, EMBEDDING_MODEL),
-                db_path=self.db_dir / "embedding_cache.sqlite",
-            )
-
-        # Collection for wiki pages
-        try:
-            if skip_config_check:
-                try:
-                    self.collection = self.client.get_collection(
-                        name="wiki_pages",
-                        embedding_function=self.ef,
-                    )
-                except Exception:
-                    self.collection = self.client.create_collection(
-                        name="wiki_pages",
-                        embedding_function=self.ef
-                    )
-            else:
-                self.collection = self.client.get_or_create_collection(
-                    name="wiki_pages",
-                    embedding_function=self.ef
-                )
-        except ValueError as e:
-            if "embedding function" in str(e).lower() or "conflict" in str(e).lower():
-                curr_provider = EMBEDDING_PROVIDER
-                curr_model = get_effective_model_name(curr_provider, EMBEDDING_MODEL)
-                try:
-                    old_coll = self.client.get_collection(name="wiki_pages")
-                    db_metadata = old_coll.metadata
-                    if not db_metadata or "embedding_provider" not in db_metadata:
-                        db_provider = "local"
-                        db_model = "all-MiniLM-L6-v2"
-                        db_dim = 384
-                    else:
-                        db_provider = db_metadata.get("embedding_provider")
-                        db_model = db_metadata.get("embedding_model")
-                        db_dim = int(db_metadata.get("embedding_dimension") or 0)
-                except Exception:
-                    db_provider, db_model, db_dim = "unknown", "unknown", "unknown"
-                
-                error_msg = (
-                    f"Embedding configuration mismatch detected!\n"
-                    f"Database collection has: provider={db_provider}, model={db_model}, dimension={db_dim}\n"
-                    f"Current config expects: provider={curr_provider}, model={curr_model}\n"
-                    f"Please wipe the database and perform a full re-index to apply changes:\n"
-                    f"run 'python System_Engine/maintenance/init_rag.py --wipe'"
-                )
-                logging.critical(error_msg)
-                raise ValueError(error_msg) from e
-            else:
-                raise e
+        # Collection for wiki pages (creation + mismatch messaging:
+        # services/rag/chroma_store.py).
+        self.collection = ensure_collection(
+            self.client,
+            self.ef,
+            provider=EMBEDDING_PROVIDER,
+            model=EMBEDDING_MODEL,
+            skip_config_check=skip_config_check,
+        )
 
         # Initialize appropriate text splitter
+        self.splitter: Any
         if USE_THOUGHTFUL_SPLITTER:
             from services.thoughtful_splitter import ThoughtfulSplitter
-            self.splitter = ThoughtfulSplitter(
-                default_use_llm=False,
-                default_emit_summary=False
-            )
+
+            self.splitter = ThoughtfulSplitter(default_use_llm=False, default_emit_summary=False)
         else:
             from services.text_splitter import TextSplitter
+
             self.splitter = TextSplitter()
 
         # Lazy-loaded cross-encoder; first query with rerank=True triggers
@@ -308,11 +114,10 @@ class RAGManager:
         if self._reranker is None:
             try:
                 from services.reranker import CrossEncoderReranker
+
                 self._reranker = CrossEncoderReranker(RERANKER_MODEL)
             except ImportError as e:
-                logging.warning(
-                    f"Reranker disabled: sentence-transformers not installed ({e})"
-                )
+                logging.warning(f"Reranker disabled: sentence-transformers not installed ({e})")
                 self._reranker = False
                 return None
             except Exception as e:
@@ -322,65 +127,9 @@ class RAGManager:
         return self._reranker
 
     def _check_metadata_mismatch(self):
-        """Validate the persisted embedding config matches the current one.
-
-        We avoid probing the embedding model on every startup — provider and
-        model name (recorded in collection metadata) are authoritative. The
-        dimension probe only runs when we genuinely need it: an empty
-        collection that needs its metadata initialised. That makes startup
-        a no-op for steady-state Gemini/Ollama setups (no wasted API call).
-        """
-        curr_provider = EMBEDDING_PROVIDER
-        curr_model = get_effective_model_name(curr_provider, EMBEDDING_MODEL)
-        db_metadata = self.collection.metadata or {}
-
-        has_complete_meta = all(
-            key in db_metadata
-            for key in ("embedding_provider", "embedding_model", "embedding_dimension")
+        check_metadata_mismatch(
+            self.collection, self.ef, provider=EMBEDDING_PROVIDER, model=EMBEDDING_MODEL
         )
-        if (
-            has_complete_meta
-            and db_metadata.get("embedding_provider") == curr_provider
-            and db_metadata.get("embedding_model") == curr_model
-        ):
-            return
-
-        if self.collection.count() == 0:
-            try:
-                curr_dim = len(self.ef(["test"])[0])
-            except Exception as e:
-                logging.warning(f"Could not automatically detect embedding dimension: {e}")
-                curr_dim = 768 if curr_provider in ("ollama", "gemini") else 384
-            new_meta = {
-                **db_metadata,
-                "embedding_provider": curr_provider,
-                "embedding_model": curr_model,
-                "embedding_dimension": curr_dim,
-            }
-            self.collection.modify(metadata=new_meta)
-            return
-
-        if not db_metadata or "embedding_provider" not in db_metadata:
-            db_provider = "local"
-            db_model = "all-MiniLM-L6-v2"
-            db_dim = 384
-        else:
-            db_provider = db_metadata.get("embedding_provider")
-            db_model = db_metadata.get("embedding_model")
-            db_dim = int(db_metadata.get("embedding_dimension") or 0)
-
-        if db_provider == curr_provider and db_model == curr_model:
-            return
-
-        error_msg = (
-            f"Embedding configuration mismatch detected!\n"
-            f"Database collection has: provider={db_provider}, model={db_model}, dimension={db_dim}\n"
-            f"Current config expects: provider={curr_provider}, model={curr_model}\n"
-            f"Please wipe the database and perform a full re-index to apply changes:\n"
-            f"run 'python System_Engine/maintenance/init_rag.py --wipe'"
-        )
-        logging.critical(error_msg)
-        raise ValueError(error_msg)
 
     @staticmethod
     def _get_doc_id(filepath: Path) -> str:
@@ -393,51 +142,21 @@ class RAGManager:
                 rel_path = Path(filepath).relative_to(WIKI_VAULT_DIR)
             except Exception:
                 rel_path = Path(filepath)
-        
+
         posix_path = str(rel_path).replace("\\", "/")
         return hashlib.sha256(posix_path.encode("utf-8")).hexdigest()
 
-    @staticmethod
-    def _sanitize_tag_key(tag_name: str) -> str:
-        tag = TagManager.normalize(tag_name)
-        if not tag:
-            return ""
-        sanitized = tag.replace("/", "_").replace("\\", "_")
-        res = "".join(c for c in sanitized if c.isalnum() or c in ("_", "-"))
-        while "__" in res:
-            res = res.replace("__", "_")
-        while "--" in res:
-            res = res.replace("--", "-")
-        res = res.strip("_").strip("-")
-        return f"tag_{res}" if res else ""
+    # Where-clause construction + tag-key sanitizing live in
+    # services/rag/chroma_store.py (P2e); kept as thin members for callers/tests.
+    _sanitize_tag_key = staticmethod(sanitize_tag_key)
 
     def _build_where_clause(
         self,
         tags: list[str] | None = None,
         section_path: list[str] | None = None,
-        where_filter: dict | None = None
+        where_filter: dict | None = None,
     ) -> dict | None:
-        filters = []
-        
-        if tags:
-            for t in tags:
-                san_tag = self._sanitize_tag_key(t)
-                if san_tag:
-                    filters.append({san_tag: True})
-                    
-        if section_path:
-            for idx, level in enumerate(section_path):
-                if idx < 6:
-                    filters.append({f"section_l{idx + 1}": level.lower().strip()})
-                    
-        if where_filter:
-            filters.append(where_filter)
-            
-        if not filters:
-            return None
-        if len(filters) == 1:
-            return filters[0]
-        return {"$and": filters}
+        return build_where_clause(tags=tags, section_path=section_path, where_filter=where_filter)
 
     @staticmethod
     def _compute_content_hash(
@@ -451,11 +170,13 @@ class RAGManager:
         e.g. an empty tag list cannot collide with a one-tag list whose
         sole element is the empty string.
         """
-        payload = "\x00".join([
-            text,
-            ",".join(norm_tags),
-            ",".join(section_path or []),
-        ])
+        payload = "\x00".join(
+            [
+                text,
+                ",".join(norm_tags),
+                ",".join(section_path or []),
+            ]
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _get_existing_content_hash(self, doc_id: str) -> str | None:
@@ -485,7 +206,7 @@ class RAGManager:
         filepath: Path,
         title: str,
         text: str,
-        tags: list[str] = None,
+        tags: list[str] | None = None,
         section_path: list[str] | None = None,
         strict: bool = False,
         force: bool = False,
@@ -532,26 +253,34 @@ class RAGManager:
                 ts_chunks = self.splitter.split_thoughtful(text)
                 chunks_data = []
                 for ts_chunk in ts_chunks:
-                    s_path = list(ts_chunk.section_path) if ts_chunk.section_path else (section_path or [])
+                    s_path = (
+                        list(ts_chunk.section_path)
+                        if ts_chunk.section_path
+                        else (section_path or [])
+                    )
                     boundary = ts_chunk.boundary_type.label
-                    chunks_data.append({
-                        "text": ts_chunk.text,
-                        "start": ts_chunk.start,
-                        "end": ts_chunk.end,
-                        "section_path": s_path,
-                        "boundary_type": boundary,
-                    })
+                    chunks_data.append(
+                        {
+                            "text": ts_chunk.text,
+                            "start": ts_chunk.start,
+                            "end": ts_chunk.end,
+                            "section_path": s_path,
+                            "boundary_type": boundary,
+                        }
+                    )
             else:
-                ts_chunks = self.splitter.split_text_with_spans(text)
+                span_chunks = self.splitter.split_text_with_spans(text)
                 chunks_data = []
-                for ts_chunk in ts_chunks:
-                    chunks_data.append({
-                        "text": ts_chunk["text"],
-                        "start": ts_chunk["start"],
-                        "end": ts_chunk["end"],
-                        "section_path": section_path or [],
-                        "boundary_type": "paragraph",
-                    })
+                for span_chunk in span_chunks:
+                    chunks_data.append(
+                        {
+                            "text": span_chunk["text"],
+                            "start": span_chunk["start"],
+                            "end": span_chunk["end"],
+                            "section_path": section_path or [],
+                            "boundary_type": "paragraph",
+                        }
+                    )
 
             if not chunks_data:
                 return
@@ -570,53 +299,36 @@ class RAGManager:
                 # Lowercase + `>...>` so ChromaDB `where` clauses can use
                 # `$contains: ">background>"` to find content in that section.
                 section_marker = (
-                    ">" + ">".join(s.lower().strip() for s in s_path) + ">"
-                    if s_path else ""
+                    ">" + ">".join(s.lower().strip() for s in s_path) + ">" if s_path else ""
                 )
 
                 chunk_id = f"{doc_id}_chunk_{start}_{end}"
                 ids.append(chunk_id)
                 documents.append(chunk_text)
 
-                meta = {
-                    "source": filepath.name,
-                    "source_path": source_path,
-                    "doc_id": doc_id,
-                    "title": title,
-                    "start_offset": start,
-                    "end_offset": end,
-                    "timestamp": timestamp,
-                    "tags": tags_display,
-                    "section_path": section_marker,
-                    "boundary_type": boundary,
-                    "content_hash": content_hash,
-                }
+                metadatas.append(
+                    ChunkMetadata(
+                        source=filepath.name,
+                        source_path=source_path,
+                        doc_id=doc_id,
+                        title=title,
+                        start_offset=start,
+                        end_offset=end,
+                        timestamp=timestamp,
+                        tags=tags_display,
+                        section_path=section_marker,
+                        boundary_type=boundary,
+                        content_hash=content_hash,
+                        section_levels=list(s_path),
+                        norm_tags=norm_tags,
+                    ).to_chroma()
+                )
 
-                # Add boolean tag fields for sanitization
-                for tag in norm_tags:
-                    san_tag = self._sanitize_tag_key(tag)
-                    if san_tag:
-                        meta[san_tag] = True
-
-                # Add section level mappings (l1 to l6)
-                meta["section_depth"] = len(s_path)
-                for idx in range(6):
-                    key = f"section_l{idx + 1}"
-                    if idx < len(s_path):
-                        meta[key] = s_path[idx].lower().strip()
-                    else:
-                        meta[key] = ""
-                
-                meta["section_path_full"] = " > ".join(s.lower().strip() for s in s_path)
-                metadatas.append(meta)
-
-            self._upsert_with_retry(
-                documents=documents,
-                metadatas=metadatas,
-                ids=ids
-            )
+            self._upsert_with_retry(documents=documents, metadatas=metadatas, ids=ids)
             self._bm25.mark_dirty()
-            logging.info(f"Added document '{title}' ({doc_id[:8]}) to RAG DB ({len(chunks_data)} chunks)")
+            logging.info(
+                f"Added document '{title}' ({doc_id[:8]}) to RAG DB ({len(chunks_data)} chunks)"
+            )
 
         except Exception as e:
             logging.error(f"Failed to add document '{title}' to RAG: {e}")
@@ -636,15 +348,19 @@ class RAGManager:
         """Search for most relevant chunks. Returns markdown formatted strings."""
         try:
             results = self.query_notes(
-                query_text, top_k=top_k, tags=tags,
-                section_path=section_path, diversity=diversity,
-                rerank=rerank, hybrid=hybrid,
+                query_text,
+                top_k=top_k,
+                tags=tags,
+                section_path=section_path,
+                diversity=diversity,
+                rerank=rerank,
+                hybrid=hybrid,
             )
             context_pieces = []
             for item in results:
                 meta = item["metadata"]
                 doc = item["text"]
-                source_title = meta.get('title', 'Unknown Source')
+                source_title = meta.get("title", "Unknown Source")
                 context_pieces.append(f"### [來自筆記: {source_title}]\n{doc}")
             return context_pieces
         except Exception as e:
@@ -667,11 +383,12 @@ class RAGManager:
     ) -> list[dict]:
         """Query RAG returning structured dict lists.
 
-        Pipeline composes (in order): vector retrieve → (optional BM25
-        supplement + RRF) → (optional cross-encoder rerank) → (optional
-        MMR diversification) → (per-document cap). Each stage is
-        independently togglable; the ``None`` defaults respect the
-        corresponding ``*_ENABLED`` env.
+        Orchestrates the stages in services/rag/retrieval.py (in order):
+        vector retrieve → (optional cross-lingual variants) → (optional BM25
+        supplement) → RRF fusion → facet dereference → (optional cross-encoder
+        rerank) → (optional MMR diversification) → (per-document cap) → trace.
+        Each stage is independently togglable; the ``None`` defaults respect
+        the corresponding ``*_ENABLED`` env.
 
         - ``diversity`` (0.0–1.0): MMR weight. 0 = relevance-only.
         - ``rerank``: cross-encoder re-scoring. Best precision win.
@@ -699,20 +416,14 @@ class RAGManager:
 
             where = self._build_where_clause(tags=tags, section_path=section_path)
 
-            # Cross-lingual: resolve extra query variants to widen the candidate
-            # net. Explicit extra_queries win; otherwise translate when enabled
-            # and a translator is wired. Fail-open — never blocks mono-lingual.
-            if extra_queries:
-                variants = [q for q in extra_queries if q and q.strip()]
-            else:
-                use_xl = CROSS_LINGUAL_ENABLED if cross_lingual is None else cross_lingual
-                if use_xl and self.translator is not None:
-                    from services.cross_lingual import expand_queries
-                    variants = expand_queries(
-                        query_text, self.translator, CROSS_LINGUAL_TARGET_LANGS
-                    )
-                else:
-                    variants = []
+            variants = retrieval.resolve_variants(
+                query_text,
+                extra_queries=extra_queries,
+                cross_lingual=cross_lingual,
+                default_enabled=CROSS_LINGUAL_ENABLED,
+                translator=self.translator,
+                target_langs=CROSS_LINGUAL_TARGET_LANGS,
+            )
 
             pool_factor = max(
                 RERANKER_MULTIPLIER if use_rerank else 1,
@@ -725,169 +436,37 @@ class RAGManager:
                 n_pool = top_k
 
             need_embeddings = diversity > 0
-            include = ["documents", "metadatas", "distances"]
-            if need_embeddings:
-                include.append("embeddings")
 
-            vec_results = self.collection.query(
-                query_texts=[query_text],
-                n_results=n_pool,
+            by_id, candidate_info, vec_ids, extra_vec_id_lists = retrieval.gather_vector_candidates(
+                self.collection,
+                query_text,
+                variants,
+                n_pool=n_pool,
                 where=where,
-                include=include,
+                need_embeddings=need_embeddings,
             )
 
-            vec_ids = vec_results.get('ids', [[]])[0]
-            documents = vec_results.get('documents', [[]])[0]
-            metadatas = vec_results.get('metadatas', [[]])[0]
-            distances = vec_results.get('distances', [[]])[0]
-            embeddings = vec_results.get('embeddings', [[]])[0] if need_embeddings else []
-
-            # Trace candidate info
-            candidate_info: dict[str, dict] = {}
-
-            by_id: dict[str, dict] = {}
-            for i, cid in enumerate(vec_ids):
-                c = {
-                    "text": documents[i] if i < len(documents) else "",
-                    "metadata": metadatas[i] if i < len(metadatas) else {},
-                    "distance": distances[i] if i < len(distances) else 0.0,
-                    "id": cid,
-                }
-                if need_embeddings and i < len(embeddings):
-                    c["embedding"] = embeddings[i]
-                by_id[cid] = c
-
-                candidate_info[cid] = {
-                    "vector_distance": distances[i] if i < len(distances) else 0.0,
-                    "vector_rank": i + 1,
-                    "bm25_score": None,
-                    "bm25_rank": None,
-                    "rrf_score": None,
-                    "rerank_score": None,
-                    "rerank_rank": None,
-                    "mmr_selected": False,
-                    "passed_layers": ["vector"]
-                }
-
-            # Cross-lingual / extra-query candidate gathering: run vector
-            # retrieval for each variant and fold NEW candidates into the pool.
-            # Each variant's ranked id list feeds RRF below; the original query
-            # still drives reranking, so precision stays anchored to user intent.
-            extra_vec_id_lists: list[list[str]] = []
-            for variant in variants:
-                try:
-                    v_res = self.collection.query(
-                        query_texts=[variant], n_results=n_pool, where=where, include=include,
-                    )
-                except Exception as e:
-                    logging.debug(f"Cross-lingual variant query failed ({variant!r}): {e}")
-                    continue
-                v_ids = v_res.get('ids', [[]])[0]
-                v_docs = v_res.get('documents', [[]])[0]
-                v_metas = v_res.get('metadatas', [[]])[0]
-                v_dists = v_res.get('distances', [[]])[0]
-                v_embs = v_res.get('embeddings', [[]])[0] if need_embeddings else []
-                extra_vec_id_lists.append(v_ids)
-                for i, cid in enumerate(v_ids):
-                    if cid not in by_id:
-                        c = {
-                            "text": v_docs[i] if i < len(v_docs) else "",
-                            "metadata": v_metas[i] if i < len(v_metas) else {},
-                            "distance": v_dists[i] if i < len(v_dists) else 0.0,
-                            "id": cid,
-                        }
-                        if need_embeddings and i < len(v_embs):
-                            c["embedding"] = v_embs[i]
-                        by_id[cid] = c
-                        candidate_info[cid] = {
-                            "vector_distance": v_dists[i] if i < len(v_dists) else 0.0,
-                            "vector_rank": None,
-                            "bm25_score": None,
-                            "bm25_rank": None,
-                            "rrf_score": None,
-                            "rerank_score": None,
-                            "rerank_rank": None,
-                            "mmr_selected": False,
-                            "passed_layers": ["vector_xlingual"],
-                        }
-                    elif "vector_xlingual" not in candidate_info[cid]["passed_layers"]:
-                        candidate_info[cid]["passed_layers"].append("vector_xlingual")
-
             bm25_ids: list[str] = []
-            rrf_scores: dict[str, float] = {}
             if use_hybrid:
-                bm25_hits = self._bm25.query(query_text, top_k * BM25_MULTIPLIER)
-                bm25_score_map = {cid: score for cid, score in bm25_hits}
-                raw_ids = [cid for cid, _ in bm25_hits]
-                if where and raw_ids:
-                    try:
-                        filtered = self.collection.get(ids=raw_ids, where=where, include=[])
-                        allowed = set(filtered.get("ids", []) or [])
-                        bm25_ids = [cid for cid in raw_ids if cid in allowed]
-                    except Exception as e:
-                        logging.debug(f"BM25 where-filter failed, using unfiltered: {e}")
-                        bm25_ids = raw_ids
-                else:
-                    bm25_ids = raw_ids
+                bm25_ids = retrieval.gather_bm25_candidates(
+                    self._bm25,
+                    self.collection,
+                    query_text,
+                    k=top_k * BM25_MULTIPLIER,
+                    where=where,
+                    by_id=by_id,
+                    candidate_info=candidate_info,
+                    need_embeddings=need_embeddings,
+                )
 
-                missing = [cid for cid in bm25_ids if cid not in by_id]
-                if missing:
-                    miss_include = ["documents", "metadatas"]
-                    if need_embeddings:
-                        miss_include.append("embeddings")
-                    try:
-                        miss = self.collection.get(ids=missing, include=miss_include)
-                        m_ids = miss.get("ids", []) or []
-                        m_docs = miss.get("documents", []) or []
-                        m_metas = miss.get("metadatas", []) or []
-                        m_embs = miss.get("embeddings", []) or []
-                        for i, cid in enumerate(m_ids):
-                            new_c = {
-                                "text": m_docs[i] if i < len(m_docs) else "",
-                                "metadata": m_metas[i] if i < len(m_metas) else {},
-                                "distance": 0.0,
-                                "id": cid,
-                            }
-                            if need_embeddings and i < len(m_embs):
-                                new_c["embedding"] = m_embs[i]
-                            by_id[cid] = new_c
-                    except Exception as e:
-                        logging.debug(f"BM25 chunk fetch failed: {e}")
-
-                for i, cid in enumerate(bm25_ids):
-                    if cid not in candidate_info:
-                        candidate_info[cid] = {
-                            "vector_distance": None,
-                            "vector_rank": None,
-                            "bm25_score": bm25_score_map.get(cid),
-                            "bm25_rank": i + 1,
-                            "rrf_score": None,
-                            "rerank_score": None,
-                            "rerank_rank": None,
-                            "mmr_selected": False,
-                            "passed_layers": ["bm25"]
-                        }
-                    else:
-                        candidate_info[cid]["bm25_score"] = bm25_score_map.get(cid)
-                        candidate_info[cid]["bm25_rank"] = i + 1
-                        candidate_info[cid]["passed_layers"].append("bm25")
-
-            # Fusion: RRF over the primary vector ranking + every cross-lingual
-            # variant ranking + (when hybrid) the BM25 ranking. Runs whenever
-            # there is more than one ranking to fuse (hybrid and/or variants).
-            if use_hybrid or extra_vec_id_lists:
-                rankings = [vec_ids, *extra_vec_id_lists]
-                if use_hybrid:
-                    rankings.append(bm25_ids)
-                rrf_scores = rrf_merge(rankings)
-                for cid, rrf_s in rrf_scores.items():
-                    if cid in candidate_info:
-                        candidate_info[cid]["rrf_score"] = rrf_s
-
-                ordered_ids = sorted(by_id.keys(), key=lambda c: rrf_scores.get(c, 0.0), reverse=True)
-                candidates = [by_id[cid] for cid in ordered_ids]
-            else:
-                candidates = [by_id[cid] for cid in vec_ids if cid in by_id]
+            candidates, rrf_scores = retrieval.fuse_rankings(
+                by_id,
+                candidate_info,
+                vec_ids,
+                extra_vec_id_lists,
+                bm25_ids,
+                use_hybrid=use_hybrid,
+            )
 
             # Facet hits are pointers, not content: swap each for its
             # parent's real chunk BEFORE reranking, so the cross-encoder
@@ -897,25 +476,13 @@ class RAGManager:
             # the retrieval bench uses to measure facet lift).
             if use_facets is False:
                 candidates = [
-                    c for c in candidates
-                    if (c.get("metadata") or {}).get("role") != "facet"
+                    c for c in candidates if (c.get("metadata") or {}).get("role") != "facet"
                 ]
             else:
                 candidates = self._dereference_facets(candidates, candidate_info, need_embeddings)
 
             if use_rerank and candidates:
-                scores = reranker.score(query_text, [c["text"] for c in candidates])
-                for c, s in zip(candidates, scores):
-                    c["rerank_score"] = s
-                    cid = c["id"]
-                    if cid in candidate_info:
-                        candidate_info[cid]["rerank_score"] = s
-                        candidate_info[cid]["passed_layers"].append("rerank")
-                candidates.sort(key=lambda x: x.get("rerank_score", 0.0), reverse=True)
-                for idx, c in enumerate(candidates):
-                    cid = c["id"]
-                    if cid in candidate_info:
-                        candidate_info[cid]["rerank_rank"] = idx + 1
+                retrieval.apply_rerank(reranker, query_text, candidates, candidate_info)
 
             mmr_ran = False
             if diversity > 0 and candidates:
@@ -928,18 +495,18 @@ class RAGManager:
                 mmr_ran = True
                 if use_rerank:
                     relevance = [c.get("rerank_score", 0.0) for c in candidates]
-                    candidates = self._mmr_select(
-                        candidates, top_k, lambda_param, relevance=relevance,
+                    candidates = retrieval.mmr_select(
+                        candidates, top_k, lambda_param, relevance=relevance
                     )
                 elif use_hybrid:
                     relevance = [rrf_scores.get(c["id"], 0.0) for c in candidates]
-                    candidates = self._mmr_select(
-                        candidates, top_k, lambda_param, relevance=relevance,
+                    candidates = retrieval.mmr_select(
+                        candidates, top_k, lambda_param, relevance=relevance
                     )
                 else:
                     query_emb = self.ef([query_text])[0]
-                    candidates = self._mmr_select(
-                        candidates, top_k, lambda_param, query_emb=query_emb,
+                    candidates = retrieval.mmr_select(
+                        candidates, top_k, lambda_param, query_emb=query_emb
                     )
 
             # Per-document cap (anti-flood): on the non-MMR path, stop a single
@@ -948,7 +515,7 @@ class RAGManager:
             # skip it there to avoid double-shrinking.
             cap = RETRIEVAL_MAX_PER_DOC if max_per_doc is None else max_per_doc
             if (not mmr_ran) and cap and cap > 0 and candidates:
-                candidates = self._cap_per_document(candidates, cap)
+                candidates = retrieval.cap_per_document(candidates, cap)
 
             final_returned = candidates[:top_k]
             if mmr_ran:
@@ -963,7 +530,6 @@ class RAGManager:
                 if cid in candidate_info:
                     c["retrieval_breakdown"] = candidate_info[cid]
 
-            # Record event in trace store
             options = {
                 "tags": tags,
                 "section_path": section_path,
@@ -972,166 +538,62 @@ class RAGManager:
                 "hybrid": use_hybrid,
                 "use_facets": use_facets,
             }
-            recorded_results = []
-            for c in final_returned:
-                recorded_results.append({
+            recorded_results = [
+                {
                     "id": c["id"],
                     "title": c["metadata"].get("title"),
                     "source": c["metadata"].get("source"),
                     "retrieval_breakdown": c.get("retrieval_breakdown"),
-                })
-            
-            try:
-                trace_id = None
-                if hasattr(self.trace_store, "current_trace_ids"):
-                    trace_ids = self.trace_store.current_trace_ids()
-                    if trace_ids:
-                        trace_id = trace_ids[-1]
-                
-                self.trace_store.record_retrieval_event(
-                    query_text=query_text,
-                    top_k=top_k,
-                    options=options,
-                    results=recorded_results,
-                    trace_id=trace_id,
-                    status="succeeded",
-                )
-            except Exception as e:
-                logging.debug(f"Failed to record retrieval event: {e}")
+                }
+                for c in final_returned
+            ]
+            retrieval.record_retrieval_trace(
+                self.trace_store,
+                query_text=query_text,
+                top_k=top_k,
+                options=options,
+                results=recorded_results,
+                status="succeeded",
+            )
 
             return final_returned
         except Exception as e:
             logging.error(f"RAG query failed: {e}")
-            try:
-                options = {
+            retrieval.record_retrieval_trace(
+                self.trace_store,
+                query_text=query_text,
+                top_k=top_k,
+                options={
                     "tags": tags,
                     "section_path": section_path,
                     "diversity": diversity,
                     "rerank": rerank,
                     "hybrid": hybrid,
-                }
-                trace_id = None
-                if hasattr(self.trace_store, "current_trace_ids"):
-                    trace_ids = self.trace_store.current_trace_ids()
-                    if trace_ids:
-                        trace_id = trace_ids[-1]
-                self.trace_store.record_retrieval_event(
-                    query_text=query_text,
-                    top_k=top_k,
-                    options=options,
-                    results=[],
-                    trace_id=trace_id,
-                    status="failed",
-                    error=str(e),
-                )
-            except Exception as trace_error:
-                logging.debug(f"Failed to record failed retrieval event: {trace_error}")
+                },
+                results=[],
+                status="failed",
+                error=str(e),
+            )
             return []
 
-
-    @staticmethod
-    def _doc_key(candidate: dict) -> str:
-        """Base-document identity for a chunk, for the per-document cap.
-
-        Derived from the title with any trailing ``(Part N)``/``(Synthesis)``/
-        ``(Stitched)`` parenthetical stripped — so all chunks of one document
-        share a key while genuinely distinct documents (incl. different
-        language editions like ``Siddhartha(EN)`` vs ``Siddhartha(DE)``) stay
-        separate. Falls back to source, then chunk id.
-        """
-        meta = candidate.get("metadata") or {}
-        title = meta.get("title")
-        if title:
-            base = str(title).rsplit(" (", 1)[0] if str(title).endswith(")") else str(title)
-            if base.strip():
-                return base.strip()
-        return str(meta.get("source") or candidate.get("id") or id(candidate))
+    # Ranking helpers live in services/rag/retrieval.py (P2e); kept as thin
+    # members for callers/tests.
+    _doc_key = staticmethod(retrieval.doc_key)
 
     @classmethod
     def _cap_per_document(cls, candidates: list[dict], cap: int) -> list[dict]:
-        """Keep at most ``cap`` chunks per base-document, preserving order.
+        return retrieval.cap_per_document(candidates, cap)
 
-        Order-preserving and any-match-safe: a document's first ``cap`` (best-
-        ranked) chunks are kept, later ones dropped, letting lower-ranked
-        distinct documents move up. Never reorders within the kept set.
-        """
-        seen: dict[str, int] = {}
-        out: list[dict] = []
-        for c in candidates:
-            k = cls._doc_key(c)
-            n = seen.get(k, 0)
-            if n >= cap:
-                continue
-            seen[k] = n + 1
-            out.append(c)
-        return out
-
-    @staticmethod
-    def _mmr_select(
-        candidates: list[dict],
-        top_k: int,
-        lambda_param: float,
-        *,
-        query_emb=None,
-        relevance: list[float] | None = None,
-    ) -> list[dict]:
-        """Maximal Marginal Relevance over candidate embeddings.
-
-        Pass ``query_emb`` to derive relevance from cosine-to-query, OR
-        ``relevance`` to use a precomputed score (e.g. reranker output).
-        Cosine sim for the diversity term is computed on length-normalized
-        vectors so this works regardless of ChromaDB's hnsw:space setting.
-        """
-        import numpy as np
-
-        usable_with_idx = [
-            (i, c) for i, c in enumerate(candidates) if c.get("embedding") is not None
-        ]
-        if not usable_with_idx:
-            return candidates[:top_k]
-        usable = [c for _, c in usable_with_idx]
-
-        embs = np.asarray([c["embedding"] for c in usable], dtype=np.float32)
-        norms = np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9
-        embs_norm = embs / norms
-
-        if relevance is not None:
-            rel = np.asarray(
-                [relevance[i] for i, _ in usable_with_idx], dtype=np.float32,
-            )
-            if len(rel) > 1:
-                lo, hi = float(rel.min()), float(rel.max())
-                rel = (rel - lo) / (hi - lo) if hi > lo else np.zeros_like(rel)
-        elif query_emb is not None:
-            q = np.asarray(query_emb, dtype=np.float32)
-            q_norm = q / (np.linalg.norm(q) + 1e-9)
-            rel = embs_norm @ q_norm
-        else:
-            raise ValueError("_mmr_select requires either query_emb or relevance")
-
-        selected_idx: list[int] = []
-        remaining = list(range(len(usable)))
-
-        while remaining and len(selected_idx) < top_k:
-            if not selected_idx:
-                best = remaining[int(np.argmax(rel[remaining]))]
-            else:
-                sel = embs_norm[selected_idx]
-                cand = embs_norm[remaining]
-                sim_to_selected = (cand @ sel.T).max(axis=1)
-                mmr = lambda_param * rel[remaining] - (1 - lambda_param) * sim_to_selected
-                best = remaining[int(np.argmax(mmr))]
-            selected_idx.append(best)
-            remaining.remove(best)
-
-        return [usable[i] for i in selected_idx]
+    _mmr_select = staticmethod(retrieval.mmr_select)
 
     @retry_on_db_lock()
     def _upsert_with_retry(self, **kwargs):
         self.collection.upsert(**kwargs)
 
     @retry_on_db_lock()
-    def add_facets(self, filepath: Path, title: str, facets: list[str], tags: list[str] = None):
+    def add_facets(
+        self, filepath: Path, title: str, facets: list[str], tags: list[str] | None = None
+    ):
         """Index LLM-generated facet sentences (thesis / key points) as
         retrieval pointers for a document.
 
@@ -1157,15 +619,17 @@ class RAGManager:
                 facet_hash = hashlib.sha256(facet_text.encode("utf-8")).hexdigest()[:16]
                 ids.append(f"{doc_id}_facet_{facet_hash}")
                 documents.append(facet_text)
-                metadatas.append({
-                    "role": "facet",
-                    "doc_id": doc_id,
-                    "title": title,
-                    "source": Path(filepath).name,
-                    "facet_index": i,
-                    "timestamp": timestamp,
-                    "tags": tags_display,
-                })
+                metadatas.append(
+                    {
+                        "role": "facet",
+                        "doc_id": doc_id,
+                        "title": title,
+                        "source": Path(filepath).name,
+                        "facet_index": i,
+                        "timestamp": timestamp,
+                        "tags": tags_display,
+                    }
+                )
 
             self._upsert_with_retry(documents=documents, metadatas=metadatas, ids=ids)
             self._bm25.mark_dirty()
@@ -1187,7 +651,8 @@ class RAGManager:
         try:
             results = self.collection.get(where={"doc_id": doc_id}, include=["metadatas"])
             facet_ids = [
-                cid for cid, meta in zip(results.get("ids") or [], results.get("metadatas") or [])
+                cid
+                for cid, meta in zip(results.get("ids") or [], results.get("metadatas") or [])
                 if (meta or {}).get("role") == "facet"
             ]
             if facet_ids:
@@ -1202,7 +667,9 @@ class RAGManager:
         auto-generated regression queries.
         """
         try:
-            results = self.collection.get(where={"role": "facet"}, include=["documents", "metadatas"])
+            results = self.collection.get(
+                where={"role": "facet"}, include=["documents", "metadatas"]
+            )
         except Exception as e:
             logging.debug(f"Facet listing failed: {e}")
             return []
@@ -1211,12 +678,14 @@ class RAGManager:
         metadatas = results.get("metadatas") or []
         for i, meta in enumerate(metadatas):
             meta = meta or {}
-            out.append({
-                "title": meta.get("title"),
-                "text": documents[i] if i < len(documents) else "",
-                "facet_index": meta.get("facet_index", 0),
-                "timestamp": meta.get("timestamp", ""),
-            })
+            out.append(
+                {
+                    "title": meta.get("title"),
+                    "text": documents[i] if i < len(documents) else "",
+                    "facet_index": meta.get("facet_index", 0),
+                    "timestamp": meta.get("timestamp", ""),
+                }
+            )
         return out
 
     def _get_all(self, include: list[str]) -> dict:
@@ -1310,7 +779,7 @@ class RAGManager:
         return best[1] if best else None
 
     def _leading_chunks_for_docs(
-        self, doc_ids: list[str], need_embeddings: bool = False
+        self, doc_ids: list[str | None], need_embeddings: bool = False
     ) -> dict[str, dict]:
         """Batch variant of _first_chunk_of_doc: one collection.get for many
         doc_ids (audit R7-C). Returns {doc_id: leading-real-chunk candidate}.
@@ -1391,7 +860,7 @@ class RAGManager:
         parents = self._leading_chunks_for_docs(facet_doc_ids, need_embeddings)
 
         direct: list[dict] = []
-        rescued: list[dict] = []
+        rescued: list[tuple[str, dict]] = []
         seen: set[str] = set()
         for c in candidates:
             meta = c.get("metadata") or {}
@@ -1401,8 +870,15 @@ class RAGManager:
                     direct.append(c)
                 continue
 
-            base = parents.get(meta.get("doc_id"))
+            base = parents.get(meta.get("doc_id") or "")
             if base is None:
+                # Dangling facet: its parent chunk vanished (deleted/re-ingested
+                # under a new doc_id). Log it — silent drops made facet-count
+                # drift invisible; the orphan sweep can then clean these up.
+                logging.warning(
+                    f"Facet deref dropped an orphan facet (id={c.get('id')!r}, "
+                    f"doc_id={meta.get('doc_id')!r}): parent chunk not found."
+                )
                 continue
             # Copy: multiple facets can share a parent, and we stamp per-facet
             # signals onto it (the dedup below keeps the first).
@@ -1423,7 +899,9 @@ class RAGManager:
             facet_info = candidate_info.get(facet_id)
             if facet_info is not None and parent["id"] not in candidate_info:
                 swapped = dict(facet_info)
-                swapped["passed_layers"] = list(facet_info.get("passed_layers", [])) + ["facet_deref"]
+                swapped["passed_layers"] = list(facet_info.get("passed_layers", [])) + [
+                    "facet_deref"
+                ]
                 candidate_info[parent["id"]] = swapped
         return out
 
@@ -1440,6 +918,7 @@ class RAGManager:
         Returns {"scanned", "orphan_docs", "deleted_chunks", "titles"}.
         """
         from core.config import CORTEX_DIR, NOTES_DIR, PAGES_DIR
+
         roots = roots if roots is not None else [PAGES_DIR, NOTES_DIR, CORTEX_DIR]
 
         valid_doc_ids = set()
@@ -1500,13 +979,13 @@ class RAGManager:
             return
         ids = rows.get("ids") or []
         metas = rows.get("metadatas") or []
-        legacy_ids = [
-            cid for cid, md in zip(ids, metas) if not (md or {}).get("doc_id")
-        ]
+        legacy_ids = [cid for cid, md in zip(ids, metas) if not (md or {}).get("doc_id")]
         if legacy_ids:
             try:
                 self.collection.delete(ids=legacy_ids)
-                logging.info(f"Deleted {len(legacy_ids)} legacy (doc_id-less) chunk(s) for title '{title}'")
+                logging.info(
+                    f"Deleted {len(legacy_ids)} legacy (doc_id-less) chunk(s) for title '{title}'"
+                )
             except Exception as e:
                 logging.debug(f"legacy title cleanup delete failed for '{title}': {e}")
 
@@ -1549,9 +1028,9 @@ class RAGManager:
     def get_all_indexed_titles(self) -> set:
         """Retrieves a set of all unique document titles currently in the database."""
         try:
-            results = self._get_all(['metadatas'])
-            metadatas = results.get('metadatas', [])
-            titles = set(m.get('title') for m in metadatas if m and 'title' in m)
+            results = self._get_all(["metadatas"])
+            metadatas = results.get("metadatas", [])
+            titles = set(m.get("title") for m in metadatas if m and "title" in m)
             return titles
         except Exception as e:
             logging.error(f"Failed to get indexed titles: {e}")
@@ -1572,9 +1051,9 @@ class RAGManager:
         precondition `has_tag_graph` without a full collection scan.
         """
         try:
-            results = self.collection.get(limit=sample_limit, include=['metadatas'])
-            for meta in results.get('metadatas') or []:
-                if meta and any(k.startswith('tag_') for k in meta):
+            results = self.collection.get(limit=sample_limit, include=["metadatas"])
+            for meta in results.get("metadatas") or []:
+                if meta and any(k.startswith("tag_") for k in meta):
                     return True
             return False
         except Exception as e:
@@ -1599,13 +1078,11 @@ class RAGManager:
             metadata = {
                 "embedding_provider": curr_provider,
                 "embedding_model": curr_model,
-                "embedding_dimension": curr_dim
+                "embedding_dimension": curr_dim,
             }
 
             self.collection = self.client.create_collection(
-                name="wiki_pages",
-                embedding_function=self.ef,
-                metadata=metadata
+                name="wiki_pages", embedding_function=self.ef, metadata=metadata
             )
             self._bm25.replace_collection(self.collection)
             logging.info("RAGManager: Collection wiped and recreated.")
