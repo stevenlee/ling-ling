@@ -1232,6 +1232,66 @@ def repair_mermaid_quadrant_points(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+# ─── Mermaid: block-beta edge arrows ──────────────────────────────────
+
+# A lone single-dash arrow `->` — NOT part of `-->` / `->>` / `<->`. block-beta
+# edges use `-->`; the LLM writes `->`, a lexical error. Scoped to block-beta so
+# sequenceDiagram (where `A->B` is a valid message) is never touched.
+_BLOCK_SINGLE_ARROW_RE = re.compile(r"(?<![-<])->(?!>)")
+
+
+def repair_mermaid_block_arrows(text: str) -> tuple[str, list[dict]]:
+    """Promote single-dash `->` edges to `-->` inside ``block-beta`` fences.
+
+    block-beta's edge operator is `-->`; the LLM routinely emits `->`, which is
+    an "Unrecognized text" lexical error that kills the diagram. Quoted labels
+    are protected (a literal `->` inside `"…"` is left alone), and the fence
+    scope keeps sequenceDiagram messages (`A->B`) untouched. Idempotent — `-->`
+    doesn't match again.
+    """
+    if not text or "block-beta" not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+    is_block = False
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+            is_block = _peek_mermaid_kind(lines, idx).startswith("block-beta")
+            out.append(line)
+            continue
+        if in_mermaid and stripped == "```":
+            in_mermaid = False
+            is_block = False
+            out.append(line)
+            continue
+
+        if in_mermaid and is_block and "->" in line:
+            parts = _QUOTED_LABEL_SPLIT_RE.split(line)  # quoted segments at odd indices
+            for i in range(0, len(parts), 2):
+                parts[i] = _BLOCK_SINGLE_ARROW_RE.sub("-->", parts[i])
+            new_line = "".join(parts)
+            if new_line != line:
+                fixes.append(
+                    _make_fix(
+                        "block_edge_arrow",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
+            out.append(new_line)
+        else:
+            out.append(line)
+
+    return "\n".join(out), fixes
+
+
 # ─── Mermaid: classDiagram structural repair ──────────────────────────
 
 

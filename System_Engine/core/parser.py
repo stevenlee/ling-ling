@@ -35,6 +35,7 @@ from core.parsing.mermaid_repair import (  # noqa: F401
     MERMAID_CONTINUATION_RE,
     MERMAID_START_RE,
     _quote_labels_in_line,
+    repair_mermaid_block_arrows,
     repair_mermaid_classdiagram,
     repair_mermaid_double_quotes,
     repair_mermaid_fences,

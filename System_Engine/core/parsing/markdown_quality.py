@@ -16,6 +16,7 @@ from core.parsing.latex_repair import (
     repair_unclosed_latex_display,
 )
 from core.parsing.mermaid_repair import (
+    repair_mermaid_block_arrows,
     repair_mermaid_classdiagram,
     repair_mermaid_double_quotes,
     repair_mermaid_fences,
@@ -372,6 +373,7 @@ def run_markdown_quality_checks(
             repair_mermaid_mindmap_math,
             repair_mermaid_mindmap_brackets,
             repair_mermaid_quadrant_points,
+            repair_mermaid_block_arrows,
             repair_mermaid_classdiagram,
             repair_mermaid_latex_labels,
             repair_markdown_tables,

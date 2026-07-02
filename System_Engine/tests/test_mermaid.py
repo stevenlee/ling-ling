@@ -309,6 +309,53 @@ class TestQuadrantPoints:
         assert fixes == []
 
 
+# ── block-beta edge arrows ─────────────────────────────────────────
+
+
+class TestBlockArrows:
+    """block-beta edges are `-->`; the LLM writes `->` (lexical error)."""
+
+    def _q(self, body):
+        from core.parser import repair_mermaid_block_arrows
+
+        return repair_mermaid_block_arrows(f"```mermaid\n{body}\n```")
+
+    def test_promotes_single_arrow(self):
+        # Real regression (High-Resolution Video Synthesis Part 2).
+        result, fixes = self._q('block-beta\n  columns 1\n  A["a"]\n  B["b"]\n  A -> B\n  B -> C')
+        assert "A --> B" in result and "B --> C" in result
+        assert " -> " not in result
+        assert any(f["type"] == "block_edge_arrow" for f in fixes)
+
+    def test_leaves_double_arrow_and_block_keywords(self):
+        body = 'block-beta\n  block:Detail\n    X["x"]\n  end\n  A --> B'
+        result, fixes = self._q(body)
+        assert result == f"```mermaid\n{body}\n```"
+        assert fixes == []
+
+    def test_quoted_label_arrow_untouched(self):
+        result, _ = self._q('block-beta\n  A["a->b"]\n  A -> B')
+        assert '["a->b"]' in result  # literal -> in a label kept
+        assert "A --> B" in result
+
+    def test_sequence_diagram_not_touched(self):
+        # sequenceDiagram `A->B` is a valid message — the block-beta scope
+        # must never rewrite it.
+        body = "sequenceDiagram\n    A->B: hi\n    A-->>B: reply"
+        result, fixes = self._q(body)
+        assert "A->B: hi" in result
+        assert fixes == []
+
+    def test_idempotent(self):
+        from core.parser import repair_mermaid_block_arrows
+
+        body = 'block-beta\n  A["a"]\n  A -> B'
+        once, _ = self._q(body)
+        twice, fixes = repair_mermaid_block_arrows(once)
+        assert once == twice
+        assert fixes == []
+
+
 # ── Pipeline idempotency ───────────────────────────────────────────
 
 
