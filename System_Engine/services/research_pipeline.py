@@ -1,33 +1,11 @@
 import logging
 import re
-import time
 import urllib.parse
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-import requests
 
-from core.retrying import retry_call
-
-
-# Politeness: minimum seconds between consecutive requests to the SAME external
-# source. The pipeline hits each source once (or N times) per keyword in a tight
-# 5-keyword loop; without spacing that burst looks like a scraper and earns a
-# 429 (FPO rate-limited the patent burst; Wikipedia's API 429'd the search+
-# extract burst). Values reflect each service's tolerance — arXiv explicitly
-# asks for ~3s between API hits; Wikipedia is fine around 1/s; FPO is scraped so
-# a slightly-jittered ~1.33s keeps it human-ish.
-_SOURCE_MIN_INTERVAL = {
-    "fpo": 1.33,
-    "wikipedia": 1.0,
-    "arxiv": 3.0,
-}
-FPO_MIN_INTERVAL = _SOURCE_MIN_INTERVAL["fpo"]  # back-compat alias
-
-# Wikipedia's User-Agent policy wants a descriptive UA with a contact. Use the
-# public repo URL as contact rather than a personal email (this string ships in
-# a public repo). arXiv/FPO are happy with it too, so all sources share it.
-RESEARCH_USER_AGENT = "LingLingResearchBot/1.0 (+https://github.com/stevenlee/ling-ling)"
+from services.http_client import PoliteHttpClient
 
 
 class PatentFetchError(Exception):
@@ -41,30 +19,7 @@ class ResearchPipeline:
     def __init__(self, llm_client):
         self.llm = llm_client
         self._cache = {}
-        self._last_req_at: dict[str, float] = {}  # source -> monotonic time of last request
-
-    def _get_with_retry(self, url: str, headers: dict, timeout: int = 20, retries: int = 3):
-        """GET with retry: exponential backoff on HTTP 429, fixed backoff on other transient errors."""
-
-        def _is_retryable(e: Exception) -> bool:
-            if isinstance(e, requests.exceptions.HTTPError):
-                status = e.response.status_code if e.response is not None else None
-                return status == 429
-            return isinstance(e, requests.exceptions.RequestException)
-
-        def _delay(attempt: int, e: Exception) -> float:
-            if isinstance(e, requests.exceptions.HTTPError):
-                return 2 ** (attempt - 1) + 2  # 429: exponential
-            return 2.0  # other transient network errors: fixed
-
-        def _get():
-            resp = requests.get(url, headers=headers, timeout=timeout)
-            resp.raise_for_status()
-            return resp
-
-        return retry_call(
-            _get, retries=retries, is_retryable=_is_retryable, delay_fn=_delay, jitter=0
-        )
+        self.http = PoliteHttpClient()
 
     @staticmethod
     def _norm(s: str) -> str:
@@ -83,10 +38,7 @@ class ResearchPipeline:
     def search_arxiv(self, keyword: str, limit: int = 3) -> list[dict]:
         try:
             url = f"http://export.arxiv.org/api/query?search_query=all:%22{urllib.parse.quote(keyword)}%22&start=0&max_results={limit}"
-            headers = {"User-Agent": RESEARCH_USER_AGENT}
-            self._throttle("arxiv")
-            response = requests.get(url, headers=headers, timeout=20)
-            response.raise_for_status()
+            response = self.http.get(url, source="arxiv", retries=1)
             root = ET.fromstring(response.text)
             ns = {"atom": "http://www.w3.org/2005/Atom"}
             results = []
@@ -109,10 +61,7 @@ class ResearchPipeline:
     def search_wikipedia(self, keyword: str, limit: int = 3) -> list[dict]:
         try:
             search_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(keyword)}&utf8=&format=json&srlimit={limit}"
-            headers = {"User-Agent": RESEARCH_USER_AGENT}
-
-            self._throttle("wikipedia")
-            response = self._get_with_retry(search_url, headers)
+            response = self.http.get(search_url, source="wikipedia")
             data = response.json()
             search_results = data.get("query", {}).get("search", [])
 
@@ -121,8 +70,8 @@ class ResearchPipeline:
                 title = item["title"]
                 page_url = f"https://en.wikipedia.org/w/api.php?format=json&action=query&prop=extracts&exintro&explaintext&redirects=1&titles={urllib.parse.quote(title)}"
 
-                self._throttle("wikipedia")  # space every wiki call, not just extracts
-                page_resp = self._get_with_retry(page_url, headers)
+                # space every wiki call, not just extracts
+                page_resp = self.http.get(page_url, source="wikipedia")
                 page_data = page_resp.json()
                 pages = page_data.get("query", {}).get("pages", {})
                 extract = ""
@@ -142,16 +91,6 @@ class ResearchPipeline:
             logging.error(f"Wikipedia search failed for '{keyword}': {e}")
             return []
 
-    def _throttle(self, source: str):
-        """Self-rate-limit requests to `source` to its politeness interval so a
-        tight per-keyword loop doesn't look like a scraper (see
-        _SOURCE_MIN_INTERVAL)."""
-        interval = _SOURCE_MIN_INTERVAL.get(source, 1.0)
-        wait = self._last_req_at.get(source, 0.0) + interval - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        self._last_req_at[source] = time.monotonic()
-
     def search_patents(self, keyword: str, limit: int = 30) -> list[dict]:
         """Search patents via FreePatentsOnline (FPO) scraping.
 
@@ -169,9 +108,8 @@ class ResearchPipeline:
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         }
 
-        self._throttle("fpo")
         try:
-            response = self._get_with_retry(url, headers)
+            response = self.http.get(url, source="fpo", headers=headers)
         except Exception as e:
             logging.error(f"FPO fetch failed for '{keyword}': {e}")
             raise PatentFetchError(f"fetch failed: {e}") from e
