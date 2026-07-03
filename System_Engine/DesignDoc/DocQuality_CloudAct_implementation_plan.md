@@ -33,7 +33,23 @@
 > `rect rgb("…")` 引號；P3.6 `scripts/validate_mermaid.mjs`＋`make validate-mermaid`
 > （node+jsdom+mermaid.parse，掃資料夾、失敗回非零，首次自動裝 deps）。已發佈 cloud_act
 > Synthesis 有 3 個 quoted rect-rgb 已補丁，validator 回報 0/34。
-> **Phase 3 全數完成**。其餘：P5（模板與閱讀效率）未動工。
+> **Phase 3 全數完成**。
+>
+> **P5 完成（2db4aae，2026-07-03）**：5.1 universal-document-template 不再規定
+> `# 標題` 與 Date/Author/Status 元資料區（模型原本照抄模板 → 產出幻覺的
+> `## 檔案中繼資料` + 假日期）；deterministic `demote_body_h1` 只作用於 synthesis
+> body（shell 已擁有 page-title H1）。5.2 `_nest_artifact_headings` 把 artifact 自帶的
+> `## 🧩 論證結構（Toulmin）` 降成 `###` 巢狀於 wrapper 下，消除雙 H2。5.3
+> `_frontmatter_meta` 把 40+ 行 trace_ids 從寫入的 frontmatter 移除、保留 run_id
+> （trace store 按 run_id 索引可復原）。5.4 stitch pipeline 抽出各 Part 詞彙表、以英文
+> 術語去重，文末附合併表（cloud_act：6 表 → 34 唯一列）。5.5 translation-rpt（zh+en）
+> 明訂法條編號用巢狀清單、不得用表格。已發佈 cloud_act 以安全子集補丁，mermaid 仍 0/34，
+> 1436 tests 綠。
+>
+> **5.3 part_digest 去重 deferred**：B1 resume（`_resume_part`）同時依賴 frontmatter
+> `part_digest`（重建 PartState）與附錄 header（完成哨兵），移除任一都會破壞 resume；
+> 因使用者重視不浪費 GPU 重跑，此項保留現狀。**整個 DocQuality 計劃至此全數完成
+> （僅 P5.3-part_digest 明確 deferred）。**
 
 ---
 
