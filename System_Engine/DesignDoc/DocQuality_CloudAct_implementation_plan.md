@@ -4,11 +4,15 @@
 > 加上 40 個 Mermaid 區塊的實際 parse 驗證（mermaid v11 + jsdom，5/40 失敗），
 > 以及對 pipeline 原始碼的根因追蹤。撰於 2026-07-03。
 >
-> **進度（2026-07-03）**：止血批次 **P1（1.1–1.4）+ 3.1/3.2 已完成**（未提交）。
-> 驗證：mypy/ruff 乾淨、1371 tests 全綠；cloud_act 5 個原始失敗 mermaid 塊經
-> `run_markdown_quality_checks` 頂層路徑修復後全數通過 mermaid v11 parse。
-> 注意：daemon 需重啟才會載入新引擎碼；重跑 cloud_act 請 touch 來源檔走 VaultWatcher。
-> 其餘：P2（source_prep 行號表格）、P3.3–3.6、P4、P5 未動工。
+> **進度（2026-07-03）**：止血批次 **P1（1.1–1.4）+ 3.1/3.2 已完成並通過端到端驗證**
+> （commits 3d0316b、6e6883d；daemon 已用新碼重啟並完整重跑 cloud_act）。
+> 重跑實測：**mermaid 0/42 parse fail**（基線 5/40）；critique 判 revise 時 Synthesis
+> 正確標 `#NeedsReview` + 檔頂 🔔 警示 callout + `quality_verdict` frontmatter；
+> Part 3/5 因 LLM 瞬時逾時走 fallback digest，正確標 `digest_degraded: true` 且未進
+> facet index（Part 1/2/4/6 正常索引 6 facets）。追加 hardening：gemma 又出現
+> `**總體評定：**` 判定變體 → parser 已泛化（6e6883d）。
+> 其餘：P2（source_prep 行號表格）、P3.3–3.6、P4、P5 未動工——重跑輸出中行號假表格
+> 仍在（預期內，P2 未做）。
 
 ---
 
