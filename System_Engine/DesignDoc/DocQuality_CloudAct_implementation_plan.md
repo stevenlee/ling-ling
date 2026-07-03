@@ -11,8 +11,15 @@
 > Part 3/5 因 LLM 瞬時逾時走 fallback digest，正確標 `digest_degraded: true` 且未進
 > facet index（Part 1/2/4/6 正常索引 6 facets）。追加 hardening：gemma 又出現
 > `**總體評定：**` 判定變體 → parser 已泛化（6e6883d）。
-> 其餘：P2（source_prep 行號表格）、P3.3–3.6、P4、P5 未動工——重跑輸出中行號假表格
-> 仍在（預期內，P2 未做）。
+> **P2 + P4 已完成（0e0448d，2026-07-03）**，離線 E2E 驗證：
+> P2 `flatten_linenumber_tables` 對真實 cloud_act.md 攤平 27 張表（671→0 表格列，
+> 冪等，斷字經 doc 詞彙表重組）；P4 lint 對修復前的 cloud_act 舊產出抓到全部人工
+> 審查發現的污染（零寬字元 ×3、泰文 `訴ทาง訴訟`、`第 312 條`），數字保真在加上
+> 跨 chunk margin 後零誤報。warning_* 進 `quality_warnings` frontmatter 並標
+> `#NeedsReview`。**daemon 尚未載入 P2/P4 碼**——下次重啟後生效；屆時重跑 cloud_act
+> 應見 Part 內文再無行號假表格。
+> 其餘：P3.3–3.6（mermaid math degrade 擴展、quoted-label canonical 化、驗證器產品化）、
+> P5（模板與閱讀效率）未動工。
 
 ---
 
