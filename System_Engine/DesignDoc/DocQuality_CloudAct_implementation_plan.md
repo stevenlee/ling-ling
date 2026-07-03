@@ -18,6 +18,12 @@
 > 跨 chunk margin 後零誤報。warning_* 進 `quality_warnings` frontmatter 並標
 > `#NeedsReview`。**daemon 尚未載入 P2/P4 碼**——下次重啟後生效；屆時重跑 cloud_act
 > 應見 Part 內文再無行號假表格。
+> **第二輪線上驗證（2026-07-03 晚，3784c48）**：daemon 載入 P2/P4 後完整重跑 cloud_act
+> ——攤平 27 表（52235→32530 chars、6→4 parts）、輸出 0 假表格、verdict `revise` 成功
+> 解析並觸發 retry、number lint 抓到真實的「第 252 3 條」拆分（Part 2 正確標
+> #NeedsReview）。同輪揪出並修掉三個新形態：孤立開頭閉合 fence（奇偶反轉）、mermaid
+> style 行全形＃（`stroke ＃dc3545`）、數字保真改比對全文件（chunk 級誤報語境沿用）。
+> 已發佈檔案以新 pass 補丁：0/34 mermaid parse fail。
 > 其餘：P3.3–3.6（mermaid math degrade 擴展、quoted-label canonical 化、驗證器產品化）、
 > P5（模板與閱讀效率）未動工。
 
