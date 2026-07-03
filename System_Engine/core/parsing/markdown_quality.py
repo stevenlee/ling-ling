@@ -22,6 +22,7 @@ from core.parsing.mermaid_repair import (
     repair_mermaid_fences,
     repair_mermaid_label_quotes,
     repair_mermaid_latex_labels,
+    repair_mermaid_style_hash,
     repair_mermaid_mindmap_brackets,
     repair_mermaid_mindmap_labels,
     repair_mermaid_mindmap_math,
@@ -31,6 +32,40 @@ from core.parsing.mermaid_repair import (
     repair_mermaid_quoted_node_ids,
     repair_mermaid_subgraph_keyword,
 )
+
+
+# ─── Orphan leading fence ──────────────────────────────────────────────
+
+
+def strip_orphan_leading_fence(text: str) -> tuple[str, list[dict]]:
+    """Drop a bare ``` that opens the body with nothing it could close.
+
+    Models sometimes wrap ONLY their frontmatter in a ```markdown fence; the
+    YAML parse consumes the opener and the stray closer survives as the first
+    body line. Every fence after it then has inverted parity — mermaid blocks
+    render as literal text and fence-aware scans (number fidelity) read
+    fenced lines as prose (observed live: cloud_act Part 2 re-run).
+
+    Only removed when the next fence line carries a language tag (```mermaid)
+    — a bare ``` pairing with another bare ``` is a legitimate code block."""
+    if not text:
+        return text, []
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped != "```":
+            return text, []
+        for later in lines[i + 1 :]:
+            t = later.strip()
+            if t.startswith("```"):
+                if t == "```":
+                    return text, []  # pairs up — legitimate leading code block
+                break
+        del lines[i]
+        return "\n".join(lines), [_make_fix("stripped_orphan_leading_fence", line=i + 1)]
+    return text, []
 
 
 # ─── Corruption lint (DocQuality P4) ───────────────────────────────────
@@ -95,6 +130,10 @@ def flag_foreign_scripts(text: str) -> tuple[str, list[dict]]:
 
 
 _NUM_TOKEN_RE = re.compile(r"\d+")
+# Hex color literals (`#28a745`, corrupted `＃dc3545`) — their digit runs are
+# not content numbers; stripped before token extraction as a second line of
+# defence should a style line ever escape the fence tracking.
+_HEX_COLOR_RE = re.compile(r"[#＃][0-9a-fA-F]{3,8}\b")
 _MONTH_NUM = {
     month: str(n)
     for n, month in enumerate(
@@ -129,6 +168,7 @@ def check_translation_number_fidelity(body: str, source: str) -> list[dict]:
             continue
         if in_fence or "[[" in line:
             continue
+        line = _HEX_COLOR_RE.sub("", line)
         for tok in _NUM_TOKEN_RE.findall(line.replace(",", "")):
             canon = tok.lstrip("0") or "0"
             if len(canon) < 2 or canon in source_nums or canon in seen:
@@ -466,6 +506,7 @@ def run_markdown_quality_checks(
         pipeline.append(strip_body_frontmatter)
     pipeline.extend(
         [
+            strip_orphan_leading_fence,
             strip_zero_width_chars,
             flag_foreign_scripts,
             repair_latex_carriage_returns,
@@ -485,6 +526,7 @@ def run_markdown_quality_checks(
             repair_mermaid_block_arrows,
             repair_mermaid_classdiagram,
             repair_mermaid_latex_labels,
+            repair_mermaid_style_hash,
             repair_markdown_tables,
             repair_markdown_bold_spacing,
         ]

@@ -309,11 +309,11 @@ class IngestionPipeline:
             )
             # DocQuality P4: warning_* entries are observations, not applied
             # fixes — route them to quality_warnings. Translations addition-
-            # ally get the number-fidelity diff against their source chunk
-            # (catches 1180-days-for-180 style digit corruption).
+            # ally get the number-fidelity diff against the whole source
+            # document (catches 1180-days-for-180 style digit corruption).
             quality_fixes, quality_warnings = self._split_quality_warnings(quality_fixes)
             if page_type == "translation":
-                fidelity_source = raw_content + " " + (part_info or {}).get("fidelity_margin", "")
+                fidelity_source = (part_info or {}).get("fidelity_source") or raw_content
                 quality_warnings.extend(check_translation_number_fidelity(body, fidelity_source))
             body += self._build_navigation(base_title, part_info)
 
@@ -486,6 +486,7 @@ class IngestionPipeline:
     ) -> PartState:
         state = PartState()
         total = len(chunks)
+        full_source = "\n".join(chunks)
 
         for i, chunk in enumerate(chunks):
             # B1 resume: if this part's note is already complete (digest appendix
@@ -523,14 +524,12 @@ class IngestionPipeline:
                 "defer_index": True,
                 "source_span": source_spans[i],
                 "index_content": index_content,
-                # Number-fidelity margin: translators bleed a little context
-                # across chunk boundaries (「承接前文」 recaps), so numbers
-                # from the neighbouring chunks' edges are not corruption.
-                "fidelity_margin": (
-                    (chunks[i - 1][-2000:] if i > 0 else "")
-                    + " "
-                    + (chunks[i + 1][:500] if i + 1 < total else "")
-                ),
+                # Number fidelity compares against the WHOLE document, not
+                # just this chunk: translators legitimately carry context
+                # across chunk boundaries (「承接前文」 recaps, 「第 18 編」
+                # from the running statute) — only numbers absent from the
+                # entire source are corruption.
+                "fidelity_source": full_source,
                 # Optional metadata from ThoughtfulSplitter (empty under legacy splitter):
                 "section_path": chunk_meta.get("section_path") or [],
                 "boundary_type": chunk_meta.get("boundary_type") or "",

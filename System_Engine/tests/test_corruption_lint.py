@@ -100,6 +100,81 @@ class TestNumberFidelity:
         assert len(warnings) == 1
 
 
+class TestNumberFidelityHexColors:
+    def test_hex_color_digits_not_flagged_even_outside_fence(self):
+        # Second re-run regression: an orphan leading fence inverted parity,
+        # so mermaid style lines were scanned as prose and their hex colors
+        # (#28a745, corrupted ＃dc3545) flagged as numbers. Hex literals are
+        # stripped before token extraction regardless of fence state.
+        body = "style K fill:#f8d7da,stroke ＃dc3545,stroke-width:2px\nstyle J fill:#d4edda,stroke:#28a745"
+        assert check_translation_number_fidelity(body, "source with 180 days") == []
+
+
+class TestOrphanLeadingFence:
+    def test_orphan_closer_before_tagged_fence_removed(self):
+        # Second re-run regression (cloud_act Part 2): the model fenced only
+        # its frontmatter; the stray closer survived as the first body line
+        # and inverted every later fence's parity.
+        from core.parsing.markdown_quality import strip_orphan_leading_fence
+
+        body = "```\n\n# 標題\n\n```mermaid\ngraph TD\n    A --> B\n```\n"
+        cleaned, fixes = strip_orphan_leading_fence(body)
+        assert not cleaned.startswith("```")
+        assert "```mermaid" in cleaned
+        assert fixes[0]["type"] == "stripped_orphan_leading_fence"
+
+    def test_legitimate_leading_code_block_kept(self):
+        from core.parsing.markdown_quality import strip_orphan_leading_fence
+
+        body = "```\nplain code block\n```\n\nprose after\n"
+        cleaned, fixes = strip_orphan_leading_fence(body)
+        assert cleaned == body
+        assert fixes == []
+
+    def test_pipeline_restores_fence_parity(self):
+        body = "```\n\n# 標題\n\n```mermaid\ngraph TD\n    A --> B\n```\n"
+        cleaned, fixes = run_markdown_quality_checks(body)
+        assert cleaned.count("```") % 2 == 0
+        assert any(f["type"] == "stripped_orphan_leading_fence" for f in fixes)
+
+
+class TestMermaidStyleHash:
+    def test_fullwidth_hash_and_missing_colon_repaired(self):
+        # Verbatim from the cloud_act second re-run (2/34 parse failures).
+        from core.parsing.mermaid_repair import repair_mermaid_style_hash
+
+        text = (
+            "```mermaid\n"
+            "graph TD\n"
+            '    K["節點"]\n'
+            "    style K fill:#f8d7da,stroke ＃dc3545,stroke-width:2px\n"
+            "```"
+        )
+        fixed, fixes = repair_mermaid_style_hash(text)
+        assert "stroke:#dc3545" in fixed
+        assert "＃" not in fixed
+        assert fixes[0]["type"] == "repaired_mermaid_style_hash"
+
+    def test_fullwidth_hash_outside_fence_untouched(self):
+        from core.parsing.mermaid_repair import repair_mermaid_style_hash
+
+        text = "散文提到全形井號 ＃hashtag 不該被改。"
+        fixed, fixes = repair_mermaid_style_hash(text)
+        assert fixed == text
+        assert fixes == []
+
+    def test_in_default_pipeline(self):
+        text = (
+            "```mermaid\n"
+            "graph TD\n"
+            '    K["節點"]\n'
+            "    style K fill:#f8d7da,stroke ＃dc3545,stroke-width:2px\n"
+            "```"
+        )
+        cleaned, fixes = run_markdown_quality_checks(text)
+        assert "stroke:#dc3545" in cleaned
+
+
 class TestWarningRouting:
     def test_split_quality_warnings(self):
         fixes = [

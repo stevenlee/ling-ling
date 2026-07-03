@@ -1722,6 +1722,50 @@ def repair_mermaid_latex_labels(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+# ─── Mermaid: corrupted style-line hash ───────────────────────────────
+
+# `style K fill:#f8d7da,stroke ＃dc3545` — the LLM corrupts a style
+# property's `:#` into a fullwidth hash U+FF03 (usually eating the colon
+# too), a mermaid lexical error (observed live: cloud_act Part 2 re-run).
+_STYLE_PROP_MISSING_COLON_RE = re.compile(r"\b(fill|stroke|color|background(?:-color)?)\s+#")
+
+
+def repair_mermaid_style_hash(text: str) -> tuple[str, list[dict]]:
+    """Inside mermaid fences: fullwidth ＃ → #, and restore the missing colon
+    in `stroke #...`-style property assignments. ＃ is never legitimate in
+    mermaid source, so the replacement is unconditional within a fence."""
+    if not text or "＃" not in text and not _STYLE_PROP_MISSING_COLON_RE.search(text):
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+        elif in_mermaid and stripped == "```":
+            in_mermaid = False
+        elif in_mermaid:
+            new_line = line.replace("＃", "#")
+            new_line = _STYLE_PROP_MISSING_COLON_RE.sub(r"\1:#", new_line)
+            if new_line != line:
+                fixes.append(
+                    _make_fix(
+                        "repaired_mermaid_style_hash",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
+                out.append(new_line)
+                continue
+        out.append(line)
+
+    return "\n".join(out), fixes
+
+
 # ─── Mermaid: fence repair ────────────────────────────────────────────
 
 _FENCE_RE = re.compile(r"^```(\w*)\s*$")
