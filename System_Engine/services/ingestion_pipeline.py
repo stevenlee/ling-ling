@@ -30,6 +30,7 @@ from core.config import (
     SCRIPTURE_DIR,
 )
 from core.parser import (
+    check_translation_number_fidelity,
     dump_markdown_with_metadata,
     parse_markdown_metadata,
     run_markdown_quality_checks,
@@ -94,15 +95,22 @@ class IngestionPipeline:
     def ingest_markdown(self, content: str, source_filepath: Path):
         # Source pre-passes (in-memory, never edits the source file):
         #   0c strip_boilerplate — drop Gutenberg license/TOC.
+        #   0d flatten_linenumber_tables — OCR page-line-number tables → prose.
         #   0b normalize_structure — promote plain-text chapter cues to markdown
         #      headings, but only for docs that lack markdown structure.
-        from services.source_prep import strip_boilerplate, normalize_structure
+        from services.source_prep import (
+            flatten_linenumber_tables,
+            normalize_structure,
+            strip_boilerplate,
+        )
 
         content, _stripped = strip_boilerplate(content)
+        content, _flattened = flatten_linenumber_tables(content)
         content, _normed = normalize_structure(content)
-        if _stripped or _normed:
+        if _stripped or _flattened or _normed:
             logging.info(
-                f"Source prep on {source_filepath.name}: strip={_stripped} normalize={_normed}"
+                f"Source prep on {source_filepath.name}: strip={_stripped} "
+                f"flatten={_flattened} normalize={_normed}"
             )
         meta = parse_markdown_metadata(content)
         doc_config = self._resolve_routing(meta, content, source_filepath)
@@ -299,9 +307,20 @@ class IngestionPipeline:
                 llm_result.get("content", ""),
                 strip_frontmatter=True,
             )
+            # DocQuality P4: warning_* entries are observations, not applied
+            # fixes — route them to quality_warnings. Translations addition-
+            # ally get the number-fidelity diff against their source chunk
+            # (catches 1180-days-for-180 style digit corruption).
+            quality_fixes, quality_warnings = self._split_quality_warnings(quality_fixes)
+            if page_type == "translation":
+                fidelity_source = raw_content + " " + (part_info or {}).get("fidelity_margin", "")
+                quality_warnings.extend(check_translation_number_fidelity(body, fidelity_source))
             body += self._build_navigation(base_title, part_info)
 
             wiki_meta = self._build_part_metadata(title, page_type, tags, part_info, quality_fixes)
+            if quality_warnings:
+                wiki_meta["quality_warnings"] = quality_warnings
+                wiki_meta["status"] = "#NeedsReview"
             wiki_meta.update(self._template_stamp(template_used))
             self._attach_trace_metadata(wiki_meta)
             wiki_markdown = dump_markdown_with_metadata(wiki_meta, body)
@@ -504,6 +523,14 @@ class IngestionPipeline:
                 "defer_index": True,
                 "source_span": source_spans[i],
                 "index_content": index_content,
+                # Number-fidelity margin: translators bleed a little context
+                # across chunk boundaries (「承接前文」 recaps), so numbers
+                # from the neighbouring chunks' edges are not corruption.
+                "fidelity_margin": (
+                    (chunks[i - 1][-2000:] if i > 0 else "")
+                    + " "
+                    + (chunks[i + 1][:500] if i + 1 < total else "")
+                ),
                 # Optional metadata from ThoughtfulSplitter (empty under legacy splitter):
                 "section_path": chunk_meta.get("section_path") or [],
                 "boundary_type": chunk_meta.get("boundary_type") or "",
@@ -681,8 +708,11 @@ class IngestionPipeline:
         }
         final_meta.update(self._template_stamp(syn_template))
         combined_fixes = self._dedupe_quality_fixes((synthesis_fixes or []) + (final_fixes or []))
+        combined_fixes, syn_warnings = self._split_quality_warnings(combined_fixes)
         if combined_fixes:
             final_meta["quality_fixes"] = combined_fixes
+        if syn_warnings:
+            final_meta["quality_warnings"] = syn_warnings
         if effective_verdict:
             final_meta["quality_verdict"] = effective_verdict
         if SYNTHESIS_CRITIQUE_ENABLED:
@@ -759,6 +789,16 @@ class IngestionPipeline:
             seen.add(key)
             out.append(fix)
         return out
+
+    @staticmethod
+    def _split_quality_warnings(fixes: list) -> tuple[list, list]:
+        """Separate `warning_*` observations (nothing was changed) from
+        applied fixes, so frontmatter doesn't present them as repairs."""
+
+        def is_warning(f) -> bool:
+            return isinstance(f, dict) and str(f.get("type", "")).startswith("warning_")
+
+        return [f for f in fixes if not is_warning(f)], [f for f in fixes if is_warning(f)]
 
     # ── Digest formatting (logic: services/ingest/digest_format.py) ──
 
@@ -977,8 +1017,11 @@ class IngestionPipeline:
             "---\n\n" + "\n".join(f"{section}\n" for section in sections)
         )
         body, quality_fixes = run_markdown_quality_checks(body)
+        quality_fixes, quality_warnings = self._split_quality_warnings(quality_fixes)
         if quality_fixes:
             metadata["quality_fixes"] = quality_fixes
+        if quality_warnings:
+            metadata["quality_warnings"] = quality_warnings
         self._attach_trace_metadata(metadata)
 
         stitched_file = PAGES_DIR / base_title / f"{base_title} (Stitched).md"

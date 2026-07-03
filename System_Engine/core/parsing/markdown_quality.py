@@ -33,6 +33,113 @@ from core.parsing.mermaid_repair import (
 )
 
 
+# ─── Corruption lint (DocQuality P4) ───────────────────────────────────
+
+_ZERO_WIDTH_RE = re.compile("[​‌‍﻿]")
+
+# Scripts that never legitimately appear in this system's zh/en output —
+# an isolated run inside generated text is LLM token corruption (observed
+# live: 「訴ทาง訴訟」, Thai inside a legal translation).
+_FOREIGN_SCRIPT_RE = re.compile(
+    "["
+    "฀-๿"  # Thai
+    "Ѐ-ӿ"  # Cyrillic
+    "؀-ۿ"  # Arabic
+    "ऀ-ॿ"  # Devanagari
+    "가-힯"  # Hangul syllables
+    "]+"
+)
+# Above this share of body characters, the foreign script is the document's
+# subject (e.g. a translation OF Russian text), not corruption — stay quiet.
+_FOREIGN_SCRIPT_INTENTIONAL_RATIO = 0.02
+_MAX_WARNINGS = 20
+
+
+def strip_zero_width_chars(text: str) -> tuple[str, list[dict]]:
+    """Remove zero-width characters (U+200B/200C/200D/FEFF) — invisible LLM
+    corruption that survives copy-paste and breaks string matching (observed
+    live: 「法​法案」, a U+200B inside the statute name)."""
+    if not text:
+        return text, []
+    cleaned, n = _ZERO_WIDTH_RE.subn("", text)
+    if not n:
+        return text, []
+    first = next(
+        (i + 1 for i, line in enumerate(text.split("\n")) if _ZERO_WIDTH_RE.search(line)), 1
+    )
+    return cleaned, [_make_fix("stripped_zero_width_chars", line=first, before=f"{n} char(s)")]
+
+
+def flag_foreign_scripts(text: str) -> tuple[str, list[dict]]:
+    """WARNING-only pass: report isolated foreign-script runs (Thai, Cyrillic,
+    Arabic, Devanagari, Hangul) inside the text. Never modifies the text — a
+    human decides; the pipeline routes `warning_*` entries to
+    `quality_warnings` frontmatter instead of `quality_fixes`."""
+    if not text:
+        return text, []
+    runs = _FOREIGN_SCRIPT_RE.findall(text)
+    if not runs:
+        return text, []
+    if sum(len(r) for r in runs) / len(text) > _FOREIGN_SCRIPT_INTENTIONAL_RATIO:
+        return text, []  # substantial presence — the document is about that language
+    warnings: list[dict] = []
+    for i, line in enumerate(text.split("\n"), 1):
+        m = _FOREIGN_SCRIPT_RE.search(line)
+        if not m:
+            continue
+        lo, hi = max(0, m.start() - 12), min(len(line), m.end() + 12)
+        warnings.append(_make_fix("warning_foreign_script", line=i, before=line[lo:hi].strip()))
+        if len(warnings) >= _MAX_WARNINGS:
+            break
+    return text, warnings
+
+
+_NUM_TOKEN_RE = re.compile(r"\d+")
+_MONTH_NUM = {
+    month: str(n)
+    for n, month in enumerate(
+        "january february march april may june july august september october november december".split(),
+        start=1,
+    )
+}
+
+
+def check_translation_number_fidelity(body: str, source: str) -> list[dict]:
+    """WARNING-only: numbers in a translation that do not exist in its source.
+
+    Catches digit corruption the eye skips over — 「1180 天」 for 180 days,
+    「19 78 年」, 「第 312 條」 for §3124 (all observed live on cloud_act).
+    Tolerated: fenced code (mermaid coordinates), wikilink lines (Part
+    numbering), single-digit tokens (enumerators), and English month names
+    that legitimately become month numbers (November 23 → 11 月 23 日).
+    """
+    if not body or not source:
+        return []
+    src_tokens = _NUM_TOKEN_RE.findall(source.replace(",", ""))
+    source_nums = {tok.lstrip("0") or "0" for tok in src_tokens}
+    lowered = source.lower()
+    source_nums |= {num for month, num in _MONTH_NUM.items() if month in lowered}
+
+    warnings: list[dict] = []
+    seen: set[str] = set()
+    in_fence = False
+    for i, line in enumerate(body.split("\n"), 1):
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or "[[" in line:
+            continue
+        for tok in _NUM_TOKEN_RE.findall(line.replace(",", "")):
+            canon = tok.lstrip("0") or "0"
+            if len(canon) < 2 or canon in source_nums or canon in seen:
+                continue
+            seen.add(canon)
+            warnings.append(_make_fix("warning_number_not_in_source", line=i, before=tok))
+            if len(warnings) >= _MAX_WARNINGS:
+                return warnings
+    return warnings
+
+
 # ─── Misc cleanup ──────────────────────────────────────────────────────
 
 
@@ -359,6 +466,8 @@ def run_markdown_quality_checks(
         pipeline.append(strip_body_frontmatter)
     pipeline.extend(
         [
+            strip_zero_width_chars,
+            flag_foreign_scripts,
             repair_latex_carriage_returns,
             repair_latex_escape_collisions,
             repair_unclosed_latex_display,
