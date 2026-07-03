@@ -26,6 +26,7 @@ from core.parsing.markdown_metadata import (  # noqa: F401
 from core.parsing.markdown_quality import (  # noqa: F401
     check_translation_number_fidelity,
     clean_llm_response,
+    demote_body_h1,
     flag_foreign_scripts,
     repair_markdown_bold_spacing,
     repair_markdown_tables,

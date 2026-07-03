@@ -31,6 +31,7 @@ from core.config import (
 )
 from core.parser import (
     check_translation_number_fidelity,
+    demote_body_h1,
     dump_markdown_with_metadata,
     parse_markdown_metadata,
     run_markdown_quality_checks,
@@ -323,7 +324,7 @@ class IngestionPipeline:
                 wiki_meta["status"] = "#NeedsReview"
             wiki_meta.update(self._template_stamp(template_used))
             self._attach_trace_metadata(wiki_meta)
-            wiki_markdown = dump_markdown_with_metadata(wiki_meta, body)
+            wiki_markdown = dump_markdown_with_metadata(self._frontmatter_meta(wiki_meta), body)
 
             stage = "write"
             page_folder = PAGES_DIR / base_title
@@ -611,6 +612,11 @@ class IngestionPipeline:
         )
         synthesis_text = outcome["text"]
         synthesis_fixes = outcome["fixes"]
+        # The synthesis body sits under the shell's page-title H1, so any H1 the
+        # model authored (against the template) inverts the hierarchy — demote
+        # it to H2 (DocQuality P5.1). The shell's own title is added below.
+        synthesis_text, h1_fixes = demote_body_h1(synthesis_text)
+        synthesis_fixes = (synthesis_fixes or []) + h1_fixes
         critique_section = outcome["section"]
         critique_verdict = outcome["verdict"]
 
@@ -724,7 +730,8 @@ class IngestionPipeline:
         entity_dir.mkdir(parents=True, exist_ok=True)
         synthesis_file = entity_dir / f"{base_title} (Synthesis).md"
         synthesis_file.write_text(
-            dump_markdown_with_metadata(final_meta, final_content), encoding="utf-8"
+            dump_markdown_with_metadata(self._frontmatter_meta(final_meta), final_content),
+            encoding="utf-8",
         )
         self._record_artifact(
             synthesis_file,
@@ -969,11 +976,17 @@ class IngestionPipeline:
             return None
 
         sections: list[str] = []
+        glossary_rows: list[tuple[str, str, str]] = []
         for index, part_path in enumerate(readable_parts, 1):
             # Read the file once and reuse it for both metadata + body extraction.
             content = part_path.read_text(encoding="utf-8")
             part_meta = parse_markdown_metadata(content)
             body = self._extract_stitchable_body(content)
+            # Pull each part's glossary out — six near-identical per-part tables
+            # merge into one deduped table at the foot of the stitched doc
+            # (DocQuality P5.4).
+            body, rows = self._split_glossary_section(body)
+            glossary_rows.extend(rows)
             if not body:
                 continue
 
@@ -1015,6 +1028,9 @@ class IngestionPipeline:
             f"- [[{base_title}|查看完整原始檔 (Original)]]\n\n"
             "---\n\n" + "\n".join(f"{section}\n" for section in sections)
         )
+        merged_glossary = self._merge_glossary(glossary_rows)
+        if merged_glossary:
+            body += f"\n---\n\n{merged_glossary}"
         body, quality_fixes = run_markdown_quality_checks(body)
         quality_fixes, quality_warnings = self._split_quality_warnings(quality_fixes)
         if quality_fixes:
@@ -1025,7 +1041,7 @@ class IngestionPipeline:
 
         stitched_file = PAGES_DIR / base_title / f"{base_title} (Stitched).md"
         stitched_file.parent.mkdir(parents=True, exist_ok=True)
-        stitched_markdown = dump_markdown_with_metadata(metadata, body)
+        stitched_markdown = dump_markdown_with_metadata(self._frontmatter_meta(metadata), body)
         stitched_file.write_text(stitched_markdown, encoding="utf-8")
         self._record_artifact(stitched_file, "stitched_article", metadata["title"], metadata)
 
@@ -1063,6 +1079,96 @@ class IngestionPipeline:
             return ""
         return "\n".join(lines) + "\n\n"
 
+    # Glossary section heading (any `#` depth): 詞彙/術語/Glossary/Key Terms.
+    _GLOSSARY_HEADING_RE = re.compile(
+        r"^#{1,6}\s+.*(?:詞彙|術語|glossary|key terms).*$", re.IGNORECASE
+    )
+    _TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
+    _TABLE_SEP_CELL_RE = re.compile(r"^\s*:?-{2,}:?\s*$")
+
+    @classmethod
+    def _split_glossary_section(cls, body: str) -> tuple[str, list[tuple[str, str, str]]]:
+        """Remove a glossary section (heading + its markdown table) from a part
+        body and return ``(body_without_glossary, data_rows)``.
+
+        Rows are ``(term, translation, note)`` triples; header and separator
+        rows are dropped. A part with no glossary returns the body unchanged and
+        an empty list."""
+        lines = body.split("\n")
+        out: list[str] = []
+        rows: list[tuple[str, str, str]] = []
+        i = 0
+        n = len(lines)
+        while i < n:
+            if cls._GLOSSARY_HEADING_RE.match(lines[i].strip()):
+                # Skip the heading and any blank lines, then consume the table.
+                j = i + 1
+                while j < n and not lines[j].strip():
+                    j += 1
+                k = j
+                table: list[str] = []
+                while k < n and cls._TABLE_ROW_RE.match(lines[k]):
+                    table.append(lines[k])
+                    k += 1
+                if table:
+                    rows.extend(cls._parse_glossary_rows(table))
+                    # Drop the heading + table; resume after the table.
+                    i = k
+                    # Also swallow a single trailing blank so we don't leave a gap.
+                    if i < n and not lines[i].strip():
+                        i += 1
+                    continue
+            out.append(lines[i])
+            i += 1
+        return "\n".join(out).strip(), rows
+
+    @classmethod
+    def _parse_glossary_rows(cls, table: list[str]) -> list[tuple[str, str, str]]:
+        rows: list[tuple[str, str, str]] = []
+        for line in table:
+            m = cls._TABLE_ROW_RE.match(line)
+            if not m:
+                continue
+            cells = [c.strip() for c in m.group(1).split("|")]
+            if all(cls._TABLE_SEP_CELL_RE.match(c) or c == "" for c in cells):
+                continue  # separator row
+            term = cells[0]
+            # Header row: first cell is a column label, not a term.
+            if re.search(r"英文|術語|term", term, re.IGNORECASE) and len(term) < 12:
+                continue
+            translation = cells[1] if len(cells) > 1 else ""
+            note = " ".join(cells[2:]).strip() if len(cells) > 2 else ""
+            if term:
+                rows.append((term, translation, note))
+        return rows
+
+    @staticmethod
+    def _merge_glossary(rows: list[tuple[str, str, str]]) -> str:
+        """One deduped glossary table, keyed by the (normalized) term. First
+        occurrence wins; the richest note across duplicates is kept."""
+        if not rows:
+            return ""
+        merged: dict[str, tuple[str, str, str]] = {}
+        for term, translation, note in rows:
+            key = re.sub(r"[*`\s]", "", term).lower()
+            if not key:
+                continue
+            if key not in merged:
+                merged[key] = (term, translation, note)
+            elif len(note) > len(merged[key][2]):
+                # Keep the first term/translation but upgrade to a fuller note.
+                kept = merged[key]
+                merged[key] = (kept[0], kept[1], note)
+        lines = [
+            "## 📖 詞彙與關鍵術語（全篇合併）",
+            "",
+            "| 英文術語 | 繁體中文翻譯 | 說明 |",
+            "| :--- | :--- | :--- |",
+        ]
+        for term, translation, note in merged.values():
+            lines.append(f"| {term} | {translation} | {note} |")
+        return "\n".join(lines)
+
     def _extract_stitchable_body(self, content_or_path) -> str:
         """Strip frontmatter, navigation, and digest appendix from a part note,
         but keep the per-part learning artifacts (comparison_table / mindmap /
@@ -1094,6 +1200,17 @@ class IngestionPipeline:
         content = self._demote_headings(content, levels=2)
         content, _ = run_markdown_quality_checks(content)
         return content.strip()
+
+    @staticmethod
+    def _frontmatter_meta(metadata: dict) -> dict:
+        """The on-disk frontmatter view: drop ``trace_ids`` (DocQuality P5.3).
+
+        The full per-run trace_id list is a 40+ line block of opaque hashes that
+        bloats every note a reader opens. It is fully recoverable from the trace
+        store (SQLite, indexed by ``run_id``) via the ``run_id`` we keep, so the
+        serialized frontmatter carries only the anchor. The in-memory ``metadata``
+        is untouched, so ``_record_artifact`` still links the artifact's trace."""
+        return {k: v for k, v in metadata.items() if k != "trace_ids"}
 
     def _attach_trace_metadata(self, metadata: dict) -> None:
         if hasattr(self.llm, "current_trace_ids"):

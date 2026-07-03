@@ -369,4 +369,26 @@ def maybe_artifact_section(
     except Exception as e:
         logging.warning(f"learning_artifacts: auto-attach failed: {e}")
         return ""
-    return "".join(f"## 🖼️ 學習輔助（{r['type']}）\n\n{r['artifact']}\n\n" for r in results)
+    return "".join(
+        f"## 🖼️ 學習輔助（{r['type']}）\n\n{_nest_artifact_headings(r['artifact'])}\n\n"
+        for r in results
+    )
+
+
+def _nest_artifact_headings(artifact: str) -> str:
+    """Demote an artifact's own leading ``## `` heading to ``### `` so it nests
+    under the ``## 🖼️ 學習輔助（type）`` wrapper instead of forming a second,
+    sibling H2 (observed live: argument_map's ``## 🧩 論證結構（Toulmin）`` sat
+    flush against the wrapper). Only acts when the body actually leads with an
+    H2 — mermaid/table artifacts have no heading and pass through untouched.
+    Fenced code is respected so a ``##`` inside a block is never shifted."""
+    if not artifact.lstrip().startswith("## "):
+        return artifact
+    lines = artifact.split("\n")
+    in_fence = False
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence and line.startswith("## "):
+            lines[i] = "#" + line  # `## X` → `### X`
+    return "\n".join(lines)

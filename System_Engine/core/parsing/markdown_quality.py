@@ -35,6 +35,40 @@ from core.parsing.mermaid_repair import (
 )
 
 
+# ─── Synthesis body heading demote (DocQuality P5.1) ───────────────────
+
+_H1_LINE_RE = re.compile(r"^# (?=\S)", re.MULTILINE)
+
+
+def demote_body_h1(text: str) -> tuple[str, list[dict]]:
+    """Demote every ``# `` (H1) heading in a body to ``## `` (H2).
+
+    Applied ONLY to the LLM-generated synthesis body, which is embedded under a
+    shell that already owns the single page-title H1 (``# ✨ … (Synthesis)``).
+    A model-authored H1 in that body (observed live: ``# CLOUD 法案…綜合報告``
+    inside the Executive Summary) inverts the heading hierarchy. Fences are
+    respected so a ``#`` comment inside a code block is never touched.
+
+    NOT a default-pipeline pass — the assembled page and part notes legitimately
+    lead with an H1, so this is called explicitly on the synthesis body only.
+    """
+    if not text or "# " not in text:
+        return text, []
+    lines = text.split("\n")
+    in_fence = False
+    demoted = 0
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if not in_fence and _H1_LINE_RE.match(line):
+            lines[i] = "#" + line  # `# X` → `## X`
+            demoted += 1
+    if not demoted:
+        return text, []
+    return "\n".join(lines), [_make_fix("demoted_body_h1", before=f"{demoted} heading(s)")]
+
+
 # ─── Orphan leading fence ──────────────────────────────────────────────
 
 

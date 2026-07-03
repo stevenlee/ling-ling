@@ -1,16 +1,13 @@
 ---
-version: 1
+version: 2
 description: Universal fallback document structure (default profile)
 ---
 
-# [Document Title]
-
-## Metadata
-- **Date:** [YYYY-MM-DD]
-- **Author:** [Name/Role]
-- **Status:** [e.g., Draft, Final, In-Review]
-- **Tags:** #tag1, #tag2, #tag3
-- **Context/Scope:** [Brief description of what this document covers]
+<!-- Start the body directly at the first `##` section below. Do NOT emit a
+top-level `#` title, and do NOT invent a metadata block (date, author, status,
+tags) — the note's title, tags, date and status are supplied automatically as
+frontmatter and page metadata. Producing them here duplicates or fabricates
+information. -->
 
 ## Executive Summary
 > [A high-level, concise overview of the document's purpose, key findings, or main objectives. This section should allow a reader to understand the essence of the document without reading the entire text.]
