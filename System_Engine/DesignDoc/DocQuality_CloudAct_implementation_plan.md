@@ -24,8 +24,16 @@
 > #NeedsReview）。同輪揪出並修掉三個新形態：孤立開頭閉合 fence（奇偶反轉）、mermaid
 > style 行全形＃（`stroke ＃dc3545`）、數字保真改比對全文件（chunk 級誤報語境沿用）。
 > 已發佈檔案以新 pass 補丁：0/34 mermaid parse fail。
-> 其餘：P3.3–3.6（mermaid math degrade 擴展、quoted-label canonical 化、驗證器產品化）、
-> P5（模板與閱讀效率）未動工。
+>
+> **P3.3–3.6 完成（ce9da52，2026-07-03）**：這四項都是「parse 過但渲染退化」，
+> `mermaid.parse` 抓不到，故以單元測試驗收。P3.3 `repair_mermaid_latex_labels`
+> 依 fence 種類分流——stateDiagram-v2/timeline 降級全行 math（含非引號的轉移標籤/
+> timeline 事件），KaTeX-capable 種類維持保留 `$$…$$`；P3.4 `_synthesize_node_id`
+> 純數字 slug 加 `n` 前綴；P3.5 `repair_mermaid_rect_rgb_quotes` 剝除 sequenceDiagram
+> `rect rgb("…")` 引號；P3.6 `scripts/validate_mermaid.mjs`＋`make validate-mermaid`
+> （node+jsdom+mermaid.parse，掃資料夾、失敗回非零，首次自動裝 deps）。已發佈 cloud_act
+> Synthesis 有 3 個 quoted rect-rgb 已補丁，validator 回報 0/34。
+> **Phase 3 全數完成**。其餘：P5（模板與閱讀效率）未動工。
 
 ---
 
