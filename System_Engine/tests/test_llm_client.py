@@ -181,6 +181,49 @@ class TestPartDigest:
         assert "(empty digest)" not in LLMClient.format_digest_for_prompt("x")
 
 
+class TestPartDigestFallback:
+    # Shape observed live on cloud_act Part 1: the old fallback shipped the
+    # section headings 「摘要」/「翻譯內文」 as key_points and pending_concepts
+    # as handoff.
+    _NOTE = (
+        "# 解析 CLOUD 法案：規範跨國數據存取與解決法律衝突之機制\n\n"
+        "## 摘要\n\n"
+        "本文件翻譯自《CLOUD Act》的第一部分。內容涵蓋了該法案的名稱與國會調查背景。\n\n"
+        "## 翻譯內文\n\n"
+        "# **第五部分—CLOUD 法案**\n\n"
+        "| 2 | 第 101 條：簡稱。 |\n"
+        "|---|---|\n\n"
+        "- 本部分可引述為《澄清海外使用數據合法性法案》，簡稱《CLOUD 法案》。\n"
+    )
+
+    def _fallback(self):
+        client = LLMClient.__new__(LLMClient)
+        return client._part_digest_fallback("cloud_act", 1, self._NOTE, "Concept A; Concept B")
+
+    def test_marks_degraded(self):
+        assert self._fallback()["degraded"] is True
+
+    def test_thesis_is_first_heading(self):
+        assert self._fallback()["thesis"].startswith("解析 CLOUD 法案")
+
+    def test_key_points_are_prose_not_scaffolding(self):
+        key_points = self._fallback()["key_points"]
+        assert any("翻譯自" in p for p in key_points)
+        for point in key_points:
+            assert point not in ("摘要", "翻譯內文")
+            assert not point.startswith("|")
+
+    def test_handoff_not_polluted_by_pending_concepts(self):
+        assert self._fallback()["handoff"] == ""
+
+    def test_empty_note_still_produces_thesis(self):
+        client = LLMClient.__new__(LLMClient)
+        digest = client._part_digest_fallback("doc", 2, "", "")
+        assert digest["thesis"] == "doc part 2"
+        assert digest["key_points"] == []
+        assert digest["degraded"] is True
+
+
 # ── Language hint ───────────────────────────────────────────────────
 
 

@@ -147,6 +147,17 @@ _CLASSDIAGRAM_STEREOTYPE_BODY_RE = re.compile(
     r'^(\s*)(?:class\s+)?([A-Za-z_]\w*)\s*(\["[^"\n]*"\]|\[[^\]\n]*\])?\s*\{\s*(<<[^<>]+>>)\s*\}\s*$'
 )
 
+# A standalone annotation line: `<<instance>> Id`. Mermaid v11 processes
+# statements in order and CRASHES ("Cannot read properties of undefined
+# (reading 'annotations')") when Id has not been created by the time this
+# line is reached — i.e. no `class Id` declaration and no earlier
+# relationship mentioning Id. The ontology generator emits exactly this
+# shape (`<<instance>> CLOUD_Act_Instance` with the relationship on the NEXT
+# line), so every such orphan needs a `class Id` declaration inserted above.
+_CLASSDIAGRAM_STANDALONE_STEREOTYPE_RE = re.compile(
+    r"^(\s*)<<[A-Za-z][^<>]*>>\s+([A-Za-z_]\w*)\s*$"
+)
+
 # A fullwidth period `．` (U+FF0E) the LLM injects into an ASCII class id —
 # `DreamBooth ..> ImageDiffusion．Model` — is a lexical error (mermaid ids are
 # `\w`). Removing it rejoins the token (`ImageDiffusionModel`), which matches
@@ -1490,6 +1501,31 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
     if hoisted:
         decls = [f'{indent}class {cid}["{label}"]' for cid, label in hoisted]
         out[header_idx + 1 : header_idx + 1] = decls
+
+    # Declare orphan annotation targets. `<<instance>> X` with no `class X`
+    # declaration crashes mermaid v11 unless an earlier relationship already
+    # created X; a redundant declaration is harmless, so insert one right
+    # above every standalone stereotype whose target is never declared.
+    declared = existing_ids | hoisted_ids
+    inserts: list[tuple[int, str]] = []
+    for i, ln in enumerate(out):
+        m = _CLASSDIAGRAM_STANDALONE_STEREOTYPE_RE.match(ln)
+        if not m or m.group(2) in declared:
+            continue
+        cid = m.group(2)
+        declared.add(cid)
+        decl_line = f"{m.group(1) or indent}class {cid}"
+        inserts.append((i, decl_line))
+        fixes.append(
+            _make_fix(
+                "declared_annotation_target",
+                line=base_line + i,
+                before=ln,
+                after=f"{decl_line}\n{ln}",
+            )
+        )
+    for i, decl_line in reversed(inserts):
+        out.insert(i, decl_line)
 
     return out, fixes
 

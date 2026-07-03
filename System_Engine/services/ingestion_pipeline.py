@@ -132,6 +132,10 @@ class IngestionPipeline:
         """
         if not isinstance(digest, dict):
             return []
+        # A degraded digest (fallback path) is scraped prose, not curated
+        # facets — indexing it poisons retrieval with scaffolding lines.
+        if digest.get("degraded"):
+            return []
         facets: list[str] = []
         thesis = digest_value_to_text(digest.get("thesis"))
         if thesis:
@@ -584,6 +588,44 @@ class IngestionPipeline:
         critique_section = outcome["section"]
         critique_verdict = outcome["verdict"]
 
+        # Verdict → publication status. Only a parsed "keep" earns
+        # #PerfectPitch; an explicit revise/reject — or a critique that ran
+        # but carried no parseable verdict — ships as #NeedsReview so a
+        # known-suspect synthesis stops masquerading as clean. When critique
+        # is disabled (no section) there is no signal either way.
+        if critique_verdict in ("revise", "reject") or (
+            critique_section and critique_verdict is None
+        ):
+            status_tag = "#NeedsReview"
+        else:
+            status_tag = "#PerfectPitch"
+        effective_verdict = critique_verdict or ("unparseable" if critique_section else None)
+
+        # Retry budget is spent by this point: a still-standing revise/reject
+        # must be visible where the reader starts, not buried in the critique
+        # appendix (the cloud_act failure mode: body said 1180 天, the
+        # appendix said that was wrong, nothing connected them).
+        warning_block = ""
+        if status_tag == "#NeedsReview":
+            verdict_key = effective_verdict or "unparseable"
+            verdict_zh = {
+                "revise": "修訂 (revise)",
+                "reject": "拒絕 (reject)",
+                "unparseable": "無法解析判定",
+            }.get(verdict_key, verdict_key)
+            findings = [
+                line.strip()
+                for line in critique_section.splitlines()
+                if "[critical]" in line or "[major]" in line
+            ][:3]
+            warning_lines = [
+                f"> [!warning] 🔔 品質警示（critique 判定：{verdict_zh}）",
+                "> 品質審查發現未解決的缺陷，本文可能含有事實錯誤；"
+                "請對照文末「🔍 Quality Critique」逐項核對後再引用。",
+            ]
+            warning_lines.extend(f"> {finding}" for finding in findings)
+            warning_block = "\n".join(warning_lines) + "\n\n"
+
         digest_appendix = self.format_digest_appendix(part_state.part_digests)
         master_tags = part_state.master_tags
         nav_block = "\n".join(part_state.navigation_items)
@@ -605,6 +647,7 @@ class IngestionPipeline:
         final_content = (
             f"# ✨ {base_title} (Synthesis)\n"
             f"---\n\n"
+            f"{warning_block}"
             f"## 📝 Executive Summary\n{synthesis_text}\n\n"
             f"{artifact_section}"
             f"## 📂 Navigation\n{nav_block}{syn_nav}\n\n"
@@ -616,7 +659,7 @@ class IngestionPipeline:
             f"- **Generated Content Size**: {part_state.total_output_chars} chars\n"
             f"- **Total Parts**: {len(chunks)}\n"
             f"- **Model**: {self.llm.model}\n"
-            f"- **Status**: #PerfectPitch\n"
+            f"- **Status**: {status_tag}\n"
         )
         final_content, final_fixes = run_markdown_quality_checks(final_content)
 
@@ -624,7 +667,7 @@ class IngestionPipeline:
             "title": f"{base_title} (Synthesis)",
             "type": "synthesis",
             "tags": master_tags or [],
-            "status": "#PerfectPitch",
+            "status": status_tag,
             "engine_build": BUILD_DATE,
             "date_completed": datetime.now().strftime("%Y-%m-%d"),
             "model": self.llm.model,
@@ -640,8 +683,8 @@ class IngestionPipeline:
         combined_fixes = self._dedupe_quality_fixes((synthesis_fixes or []) + (final_fixes or []))
         if combined_fixes:
             final_meta["quality_fixes"] = combined_fixes
-        if critique_verdict:
-            final_meta["quality_verdict"] = critique_verdict
+        if effective_verdict:
+            final_meta["quality_verdict"] = effective_verdict
         if SYNTHESIS_CRITIQUE_ENABLED:
             final_meta["critique_attempts"] = outcome["attempts"]
         if len(outcome["verdict_history"]) > 1:
@@ -659,7 +702,7 @@ class IngestionPipeline:
             "synthesis",
             f"{base_title} (Synthesis)",
             final_meta,
-            quality_verdict=critique_verdict,
+            quality_verdict=effective_verdict,
         )
 
         self.rag.add_document(synthesis_file, base_title, final_content, tags=final_meta["tags"])
@@ -817,6 +860,8 @@ class IngestionPipeline:
         doc.meta["pending_concepts"] = pending_concepts or ""
         if isinstance(digest, dict):
             doc.meta["part_digest"] = digest
+            if digest.get("degraded"):
+                doc.meta["digest_degraded"] = True
         if chunk is not None:
             doc.meta["part_chunk_hash"] = self._chunk_fingerprint(chunk)
         updated = doc.save()

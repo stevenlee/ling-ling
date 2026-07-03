@@ -694,18 +694,47 @@ class LLMClient:
     def _part_digest_fallback(
         self, title: str, part_number: int, part_note: str, pending_concepts: str
     ) -> dict:
-        cleaned = self._strip_accidental_frontmatter(part_note).strip().splitlines()
-        lines = [line.strip("#- * \t") for line in cleaned if line.strip()][:6]
+        """Degraded digest used when the structured digest call fails.
+
+        Only prose lines become thesis/key_points — headings, tables, and
+        fences are template scaffolding, and feeding them downstream poisons
+        both the facet index and the synthesis (observed live: cloud_act
+        Part 1 shipped key_points of 「摘要」/「翻譯內文」). The ``degraded``
+        flag lets the pipeline surface the failure and skip facet indexing;
+        handoff stays empty rather than masquerading pending_concepts as one.
+        """
+        first_heading = ""
+        prose: list[str] = []
+        for raw in self._strip_accidental_frontmatter(part_note).splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("#"):
+                if not first_heading:
+                    first_heading = line.lstrip("#").strip().strip("*").strip()
+                continue
+            if line.startswith(("|", "```", ">", "---", "![", "[[")):
+                continue
+            line = line.strip("-*• \t")
+            # Too short to be a content sentence: emoji section labels,
+            # separators, stray list markers.
+            if len(line) < 12:
+                continue
+            prose.append(line)
+            if len(prose) >= 5:
+                break
+        thesis = first_heading or (prose[0] if prose else f"{title} part {part_number}")
         return {
             "part": part_number,
             "title": f"Part {part_number}",
-            "thesis": lines[0] if lines else f"{title} part {part_number}",
-            "key_points": lines[1:5],
+            "thesis": thesis,
+            "key_points": [p for p in prose if p != thesis][:4],
             "evidence": [],
             "terms": [],
             "open_questions": [],
-            "handoff": pending_concepts or "",
+            "handoff": "",
             "highlights": [],
+            "degraded": True,
         }
 
     @staticmethod

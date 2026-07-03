@@ -21,8 +21,21 @@ CRITIQUE_HEADER = "## 🔍 Quality Critique"
 # often wraps the keyword in prose ("應修正 (revise)" — observed live on
 # gemma), so allow a short gap after the colon and take the first keyword on
 # the line. A negated revise ("不需修正") counts as keep.
+_VERDICT_HEADER = r"(?:Overall\s+Verdict|總體判定|整體判定|总体判定|整体判定|總體評價)"
+_VERDICT_KEYWORD = r"(keep|revise|reject|保留|修訂|修正|重做|拒絕)"
 _VERDICT_RE = re.compile(
-    r"(?im)^\**\s*Overall\s+Verdict\**\s*[:：][^\n]{0,40}?(keep|revise|reject|保留|修訂|修正|重做|拒絕)",
+    rf"(?im)^\**\s*{_VERDICT_HEADER}\**\s*[:：][^\n]{{0,40}}?{_VERDICT_KEYWORD}",
+)
+# Fully localized "verdict as its own section" shape (observed live on gemma
+# for cloud_act): the header is a markdown heading (or bold line) with the
+# keyword on the first following non-empty line, usually bold-wrapped and
+# doubled as "中文 (english)":
+#   ### 總體判定
+#
+#   **拒絕 (Reject)**。該文件包含兩項關鍵的事實錯誤...
+_VERDICT_SECTION_RE = re.compile(
+    rf"(?im)^(?:#{{1,6}}\s*|\**)\s*{_VERDICT_HEADER}\**\s*[:：]?\s*$"
+    rf"\s*^\**\s*[^\n]{{0,20}}?{_VERDICT_KEYWORD}",
 )
 _VERDICT_NEGATION_RE = re.compile(r"(不需|不必|無需|无需|毋須|毋须)\s*$")
 _VERDICT_NORMALISE = {
@@ -40,7 +53,7 @@ _VERDICT_RANK = {"keep": 2, "revise": 1, "reject": 0, None: -1}
 
 
 def parse_verdict(critique: str) -> str | None:
-    m = _VERDICT_RE.search(critique)
+    m = _VERDICT_RE.search(critique) or _VERDICT_SECTION_RE.search(critique)
     if not m:
         return None
     verdict = _VERDICT_NORMALISE.get(m.group(1).strip().lower())

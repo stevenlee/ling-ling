@@ -241,3 +241,11 @@ class TestPipelineFacetWiring:
         assert facets == ["Main argument.", "Point one is long enough."]
         assert IngestionPipeline._facets_from_digest("not a dict") == []
         assert IngestionPipeline._facets_from_digest(MagicMock()) == []
+
+    def test_degraded_digest_yields_no_facets(self):
+        digest = {
+            "degraded": True,
+            "thesis": "Scraped fallback line, long enough to pass filters.",
+            "key_points": ["Another scraped line that is long enough."],
+        }
+        assert IngestionPipeline._facets_from_digest(digest) == []

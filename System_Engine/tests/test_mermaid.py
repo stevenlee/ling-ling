@@ -1025,6 +1025,61 @@ class TestClassDiagramRepair:
         assert "．" not in result
         assert any(f["type"] == "stripped_fullwidth_id_period" for f in fixes)
 
+    def test_undeclared_stereotype_target_gets_declaration(self):
+        # Real regression (cloud_act: 5/40 mermaid blocks failed to parse):
+        # `<<instance>> X` where X was never declared crashes mermaid v11
+        # ("Cannot read properties of undefined (reading 'annotations')") —
+        # the relationship line that would auto-create X comes AFTER the
+        # annotation, and mermaid processes statements in order.
+        body = (
+            "classDiagram\n"
+            '    class CLOUDAct["CLOUD 法案"]\n'
+            "    <<instance>> CLOUD_Act_Instance\n"
+            "    CLOUD_Act_Instance ..> CLOUDAct : instance-of"
+        )
+        result, fixes = self._q(body)
+        lines = result.splitlines()
+        decl = lines.index("    class CLOUD_Act_Instance")
+        annot = lines.index("    <<instance>> CLOUD_Act_Instance")
+        assert decl == annot - 1  # declared immediately above the annotation
+        assert any(f["type"] == "declared_annotation_target" for f in fixes)
+
+    def test_declared_stereotype_target_untouched(self):
+        body = (
+            "classDiagram\n"
+            '    class Dog["狗"]\n'
+            "    class Fido\n"
+            "    <<instance>> Fido\n"
+            "    Fido ..> Dog : instance-of"
+        )
+        result, fixes = self._q(body)
+        assert result.count("class Fido") == 1
+        assert not any(f["type"] == "declared_annotation_target" for f in fixes)
+
+    def test_stereotype_declaration_insert_is_idempotent(self):
+        from core.parser import repair_mermaid_classdiagram
+
+        body = (
+            "classDiagram\n"
+            '    class A["甲"]\n'
+            "    <<instance>> Sample\n"
+            "    Sample ..> A : instance-of"
+        )
+        once, _ = self._q(body)
+        twice, fixes = repair_mermaid_classdiagram(once)
+        assert once == twice
+        assert fixes == []
+
+    def test_extracted_inline_stereotype_target_also_declared(self):
+        # The inline-body extraction (`Best { <<instance>> }` → standalone
+        # `<<instance>> Best`) used to emit an orphan annotation when the id
+        # had no label — the new pass must declare it too.
+        body = 'classDiagram\n    class A["甲"]\n    Best { <<instance>> }\n    Best ..> A : instance-of'
+        result, _ = self._q(body)
+        lines = [ln.strip() for ln in result.splitlines()]
+        assert "class Best" in lines
+        assert lines.index("class Best") == lines.index("<<instance>> Best") - 1
+
     def test_fullwidth_period_in_label_preserved(self):
         # `．` inside a quoted label or after `: ` (relationship-label text) is
         # content, not an id — leave it alone.

@@ -161,6 +161,145 @@ def test_parse_verdict_keyword_beyond_gap_is_none():
     assert IngestionPipeline._parse_verdict(f"**Overall Verdict**: {filler} revise") is None
 
 
+# ── verdict parsing: fully localized section shape (observed live) ───
+
+# Verbatim from the published cloud_act (Synthesis).md critique — gemma
+# localized the whole "Overall Verdict" section into a heading + bold line,
+# which the pre-fix parser missed (verdict=None → reject shipped as-is).
+_CLOUD_ACT_CRITIQUE = """### 缺陷清單
+
+- `[critical] 2.3 生效觀察期 → 錯誤地標註為「1180 天」，根據來源應為「180 天」 → 修正為「180 天」`
+
+### 總體判定
+
+**拒絕 (Reject)**。該文件包含兩項關鍵的事實錯誤（認證對象錯誤與生效天數錯誤），\
+這對於一份旨在解析法律框架的專業報告而言是致命的。"""
+
+
+def test_parse_verdict_zh_section_heading_reject():
+    assert IngestionPipeline._parse_verdict(_CLOUD_ACT_CRITIQUE) == "reject"
+
+
+def test_parse_verdict_zh_section_heading_keep():
+    assert (
+        IngestionPipeline._parse_verdict("### 總體判定\n\n**保留 (Keep)**。內容忠於來源。")
+        == "keep"
+    )
+
+
+def test_parse_verdict_zh_bold_header_same_line():
+    assert IngestionPipeline._parse_verdict("**總體判定**：應修正 (revise)。") == "revise"
+
+
+def test_parse_verdict_zh_section_negated_revise_is_keep():
+    assert (
+        IngestionPipeline._parse_verdict("### 總體判定\n\n**不需修正**，內容忠於來源。") == "keep"
+    )
+
+
+def test_parse_verdict_zh_heading_mentioned_mid_prose_is_none():
+    # A heading followed by prose whose keyword sits beyond the gap must not match.
+    filler = "這份文件整體而言相當完整，" * 4
+    assert IngestionPipeline._parse_verdict(f"### 總體判定\n\n{filler}建議修正。") is None
+
+
+# ── verdict → publication status (_write_synthesis) ──────────────────
+
+
+class _WriteStubLLM:
+    """Bare LLM stub: no trace_store / current_trace_ids, so the trace
+    branches in _write_synthesis are skipped."""
+
+    model = "stub-model"
+
+
+def _write_synthesis(tmp_path, monkeypatch, outcome):
+    from services.ingest.part_state import PartState
+
+    monkeypatch.setattr("services.ingestion_pipeline.PAGES_DIR", tmp_path / "pages")
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+    monkeypatch.setattr(
+        "services.learning_artifacts.maybe_artifact_section",
+        lambda *a, **k: "",
+    )
+
+    pipe = IngestionPipeline.__new__(IngestionPipeline)
+    pipe.llm = _WriteStubLLM()
+    pipe.rag = MagicMock()
+    pipe._synthesize_with_critique_retry = lambda *a, **k: outcome
+
+    path = pipe._write_synthesis(
+        base_title="Doc",
+        content="src content",
+        chunks=["c1"],
+        source_spans=[],
+        part_state=PartState(part_digests=[{"part": 1, "thesis": "t"}]),
+    )
+    return path.read_text(encoding="utf-8")
+
+
+def _outcome(verdict, section):
+    return {
+        "text": "synthesis body",
+        "fixes": [],
+        "section": section,
+        "verdict": verdict,
+        "attempts": 1,
+        "verdict_history": [verdict],
+    }
+
+
+_REJECT_SECTION = (
+    "## 🔍 Quality Critique\n\n"
+    "- `[critical] 生效觀察期 → 1180 天應為 180 天 → 修正`\n"
+    "- `[minor] 圖表 → 引號 → 修正`\n\n"
+    "### 總體判定\n\n**拒絕 (Reject)**。含關鍵事實錯誤。\n\n"
+)
+
+
+def test_reject_verdict_publishes_needs_review_with_warning(tmp_path, monkeypatch):
+    text = _write_synthesis(tmp_path, monkeypatch, _outcome("reject", _REJECT_SECTION))
+
+    assert "#NeedsReview" in text
+    assert "#PerfectPitch" not in text
+    assert "quality_verdict: reject" in text
+    # The warning callout sits before the Executive Summary and excerpts
+    # the critical finding; minor findings stay in the appendix only.
+    assert text.index("[!warning]") < text.index("## 📝 Executive Summary")
+    assert text.count("[critical] 生效觀察期") == 2  # callout + appendix
+    assert "[minor]" not in text.split("## 📝 Executive Summary")[0]
+
+
+def test_keep_verdict_publishes_perfect_pitch_without_warning(tmp_path, monkeypatch):
+    section = "## 🔍 Quality Critique\n\n**Overall Verdict**: keep. Clean.\n\n"
+    text = _write_synthesis(tmp_path, monkeypatch, _outcome("keep", section))
+
+    assert "#PerfectPitch" in text
+    assert "#NeedsReview" not in text
+    assert "quality_verdict: keep" in text
+    assert "[!warning]" not in text
+
+
+def test_unparseable_verdict_with_critique_text_needs_review(tmp_path, monkeypatch):
+    # The cloud_act failure mode: critique ran and found defects, but the
+    # verdict line was not parseable — must not ship as #PerfectPitch.
+    section = "## 🔍 Quality Critique\n\n- `[critical] 錯誤` 但沒有判定行\n\n"
+    text = _write_synthesis(tmp_path, monkeypatch, _outcome(None, section))
+
+    assert "#NeedsReview" in text
+    assert "quality_verdict: unparseable" in text
+    assert "[!warning]" in text
+
+
+def test_no_critique_section_keeps_perfect_pitch(tmp_path, monkeypatch):
+    # Critique disabled / failed silently: no signal either way.
+    text = _write_synthesis(tmp_path, monkeypatch, _outcome(None, ""))
+
+    assert "#PerfectPitch" in text
+    assert "quality_verdict" not in text
+    assert "[!warning]" not in text
+
+
 # ── generate_synthesis prompt: critique_feedback path ────────────────
 
 
