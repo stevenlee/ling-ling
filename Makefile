@@ -8,6 +8,10 @@
 #   make test       full suite
 #   make test-fast  skip tests marked slow
 #
+# Mermaid render check (opt-in — needs Node; targets the private vault):
+#   make validate-mermaid            check lings-desktop/pages
+#   make validate-mermaid MMD=path   check a specific file/dir
+#
 # Blog delivery:
 #   make blog   transform lings-desktop/Blog/ -> $(KAFU)/content/
 #
@@ -42,4 +46,11 @@ install-dev:
 blog:
 	$(PY)/python System_Engine/services/blog_transform.py --content $(KAFU)/content
 
-.PHONY: check lint format typecheck test test-fast install-dev blog
+# Parse every ```mermaid block with the real engine; exit non-zero on any
+# failure. Installs the Node deps into scripts/node_modules on first run.
+MMD ?= lings-desktop/pages
+validate-mermaid:
+	@[ -d scripts/node_modules/mermaid ] || (cd scripts && npm install --no-fund --no-audit)
+	node scripts/validate_mermaid.mjs $(MMD)
+
+.PHONY: check lint format typecheck test test-fast install-dev blog validate-mermaid

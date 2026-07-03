@@ -16,6 +16,8 @@ from core.parser import (
     repair_mermaid_label_quotes,
     repair_mermaid_latex_labels,
     repair_mermaid_quadrant_points,
+    repair_mermaid_quoted_endpoint_labels,
+    repair_mermaid_rect_rgb_quotes,
     run_markdown_quality_checks,
 )
 
@@ -1087,3 +1089,103 @@ class TestClassDiagramRepair:
         result, _ = self._q(body)
         assert '["版本 2．0"]' in result  # quoted-label period kept
         assert "A ..> BC : 見說明．補充" in result  # id period gone, label period kept
+
+
+# ── P3.3: math degrade for non-KaTeX diagram kinds ──────────────────
+
+
+class TestNonKatexMathDegrade:
+    """stateDiagram-v2 and timeline renderers do NOT support KaTeX — `$$…$$`
+    shows as literal text there, so ALL math (quoted AND bare transition/event
+    text) must be degraded to plain unicode. Fixtures are the shapes observed
+    live in the first cloud_act re-run."""
+
+    def _strip(self, body):
+        return repair_mermaid_latex_labels(f"```mermaid\n{body}\n```")
+
+    def test_state_quoted_label_math_degraded(self):
+        body = 'stateDiagram-v2\n    state "認證" as C {\n        X: "符合標準: $$\\text{Human Rights}$$"\n    }'
+        result, fixes = self._strip(body)
+        assert "$$" not in result
+        assert "Human Rights" in result
+        assert any(f["type"] == "degraded_mermaid_math" for f in fixes)
+
+    def test_state_bare_transition_math_degraded(self):
+        # Transition label math is NOT inside quotes — the old label-only pass
+        # missed it. `$$\Delta$$` → `Δ`, `$\S 2705$` → `2705` (command dropped).
+        body = "stateDiagram-v2\n    A --> B : 面臨衝突 $$\\Delta$$\n    C --> D : $\\S 2705$ 考量"
+        result, _ = self._strip(body)
+        assert "面臨衝突 Δ" in result
+        assert "$" not in result
+
+    def test_timeline_event_math_degraded(self):
+        body = "timeline\n    title T\n    E : 通過決議案 $$\\rightarrow$$ 協議不生效"
+        result, fixes = self._strip(body)
+        assert "通過決議案 → 協議不生效" in result
+        assert "$$" not in result
+        assert any(f["type"] == "degraded_mermaid_math" for f in fixes)
+
+    def test_flowchart_math_still_preserved(self):
+        # KaTeX-capable kinds keep their math — the degrade is kind-scoped.
+        body = r'graph LR\nA["速率 $$\alpha$$ 增長"]'
+        result, _ = self._strip(body)
+        assert r"$$\alpha$$" in result
+
+    def test_state_without_math_untouched(self):
+        text = "```mermaid\nstateDiagram-v2\n    [*] --> Active\n    Active --> [*]\n```"
+        result, fixes = repair_mermaid_latex_labels(text)
+        assert result == text
+        assert fixes == []
+
+
+# ── P3.4: pure-numeric synthesized id guard ─────────────────────────
+
+
+class TestSynthesizedIdNotNumeric:
+    def _q(self, body):
+        return repair_mermaid_quoted_endpoint_labels(f"```mermaid\n{body}\n```")
+
+    def test_all_digit_label_gets_alpha_prefix(self):
+        # `每 5 年定期審查` slugs to `5` (pure numeric) — a fragile mermaid id.
+        # Observed live: the first cloud_act run emitted `司法部長 --> 5[...]`.
+        body = 'graph TD\n    "司法部長" --> "每 5 年定期審查"'
+        result, _ = self._q(body)
+        assert 'n5["每 5 年定期審查"]' in result
+        assert " 5[" not in result  # never a bare numeric id
+
+    def test_non_numeric_label_unchanged_prefix(self):
+        body = 'graph TD\n    "Plan" --> "Ship it"'
+        result, _ = self._q(body)
+        assert "Ship" in result  # ascii slug retained, no spurious prefix
+        assert "nShip" not in result
+
+
+# ── P3.5: sequenceDiagram rect rgb quote strip ──────────────────────
+
+
+class TestRectRgbQuotes:
+    def _q(self, body):
+        return repair_mermaid_rect_rgb_quotes(f"```mermaid\n{body}\n```")
+
+    def test_quoted_rgb_stripped(self):
+        body = 'sequenceDiagram\n    rect rgb("240, 240, 240")\n        A->>B: hi\n    end'
+        result, fixes = self._q(body)
+        assert "rect rgb(240, 240, 240)" in result
+        assert '"' not in result.split("rect rgb")[1].split(")")[0]
+        assert any(f["type"] == "stripped_rect_rgb_quotes" for f in fixes)
+
+    def test_quoted_rgba_stripped(self):
+        body = "sequenceDiagram\n    rect rgba('230, 245, 255, 0.5')\n        A->>B: hi\n    end"
+        result, _ = self._q(body)
+        assert "rect rgba(230, 245, 255, 0.5)" in result
+
+    def test_unquoted_rgb_untouched(self):
+        text = "```mermaid\nsequenceDiagram\n    rect rgb(240, 240, 240)\n        A->>B: hi\n    end\n```"
+        result, fixes = repair_mermaid_rect_rgb_quotes(text)
+        assert result == text
+        assert fixes == []
+
+    def test_runs_in_default_pipeline(self):
+        text = '```mermaid\nsequenceDiagram\n    rect rgb("240, 240, 240")\n        A->>B: hi\n    end\n```'
+        cleaned, _ = run_markdown_quality_checks(text)
+        assert "rect rgb(240, 240, 240)" in cleaned

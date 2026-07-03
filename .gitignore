@@ -70,6 +70,10 @@ System_Engine/.cache/
 System_Engine/scratch/*
 !System_Engine/scratch/retrieval_bench.yml
 
+# Node dev tooling (scripts/validate_mermaid.mjs deps)
+scripts/node_modules/
+scripts/package-lock.json
+
 # Vault temporary / runtime contents
 lings-desktop/2026-05-15.md
 lings-desktop/Clippings/

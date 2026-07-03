@@ -741,6 +741,11 @@ def _synthesize_node_id(label: str, label_to_id: dict[str, str], used_ids: set[s
     if label in label_to_id:
         return label_to_id[label]
     slug = _MERMAID_ID_SLUG_RE.sub("", label)[:24] or "node"
+    # A pure-numeric slug (`"每 5 年審查"` → `5`) is a fragile node id — some
+    # mermaid contexts read a bare number as a value, not an identifier. Prefix
+    # it so the id is always alphabetic-led (`n5`).
+    if slug.isdigit():
+        slug = f"n{slug}"
     candidate = slug
     i = 1
     while candidate in used_ids:
@@ -1675,15 +1680,28 @@ def _normalize_math_in_mermaid_line(line: str) -> tuple[str, str | None]:
     return "".join(out), action
 
 
+# Diagram kinds whose renderer does NOT support KaTeX — math there shows as a
+# literal `$$…$$` string, so it must be degraded to plain text rather than
+# preserved. mindmap is handled by its own earlier pass (repair_mermaid_mindmap_math),
+# so it is intentionally absent here.
+_MERMAID_NON_KATEX_KINDS = ("statediagram", "statediagram-v2", "timeline")
+
+
 def repair_mermaid_latex_labels(text: str) -> tuple[str, list[dict]]:
-    r"""Normalize math inside mermaid node labels so it renders via KaTeX.
+    r"""Normalize math inside mermaid labels so it renders in the target output.
 
-    The target renderers support mermaid's KaTeX math (``$$...$$`` inside a
-    label), so we PRESERVE it and promote single ``$...$`` up to ``$$...$$``
-    rather than stripping math out. A bare ``\command`` with no ``$`` delimiters
-    (which KaTeX would never pick up) is still degraded to plain text.
+    For KaTeX-capable kinds (flowchart/graph, class, sequence…) the target
+    renderers show ``$$...$$`` as real math, so it is PRESERVED and single
+    ``$...$`` is promoted to ``$$...$$``; a bare ``\command`` with no ``$``
+    (which KaTeX never sees) is degraded to plain text.
 
-    Runs after label-quoting so every label is already wrapped in ``"..."``.
+    For non-KaTeX kinds (stateDiagram-v2, timeline) the renderer prints the
+    literal ``$$…$$`` string, so ALL math on the line — inside quoted state
+    descriptions AND in bare transition labels / timeline events — is degraded
+    to unicode/plain text (``$$\rightarrow$$`` → ``→``).
+
+    Runs after label-quoting so every flowchart label is already wrapped in
+    ``"..."``.
     """
     if not text:
         return "", []
@@ -1692,19 +1710,39 @@ def repair_mermaid_latex_labels(text: str) -> tuple[str, list[dict]]:
     out: list[str] = []
     fixes: list[dict] = []
     in_mermaid = False
+    non_katex = False
 
     for idx, line in enumerate(lines):
         stripped = line.strip().lower()
         if not in_mermaid and stripped == "```mermaid":
             in_mermaid = True
+            non_katex = _peek_mermaid_kind(lines, idx).startswith(_MERMAID_NON_KATEX_KINDS)
             out.append(line)
             continue
         if in_mermaid and stripped == "```":
             in_mermaid = False
+            non_katex = False
             out.append(line)
             continue
 
-        if in_mermaid:
+        if in_mermaid and non_katex:
+            if "$" in line:
+                new_line = _MERMAID_MATH_SPAN_RE.sub(
+                    lambda m: _mermaid_latex_to_plaintext(m.group(0)), line
+                )
+                if new_line != line:
+                    fixes.append(
+                        _make_fix(
+                            "degraded_mermaid_math",
+                            line=idx + 1,
+                            before=line,
+                            after=new_line,
+                        )
+                    )
+                out.append(new_line)
+            else:
+                out.append(line)
+        elif in_mermaid:
             new_line, action = _normalize_math_in_mermaid_line(line)
             if action:
                 fixes.append(
@@ -1754,6 +1792,48 @@ def repair_mermaid_style_hash(text: str) -> tuple[str, list[dict]]:
                 fixes.append(
                     _make_fix(
                         "repaired_mermaid_style_hash",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
+                out.append(new_line)
+                continue
+        out.append(line)
+
+    return "\n".join(out), fixes
+
+
+# ─── Mermaid: sequenceDiagram rect color ──────────────────────────────
+
+# `rect rgb("240, 240, 240")` / `rect rgba("...")` — the LLM wraps the color
+# args in quotes, which mermaid accepts syntactically but renders as no
+# background (the color string is invalid). Strip the quotes so the rect
+# actually gets its fill (observed live: cloud_act Synthesis sequenceDiagram).
+_MERMAID_RECT_RGB_QUOTED_RE = re.compile(r"\b(rect\s+rgba?)\(\s*(['\"])(.*?)\2\s*\)")
+
+
+def repair_mermaid_rect_rgb_quotes(text: str) -> tuple[str, list[dict]]:
+    """Strip quotes around a sequenceDiagram ``rect rgb(...)`` color literal."""
+    if not text or "rect" not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+        elif in_mermaid and stripped == "```":
+            in_mermaid = False
+        elif in_mermaid:
+            new_line = _MERMAID_RECT_RGB_QUOTED_RE.sub(r"\1(\3)", line)
+            if new_line != line:
+                fixes.append(
+                    _make_fix(
+                        "stripped_rect_rgb_quotes",
                         line=idx + 1,
                         before=line,
                         after=new_line,
