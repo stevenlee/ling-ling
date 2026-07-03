@@ -197,6 +197,21 @@ def test_parse_verdict_zh_section_negated_revise_is_keep():
     )
 
 
+def test_parse_verdict_zh_bold_header_colon_inside_bold_next_line():
+    # Verbatim shape from the post-fix cloud_act re-run: yet another header
+    # variant (評定, colon inside the bold) with the keyword on the next line.
+    critique = (
+        "- `[major] 2.1 節 → 遺漏 14 日時限 → 應補充`\n\n"
+        "**總體評定：**\n"
+        "應進行修改 (Revise)。雖然結構出色，但存在關鍵的程序性細節遺漏。"
+    )
+    assert IngestionPipeline._parse_verdict(critique) == "revise"
+
+
+def test_parse_verdict_zh_xiugai_keyword_maps_to_revise():
+    assert IngestionPipeline._parse_verdict("### 總體評定\n\n建議修改。") == "revise"
+
+
 def test_parse_verdict_zh_heading_mentioned_mid_prose_is_none():
     # A heading followed by prose whose keyword sits beyond the gap must not match.
     filler = "這份文件整體而言相當完整，" * 4
