@@ -39,7 +39,7 @@ from core.parser import (
 from core.markdown_doc import MarkdownDocument
 from core.ui import ui
 from core.utils import digest_value_to_text
-from core.vault_utils import update_wiki_index
+from core.vault_utils import sanitize_filename, update_wiki_index
 from services.ingest.critique_loop import SynthesisCritiqueLoop, parse_verdict
 from services.ingest.digest_format import PART_DIGEST_HEADER as _PART_DIGEST_HEADER
 from services.ingest.digest_format import format_digest_appendix as _format_digest_appendix
@@ -284,7 +284,11 @@ class IngestionPipeline:
                 if not llm_result:
                     raise ValueError("LLM generation failed.")
 
-            base_title = source_filepath.stem.strip().replace("/", "-").replace("\\", "-")
+            # Sanitize math + path separators out of the stem: it becomes the
+            # page folder, the title, every Part/Synthesis filename and the RAG
+            # metadata title, so a LaTeX-laden source name (數學分析原理：$\mathcal{L}^2$…)
+            # must not leak `$ \ /` downstream and split the vault into phantom dirs.
+            base_title = sanitize_filename(source_filepath.stem)
             # Naming convention (NOT a bug — audit A1, deliberately kept): a
             # short doc's single page is the canonical "(Synthesis)" page for
             # that stem. Resolvers depend on this — load_sources

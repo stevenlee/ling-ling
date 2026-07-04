@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 from agents.base_agent import BaseAgent
 from core.config import PAGES_DIR, NOTES_DIR, INDEX_FILE, WIKI_VAULT_DIR, settings
+from core.vault_utils import sanitize_filename
 from core.parser import parse_markdown_metadata
 
 
@@ -101,8 +102,9 @@ class LinterAgent(BaseAgent):
 
         for title in health["unindexed_files"]:
             filepath = None
+            safe = sanitize_filename(title)
             for directory in [self.pages_dir, self.notes_dir]:
-                p = next(directory.rglob(f"{title}.md"), None)
+                p = next(directory.rglob(f"{safe}.md"), None)
                 if p:
                     filepath = p
                     break

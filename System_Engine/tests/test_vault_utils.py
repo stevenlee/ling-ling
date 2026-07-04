@@ -487,3 +487,33 @@ class TestRecentBlock:
         out = index.read_text(encoding="utf-8")
         assert "## 🆕 最近新增" not in out
         assert "[[A Doc]]" in out  # still listed alphabetically below
+
+
+class TestSanitizeFilename:
+    def test_reduces_latex_math_span(self):
+        # The reported bug: a LaTeX title split the vault into a phantom dir.
+        out = vault_utils.sanitize_filename(
+            "數學分析原理：$\\mathcal{L}^2$ 函數空間與瑞斯-費希爾定理"
+        )
+        assert out == "數學分析原理：L2 函數空間與瑞斯-費希爾定理"
+        assert "/" not in out and "\\" not in out and "$" not in out
+
+    def test_strips_path_separators(self):
+        assert vault_utils.sanitize_filename("A/B\\C Testing") == "ABC Testing"
+
+    def test_reduces_display_and_paren_math(self):
+        assert vault_utils.sanitize_filename("能量 $$E=mc^2$$ 公式") == "能量 E=mc2 公式"
+        assert vault_utils.sanitize_filename("極限 \\(x_0\\) 定義") == "極限 x0 定義"
+
+    def test_noop_on_clean_titles(self):
+        for t in ("深度學習導論", "data_2024 (Part 3)", "f(x) and g(x)", "2^10 notes"):
+            assert vault_utils.sanitize_filename(t) == t
+
+    def test_idempotent(self):
+        raw = "積分 $\\int_0^1 f(x)\\,dx$ / 章節"
+        once = vault_utils.sanitize_filename(raw)
+        assert vault_utils.sanitize_filename(once) == once
+
+    def test_empty_and_length_cap(self):
+        assert vault_utils.sanitize_filename("") == ""
+        assert len(vault_utils.sanitize_filename("字" * 300)) == 120

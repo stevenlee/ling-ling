@@ -24,6 +24,7 @@ from pathlib import Path
 import yaml
 
 from core.parser import parse_markdown_metadata
+from core.vault_utils import sanitize_filename
 
 # Stable section headers — the deterministic parser's anchors. Never
 # reword without a schema_version bump and a migration.
@@ -33,9 +34,9 @@ VARIANTS_HEADER = "## Nuances & Variants"
 COUNTERPOINTS_HEADER = "## Counterpoints"
 _EMPTY_PLACEHOLDER = "- （尚無）"
 
-_SECTION_SPLIT_RE = re.compile(r'^## ', re.MULTILINE)
-_LIST_ITEM_RE = re.compile(r'^-\s+(.*)$')
-_FILENAME_SANITIZE_RE = re.compile(r'[^\w一-鿿぀-ヿ\s-]', re.UNICODE)
+_SECTION_SPLIT_RE = re.compile(r"^## ", re.MULTILINE)
+_LIST_ITEM_RE = re.compile(r"^-\s+(.*)$")
+_FILENAME_SANITIZE_RE = re.compile(r"[^\w一-鿿぀-ヿ\s-]", re.UNICODE)
 
 
 @dataclass
@@ -48,7 +49,7 @@ class CortexPage:
     falsifiability: float | None = None
     falsifier: str = ""
     applies_when: str = ""
-    S: float = 1.0   # storage strength — float since Phase 3 spacing-effect gains
+    S: float = 1.0  # storage strength — float since Phase 3 spacing-effect gains
     last_reinforced_at: str = ""
     created: str = ""
     updated: str = ""
@@ -66,8 +67,10 @@ def make_claim_id(claim: str) -> str:
 
 def claim_filename(claim: str, claim_id: str, cortex_dir: Path) -> Path:
     """Human-readable filename from the claim; claim_id suffix on collision."""
-    base = _FILENAME_SANITIZE_RE.sub("", claim).strip()
-    base = re.sub(r'\s+', ' ', base)[:60].strip() or claim_id
+    # Reduce LaTeX math first ($\mathcal{L}^2$ → L2) so the char-filter keeps a
+    # readable stem instead of leaking the command name (…→ "mathcalL2").
+    base = _FILENAME_SANITIZE_RE.sub("", sanitize_filename(claim)).strip()
+    base = re.sub(r"\s+", " ", base)[:60].strip() or claim_id
     candidate = cortex_dir / f"{base}.md"
     if candidate.exists():
         candidate = cortex_dir / f"{base} ({claim_id[-6:]}).md"
@@ -94,12 +97,14 @@ def _coerce_evidence(value) -> list[dict]:
     for item in value:
         if not isinstance(item, dict):
             continue
-        out.append({
-            "insight": _as_str(item.get("insight")),
-            "sources": _as_str_list(item.get("sources")),
-            "date": _as_str(item.get("date")),
-            "summary": _as_str(item.get("summary")),
-        })
+        out.append(
+            {
+                "insight": _as_str(item.get("insight")),
+                "sources": _as_str_list(item.get("sources")),
+                "date": _as_str(item.get("date")),
+                "summary": _as_str(item.get("summary")),
+            }
+        )
     return out
 
 
@@ -108,7 +113,9 @@ def render_cortex_page(page: CortexPage) -> str:
         "claim_id": page.claim_id,
         "status": page.status,
         "confidence": round(float(page.confidence), 4),
-        "falsifiability": round(float(page.falsifiability), 4) if page.falsifiability is not None else None,
+        "falsifiability": round(float(page.falsifiability), 4)
+        if page.falsifiability is not None
+        else None,
         "falsifier": page.falsifier,
         "S": round(float(page.S), 4),
         "last_reinforced_at": page.last_reinforced_at,
@@ -135,22 +142,24 @@ def render_cortex_page(page: CortexPage) -> str:
     if page.applies_when:
         core_claim_lines.append(f"> 適用情境：{page.applies_when}")
 
-    body = "\n".join([
-        f"# {page.claim[:60]}",
-        "",
-        CORE_CLAIM_HEADER,
-        *core_claim_lines,
-        "",
-        EVIDENCE_HEADER,
-        *evidence_lines,
-        "",
-        VARIANTS_HEADER,
-        *variants_lines,
-        "",
-        COUNTERPOINTS_HEADER,
-        *counterpoints_lines,
-        "",
-    ])
+    body = "\n".join(
+        [
+            f"# {page.claim[:60]}",
+            "",
+            CORE_CLAIM_HEADER,
+            *core_claim_lines,
+            "",
+            EVIDENCE_HEADER,
+            *evidence_lines,
+            "",
+            VARIANTS_HEADER,
+            *variants_lines,
+            "",
+            COUNTERPOINTS_HEADER,
+            *counterpoints_lines,
+            "",
+        ]
+    )
     return f"---\n{yaml_block}\n---\n\n{body}"
 
 
@@ -202,12 +211,14 @@ def parse_cortex_page(path: Path) -> CortexPage | None:
         if not line_s:
             continue
         if line_s.startswith("> 適用情境："):
-            applies_when_text = line_s[len("> 適用情境："):].strip()
+            applies_when_text = line_s[len("> 適用情境：") :].strip()
         elif not claim_text and not line_s.startswith(">"):
             claim_text = line_s
 
     if not claim_text:
-        logging.warning(f"CortexStore: {path.name} has no valid claim in Core Claim section; skipping")
+        logging.warning(
+            f"CortexStore: {path.name} has no valid claim in Core Claim section; skipping"
+        )
         return None
 
     try:

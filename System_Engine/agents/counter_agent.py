@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agents.base_agent import BaseAgent
 from core.config import PAGES_DIR, RAW_CONSOLIDATE_DIR, WIKI_VAULT_DIR
+from core.vault_utils import sanitize_filename
 from core.parser import extract_json_array, extract_json_object, is_empty_json_literal
 from core.retrying import reroll
 from core.ui import ui
@@ -273,7 +274,7 @@ class CounterAgent(BaseAgent):
         return results
 
     def _find_in_pages(self, title: str) -> tuple[str, str]:
-        title_clean = title.strip()
+        title_clean = sanitize_filename(title.strip())
         if not title_clean:
             return "", ""
 
@@ -812,6 +813,7 @@ class CounterAgent(BaseAgent):
 
     @staticmethod
     def _original_source_title(article_title):
+        article_title = sanitize_filename(article_title)
         direct = PAGES_DIR / f"{article_title}.md"
         if direct.exists():
             return direct.stem
@@ -829,6 +831,7 @@ class CounterAgent(BaseAgent):
         Looks in the same locations as `_original_source_title` but returns
         the Path object so we can render a `file:///` link to it.
         """
+        article_title = sanitize_filename(article_title)
         direct = PAGES_DIR / f"{article_title}.md"
         if direct.exists():
             return direct.resolve()

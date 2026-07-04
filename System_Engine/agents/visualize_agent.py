@@ -12,6 +12,7 @@ import re
 
 from agents.base_agent import BaseAgent
 from core.config import PAGES_DIR, WIKI_VAULT_DIR
+from core.vault_utils import sanitize_filename
 from core.ui import ui
 from services.learning_artifacts import ARTIFACT_TYPES, build_artifact
 
@@ -127,7 +128,7 @@ class VisualizeAgent(BaseAgent):
 
     # ── Note resolution (canonical readable text for a title) ───────────
     def _load_note(self, title: str) -> tuple[str, str]:
-        title = title.strip()
+        title = sanitize_filename(title.strip())
         if not title:
             return "", ""
         folder = PAGES_DIR / title

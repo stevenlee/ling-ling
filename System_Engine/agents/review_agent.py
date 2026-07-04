@@ -16,6 +16,7 @@ import re
 
 from agents.base_agent import BaseAgent
 from core.config import PAGES_DIR
+from core.vault_utils import sanitize_filename
 from core.ui import ui
 from services.identifier_guard import correct_identifiers, extract_identifiers
 
@@ -34,14 +35,21 @@ _GENRE_TEMPLATES = {
 # Accepted `as <alias>` keywords → canonical genre.
 _GENRE_ALIASES = {
     "book": "book",
-    "explainer": "explainer", "report": "explainer", "topic": "explainer",
-    "paper": "paper", "research": "paper",
+    "explainer": "explainer",
+    "report": "explainer",
+    "topic": "explainer",
+    "paper": "paper",
+    "research": "paper",
     "patent": "patent",
 }
 # Synthesis sections that are scaffolding, not understanding — trimmed from input.
 _NAV_APPENDIX_MARKERS = (
-    "## 🔗 原始溯源", "## 🧩 Part Digest Appendix", "原始溯源",
-    "Part Digest Appendix", "## 📂 Navigation", "## 🔗 Navigation",
+    "## 🔗 原始溯源",
+    "## 🧩 Part Digest Appendix",
+    "原始溯源",
+    "Part Digest Appendix",
+    "## 📂 Navigation",
+    "## 🔗 Navigation",
 )
 
 
@@ -65,9 +73,11 @@ class ReviewAgent(BaseAgent):
             ui.error(f"📝 找不到 Synthesis：{title}")
             return self._write_report(
                 title,
-                (f"# 📝 {title}\n\n找不到這篇的 Synthesis"
-                 f"（pages/{title}/{title} (Synthesis).md）。\n"
-                 "請先讓它走完 ingestion 產生 Synthesis，再來 review。"),
+                (
+                    f"# 📝 {title}\n\n找不到這篇的 Synthesis"
+                    f"（pages/{title}/{title} (Synthesis).md）。\n"
+                    "請先讓它走完 ingestion 產生 Synthesis，再來 review。"
+                ),
                 "rev",
             )[1]
 
@@ -75,17 +85,20 @@ class ReviewAgent(BaseAgent):
         template = _GENRE_TEMPLATES[genre]
 
         ui.set_status(f"📝 書評／報導：{title[:40]} ({genre})")
-        review = self.llm.answer_query(
-            query_content=(
-                f"為《{title}》寫一篇『幫助學習』的部落格評論/報導。"
-                "評論並教讀者『關於』這個來源——絕不重製或取代它。"
-            ),
-            wiki_context=self._synthesis_body(syn_text),
-            forced_template=template,
-            persona="reviewer",
-            operation="rev",
-            temperature=0.5,
-        ) or ""
+        review = (
+            self.llm.answer_query(
+                query_content=(
+                    f"為《{title}》寫一篇『幫助學習』的部落格評論/報導。"
+                    "評論並教讀者『關於』這個來源——絕不重製或取代它。"
+                ),
+                wiki_context=self._synthesis_body(syn_text),
+                forced_template=template,
+                persona="reviewer",
+                operation="rev",
+                temperature=0.5,
+            )
+            or ""
+        )
 
         # The template makes the model emit its own YAML header; strip it so
         # _write_report owns the single canonical frontmatter (no duplication).
@@ -99,9 +112,10 @@ class ReviewAgent(BaseAgent):
             ui.info(f"📝 識別碼校正 {len(fixes)} 處 → {canon}")
 
         _, full_markdown = self._write_report(
-            title, body, "rev",
-            {"target": title, "genre": genre, "template": template,
-             "identifier_fixes": len(fixes)},
+            title,
+            body,
+            "rev",
+            {"target": title, "genre": genre, "template": template, "identifier_fixes": len(fixes)},
         )
         ui.success(f"📝 完成：{title} → {genre} → fromLingLing/")
         return full_markdown
@@ -119,7 +133,7 @@ class ReviewAgent(BaseAgent):
     # ── synthesis loading ──────────────────────────────────────────────
     @staticmethod
     def _load_synthesis(title: str) -> tuple[str, str]:
-        title = title.strip()
+        title = sanitize_filename(title.strip())
         if not title:
             return "", ""
         p = PAGES_DIR / title / f"{title} (Synthesis).md"

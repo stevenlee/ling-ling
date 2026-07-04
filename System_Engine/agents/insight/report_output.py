@@ -103,8 +103,12 @@ class ReportOutputMixin:
 
     @staticmethod
     def _sanitize_filename_part(value: str) -> str:
-        cleaned = re.sub(r'[\\/*?:"<>|\[\]\n\r\t]+', "-", value).strip(" .-")
-        cleaned = re.sub(r"\s+", " ", cleaned)
+        from core.vault_utils import sanitize_filename
+
+        # sanitize_filename reduces math and strips path-hostile chars + controls;
+        # brackets are additionally neutralized since the filename format is
+        # bracket-delimited ([ts][related][cmd]).
+        cleaned = re.sub(r"[\[\]]+", "-", sanitize_filename(value)).strip(" .-")
         return cleaned[:80].strip(" .-")
 
     @staticmethod

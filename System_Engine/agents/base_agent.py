@@ -258,7 +258,9 @@ class BaseAgent:
         )
 
         full_markdown = dump_markdown_with_metadata(metadata, body)
-        safe_title = re.sub(r'[\\/*?:"<>|]', "-", title)
+        from core.vault_utils import sanitize_filename
+
+        safe_title = sanitize_filename(title)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M")
         filename = f"✅{report_type}-{safe_title}-{timestamp}.md"
         output_path = FROM_LLM_DIR / filename

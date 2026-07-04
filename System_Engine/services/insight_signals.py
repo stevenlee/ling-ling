@@ -15,6 +15,7 @@ from core.config import (
     NOTES_DIR,
 )
 from core.parser import strip_body_frontmatter
+from core.vault_utils import sanitize_filename
 
 
 @dataclass
@@ -132,6 +133,7 @@ def compute_signals(
     def _load_source_contents(titles: list[str]) -> list[str]:
         contents = []
         for title in titles:
+            title = sanitize_filename(title)
             p1 = PAGES_DIR / f"{title}.md"
             p2 = NOTES_DIR / f"{title}.md"
             target = p1 if p1.exists() else p2 if p2.exists() else None

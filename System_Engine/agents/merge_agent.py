@@ -5,7 +5,7 @@ import shutil
 from datetime import datetime
 from agents.base_agent import BaseAgent
 from core.config import PAGES_DIR, WIKI_VAULT_DIR, INDEX_FILE, EXCALIDRAW_DIR, RAW_MERGED_DIR
-from core.vault_utils import find_note
+from core.vault_utils import find_note, sanitize_filename
 
 
 class MergeAgent(BaseAgent):
@@ -100,6 +100,7 @@ class MergeAgent(BaseAgent):
         ref_text = ", ".join([f"[[{f.stem}]]" for f in valid_files])
         final_body = f"{body_content}\n\n## 來源組合\n- 合併自: {ref_text}"
         source_paths = {f.resolve() for f in valid_files}
+        new_title = sanitize_filename(new_title)  # math/path-sep safe stem + frontmatter title
         new_page_path = self.pages_dir / f"{new_title}.md"
         if new_page_path.resolve() in source_paths or new_page_path.exists():
             base_title = new_title

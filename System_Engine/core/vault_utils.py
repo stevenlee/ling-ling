@@ -23,6 +23,44 @@ _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*", re.DOTALL)
 _FRONTMATTER_NL_RE = re.compile(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", re.DOTALL)
 _NATURAL_SORT_RE = re.compile(r"([0-9]+)")
 _PART_RE = re.compile(r"\(Part \d+\)")
+
+# ── Filename sanitization ────────────────────────────────────────────────
+# Titles routinely carry LaTeX math ($\mathcal{L}^2$, \frac{a}{b}) and, worse,
+# path separators. Left unsanitized these either mangle the name or split it
+# into phantom directories (a `$/mathcal…` title becomes `數學…$/` + a file
+# inside it). This is the single choke point every title→filename site should
+# route through; `find_note` and the ingest writer already do.
+_MATH_SPAN_RE = re.compile(r"\$\$(.+?)\$\$|\$(.+?)\$|\\\[(.+?)\\\]|\\\((.+?)\\\)", re.DOTALL)
+_TEX_CMD_RE = re.compile(r"\\[a-zA-Z]+")  # \mathcal, \frac, \alpha …
+_MATH_SCAFFOLD_RE = re.compile(r"[{}^_\\]")  # tex scaffolding inside a math span
+_FS_HOSTILE_RE = re.compile(r'[\\/*?:"<>|$\x00-\x1f]')  # path seps, reserved, control, stray $
+_FILENAME_WS_RE = re.compile(r"\s+")
+
+
+def _reduce_math_span(m: re.Match) -> str:
+    inner = next(g for g in m.groups() if g is not None)
+    inner = _TEX_CMD_RE.sub("", inner)  # drop \commands, keep braced operands
+    inner = _MATH_SCAFFOLD_RE.sub("", inner)  # drop { } ^ _ \ scaffolding
+    return _FILENAME_WS_RE.sub(" ", inner).strip()
+
+
+def sanitize_filename(name: str, *, max_len: int = 120) -> str:
+    r"""Reduce a title to a filesystem-safe stem (no extension).
+
+    Turns LaTeX math into plain text ($\mathcal{L}^2$ → ``L2``) and strips
+    filesystem-hostile characters (path separators, reserved chars, controls,
+    stray ``$``). Idempotent and a no-op on ordinary CJK/Latin titles, so it is
+    safe to apply on BOTH the write path and every title→filename lookup
+    without breaking resolution of existing notes.
+    """
+    if not name:
+        return name
+    s = _MATH_SPAN_RE.sub(_reduce_math_span, name)  # $…$ math → readable text
+    s = _FS_HOSTILE_RE.sub("", s)  # kill / \ : * ? " < > | $ + control
+    s = _FILENAME_WS_RE.sub(" ", s).strip(" .-")
+    return s[:max_len].strip(" .-")
+
+
 _READING_INDEX_COLUMNS = (
     "Article",
     "Stat",
@@ -548,6 +586,7 @@ def update_file_tags(filepath: Path, tags: list[str], add_aliases: list[str] = N
 
 def find_note(title: str) -> Path | None:
     """Find a note by stem in Pages/ or Notes/."""
+    title = sanitize_filename(title.strip())
     for directory in (PAGES_DIR, NOTES_DIR):
         if not directory.exists():
             continue
