@@ -1,1 +1,0 @@
-./lings-desktop/CHANGELOG.md

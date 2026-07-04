@@ -81,3 +81,9 @@ lings-desktop/Insights/
 lings-desktop/Cortex/
 # Self-improvement proposal queue (runtime-generated; M3)
 lings-desktop/Scripture/Improvements/
+
+# Personal reading material / research scratch (not part of the codebase)
+lings-desktop/Consolidate/
+lings-desktop/Build Ontology Tool.md
+# Redundant root symlink to lings-desktop/CHANGELOG.md
+/CHANGELOG.md
