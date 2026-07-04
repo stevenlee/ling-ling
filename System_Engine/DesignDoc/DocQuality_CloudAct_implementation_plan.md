@@ -50,6 +50,17 @@
 > `part_digest`（重建 PartState）與附錄 header（完成哨兵），移除任一都會破壞 resume；
 > 因使用者重視不浪費 GPU 重跑，此項保留現狀。**整個 DocQuality 計劃至此全數完成
 > （僅 P5.3-part_digest 明確 deferred）。**
+>
+> **附記 — 新發現項（2026-07-04，9584dee，非原五項）：檔名 sanitization 無統一入口。**
+> 一個含 LaTeX 的 title（`數學分析原理：$\mathcal{L}^2$ …`）在 `lings-desktop/` 根產生
+> 幽靈目錄 + 0-byte 孤兒檔。根因與本計劃同類（數學/特殊符號 leak 進不該進的地方，
+> cf. ontology mermaid crash）：title→filename 散在 **11 處**、各寫各的殘缺正則，寫入端與
+> lookup 端對 `$ \ /` 處理不一致 → 數學標題的筆記可能寫在一個 mangled 名下、卻被另一套
+> 規則**靜默找不到**（counter/visualize/review lookup 回 `"", ""` 不報錯）。修法：
+> `core/vault_utils.sanitize_filename()` 單一入口——math 還原成純文字（`$\mathcal{L}^2$`→`L2`）
+> ＋剝除 FS-hostile 字元，**冪等且對正常標題 no-op**，同時套在 ingest 寫入 choke point
+> （`base_title`）＋每個反查點＋三個舊 sanitizer（cortex_store/report_output/base_agent）。
+> `blog_transform.slugify` 刻意不動（已上線 URL slug）。新增 6 個單元測試；1442 tests 綠。
 
 ---
 
