@@ -2160,6 +2160,51 @@ def repair_mermaid_math_quotes(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+# A round node whose label the generator double-wrapped with a stray inner paren
+# and escaped quotes, then trailed with a stray close: `ID("(\"TEXT\"") )` /
+# `ID("(\"TEXT\"")])`. Only the full unwrap to `ID("TEXT")` parses (dropping just
+# the stray close leaves the invalid `(\"…\"` content). `TEXT` may contain its
+# own `()`; the match ends at the `\""` that closes the wrap.
+_MERMAID_PAREN_WRAPPED_LABEL_RE = re.compile(
+    r'(?P<id>[A-Za-z0-9_]+)\("\(\\"(?P<t>.*?)\\""\)\s*[)\]]*'
+)
+
+
+def repair_mermaid_paren_wrapped_label(text: str) -> tuple[str, list[dict]]:
+    r"""Unwrap a round node label double-wrapped as ``ID("(\"TEXT\"") )``."""
+    if '("(\\"' not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+        elif in_mermaid and stripped == "```":
+            in_mermaid = False
+        elif in_mermaid and '("(\\"' in line:
+            new_line = _MERMAID_PAREN_WRAPPED_LABEL_RE.sub(
+                lambda m: f'{m.group("id")}("{m.group("t")}")', line
+            )
+            if new_line != line:
+                fixes.append(
+                    _make_fix(
+                        "unwrapped_paren_wrapped_label",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
+                out.append(new_line)
+                continue
+        out.append(line)
+
+    return "\n".join(out), fixes
+
+
 # A flowchart node whose label wraps mindmap root syntax: the diagram was meant
 # as a mindmap but rendered as a flowchart, so the root `root(("TEXT"))` got
 # stuffed into a rectangle label — `A["root((\"TEXT\"))"]` — which mermaid's

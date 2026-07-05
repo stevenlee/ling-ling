@@ -221,6 +221,31 @@ class TestMathLabelQuotes:
         assert '["範圍 $[a, b]$"]' in result
 
 
+class TestParenWrappedLabel:
+    """A round node label double-wrapped as `ID("(\\"TEXT\\"") )` (with a stray
+    trailing close) only parses when fully unwrapped to `ID("TEXT")`."""
+
+    def _q(self, body):
+        from core.parser import repair_mermaid_paren_wrapped_label
+
+        return repair_mermaid_paren_wrapped_label(f"```mermaid\n{body}\n```")
+
+    def test_unwraps_and_drops_stray_close(self):
+        result, fixes = self._q('graph TD\n    D("(\\"觀念 (Nous)\\"") ) --> E["原則"]')
+        assert 'D("觀念 (Nous)") --> E["原則"]' in result
+        assert any(f["type"] == "unwrapped_paren_wrapped_label" for f in fixes)
+
+    def test_unwraps_bracket_trailing(self):
+        result, _ = self._q('graph TD\n    F("(\\"最終反思\\"")]) --> G["x"]')
+        assert 'F("最終反思") --> G["x"]' in result
+
+    def test_ordinary_round_node_untouched(self):
+        body = 'graph TD\n    A("正常標籤") --> B'
+        result, fixes = self._q(body)
+        assert fixes == []
+        assert 'A("正常標籤")' in result
+
+
 class TestRootWrap:
     """A mindmap `root(("…"))` stuffed into a flowchart rectangle label crashes
     the flowchart; unwrap it to a plain label. A real mindmap root is untouched."""

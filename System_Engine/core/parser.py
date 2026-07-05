@@ -53,6 +53,7 @@ from core.parsing.mermaid_repair import (  # noqa: F401
     repair_mermaid_quadrant_points,
     repair_mermaid_quoted_endpoint_labels,
     repair_mermaid_quoted_node_ids,
+    repair_mermaid_paren_wrapped_label,
     repair_mermaid_rect_rgb_quotes,
     repair_mermaid_root_wrap,
     repair_mermaid_subgraph_keyword,
