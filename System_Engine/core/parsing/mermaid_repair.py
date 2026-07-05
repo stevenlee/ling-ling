@@ -168,6 +168,18 @@ _CLASSDIAGRAM_STANDALONE_STEREOTYPE_RE = re.compile(
 # id must NOT carry an inline `["label"]` so real declarations can't match.
 _CLASSDIAGRAM_MEMBER_KEYWORD_RE = re.compile(r"^(\s*)class\s+([A-Za-z_]\w*)\s*:\s*(\S.*)$")
 
+# A member/attribute line inside a `class X { ... }` body: `+$\mu$ 平均值`,
+# `-name string`. Mermaid's member grammar rejects `$`, backslash commands and
+# stray `"` (`+$\rho_{"1:n"}$` → `Expecting MEMBER, got OPEN_IN_STRUCT`), so any
+# LaTeX math on a member line must be degraded to plain text. Only the leading
+# visibility marker is required; content follows.
+_CLASSDIAGRAM_MEMBER_BODY_LINE_RE = re.compile(r"^(\s*[+\-#~])(.*)$")
+# The shorthand member form `ClassName : +attr` (no relationship arrow). Same
+# math-degradation applies; distinguished from a labelled relationship
+# (`A --> B : x`) by the absence of an arrow token (see _CLASSDIAGRAM_ARROW_RE).
+_CLASSDIAGRAM_MEMBER_SHORTHAND_RE = re.compile(r"^(\s*[A-Za-z_]\w*\s*:\s*)(\S.*)$")
+_CLASSDIAGRAM_ARROW_RE = re.compile(r"<\|--|--\|>|\*--|--\*|o--|--o|\.\.>|<\.\.|-->|<--|\.\.|--")
+
 # A fullwidth period `．` (U+FF0E) the LLM injects into an ASCII class id —
 # `DreamBooth ..> ImageDiffusion．Model` — is a lexical error (mermaid ids are
 # `\w`). Removing it rejoins the token (`ImageDiffusionModel`), which matches
@@ -294,7 +306,11 @@ _MERMAID_LATEX_WRAPPER_RE = re.compile(
     r"\\+\s*(?:" + "|".join(_MERMAID_LATEX_WRAPPERS) + r")\s*\{([^{}]*)\}"
 )
 _MERMAID_LATEX_SYMBOL_RES: tuple[tuple[re.Pattern, str], ...] = tuple(
-    (re.compile(r"\\+" + re.escape(name) + r"\b"), glyph)
+    # End on "no letter follows" rather than `\b`: `\b` FAILS before `_`/digit
+    # (both word chars), so `\rho_{1:n}` / `\mu2` would slip through and later be
+    # dropped as unknown commands, losing the glyph. `(?![A-Za-z])` still blocks
+    # partial matches into a longer command name.
+    (re.compile(r"\\+" + re.escape(name) + r"(?![A-Za-z])"), glyph)
     # Longest command names first so `\infty` isn't partially eaten by `\in`.
     for name, glyph in sorted(
         _MERMAID_LATEX_SYMBOLS.items(), key=lambda kv: len(kv[0]), reverse=True
@@ -1349,9 +1365,12 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
     4. **Demote mis-prefixed members.** ``class X : +member`` carries a stray
        ``class`` keyword (a member takes none); the keyword is stripped to the
        valid ``X : +member``.
+    5. **Degrade member math.** LaTeX on a member line (``+$\\rho_{"1:n"}$ 權重``)
+       is illegal in mermaid's member grammar and crashes the diagram; it is
+       flattened to plain text (``+ρ_1:n 權重``).
 
-    Idempotent: once hoisted, deduped, stripped and demoted, no pattern matches
-    again.
+    Idempotent: once hoisted, deduped, stripped, demoted and de-mathed, no
+    pattern matches again.
     """
     fixes: list[dict] = []
 
@@ -1440,6 +1459,48 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
         demoted.append(fixed)
     body = demoted
 
+    # Degrade LaTeX math on member lines. Mermaid's classDiagram member grammar
+    # rejects `$`, backslash commands and stray `"` — `+$\rho_{"1:n"}$` throws
+    # `Expecting MEMBER, got OPEN_IN_STRUCT` and takes the whole diagram down.
+    # Targets `+attr`/`-attr` body members and `X : attr` shorthand. Lines with
+    # an UNBALANCED brace (a structural `{`/`}` — a declaration opener or body
+    # closer) are skipped so structural syntax is never stripped; genuine member
+    # math (`\rho_{1:n}`, `\frac{a}{b}`) is always brace-balanced.
+    demathed: list[str] = []
+    for offset, ln in enumerate(body):
+        new = ln
+        if "$" in ln or "\\" in ln:
+            m = _CLASSDIAGRAM_MEMBER_BODY_LINE_RE.match(ln)
+            shorthand = False
+            if not m:
+                m = _CLASSDIAGRAM_MEMBER_SHORTHAND_RE.match(ln)
+                shorthand = m is not None
+            # A `+`/`-` marker or `Id :` head is always a member (never a
+            # declaration opener), so degrade regardless of brace balance —
+            # malformed LaTeX (`\pi_{""}}`) is exactly what needs flattening. A
+            # relationship-with-label (`A --> B : x`) is not a member: skip it.
+            if m and not (shorthand and _CLASSDIAGRAM_ARROW_RE.search(ln)):
+                head, content = m.group(1), m.group(2)
+                # Preserve a trailing structural `}` (an inline body closer):
+                # it shows up only as an excess `}` at the line end. LaTeX braces
+                # are balanced within the member and get flattened normally.
+                trailing = ""
+                rest = content.rstrip()
+                if rest.endswith("}") and content.count("}") > content.count("{"):
+                    content, trailing = rest[:-1], " }"
+                new = f"{head}{_clean_member_math(content)}{trailing}"
+        if new != ln:
+            fixes.append(
+                _make_fix(
+                    "degraded_classdiagram_member_math",
+                    line=base_line + offset,
+                    before=ln,
+                    after=new,
+                )
+            )
+        demathed.append(new)
+    body = demathed
+
     # Pre-scan: ids already given a `class` declaration (any form), and the
     # indentation to reuse for hoisted declarations.
     existing_ids: set[str] = set()
@@ -1496,7 +1557,18 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
                 )
                 out.append(bare)
             else:
-                out.extend(block)
+                for bl in block:
+                    nb = _degrade_inline_member_body(bl)
+                    if nb != bl:
+                        fixes.append(
+                            _make_fix(
+                                "degraded_classdiagram_member_math",
+                                line=base_line + start,
+                                before=bl,
+                                after=nb,
+                            )
+                        )
+                    out.append(nb)
             idx += 1
             continue
 
@@ -1632,6 +1704,29 @@ def _mermaid_latex_to_plaintext(s: str) -> str:
     # Collapse the whitespace the removed commands leave behind.
     s = re.sub(r"[ \t]{2,}", " ", s)
     return re.sub(r"\s+([,.;:?!])", r"\1", s).strip()
+
+
+def _clean_member_math(content: str) -> str:
+    r"""Degrade LaTeX math in a classDiagram member to plain text, additionally
+    dropping the stray ``"``/``'`` quotes the member grammar also rejects
+    (`\rho_{"1:n"}` → `ρ_1:n`). Used only on member/attribute lines, where — unlike
+    node labels — mermaid renders no KaTeX, so math is always flattened."""
+    return _mermaid_latex_to_plaintext(content).replace('"', "").replace("'", "")
+
+
+def _degrade_inline_member_body(line: str) -> str:
+    r"""Flatten LaTeX math inside a single-line ``class X { +$..$ }`` member body.
+
+    Multiline member lines are handled by the main de-math pass; this covers the
+    inline form that pass skips (the line starts with ``class``). Lines without
+    both braces (a bare decl, a standalone member, a closer) are returned as-is.
+    """
+    if "$" not in line and "\\" not in line:
+        return line
+    lb, rb = line.find("{"), line.rfind("}")
+    if lb < 0 or rb <= lb:
+        return line
+    return f"{line[: lb + 1]} {_clean_member_math(line[lb + 1 : rb])} {line[rb:]}"
 
 
 def _math_complexity(body: str) -> int:

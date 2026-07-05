@@ -964,6 +964,50 @@ class TestClassDiagramRepair:
         assert 'class WithBody["身體"]' in result
         assert fixes == []
 
+    def test_degrades_member_math_in_body(self):
+        body = (
+            "classDiagram\n"
+            '    class GaussianMixtureModel["高斯混合模型"]\n'
+            "    class GaussianMixtureModel {\n"
+            '        +$\\rho_{"1:n"}$ 權重\n'
+            "        +$\\sigma^2$ 變異數\n"
+            "    }"
+        )
+        result, fixes = self._q(body)
+        # Math flattened: no `$`, backslash, braces or stray quotes survive.
+        assert "+ρ_1:n 權重" in result
+        assert "+σ^2 變異數" in result
+        assert "$" not in result.split("classDiagram")[1]
+        assert "\\rho" not in result
+        assert any(f["type"] == "degraded_classdiagram_member_math" for f in fixes)
+
+    def test_degrades_member_math_in_inline_body(self):
+        # `class X["label"] { +$..$ }` all on one line — the main pass skips it
+        # (starts with `class`); the block keep-branch must degrade it.
+        body = (
+            "classDiagram\n"
+            '    class InfiniteHorizonMDP["無限時界 MDP"] '
+            '{ +convergence $$\\sum_{"t=1"}^{\\infty} \\gamma$$ }'
+        )
+        result, fixes = self._q(body)
+        assert "$" not in result.split("classDiagram")[1]
+        assert "{" not in result.split('MDP"] ')[1].split("+")[1]  # no LaTeX brace left
+        assert any(f["type"] == "degraded_classdiagram_member_math" for f in fixes)
+
+    def test_degrades_member_math_in_shorthand(self):
+        body = 'classDiagram\n    class A["甲"]\n    A : +$\\mu$ 平均值'
+        result, fixes = self._q(body)
+        assert "A : +μ 平均值" in result
+        assert any(f["type"] == "degraded_classdiagram_member_math" for f in fixes)
+
+    def test_member_math_does_not_touch_relationship_label(self):
+        # A relationship label is not a member; even with a `$`, it is left alone
+        # (relationship labels aren't parsed by the member grammar).
+        body = 'classDiagram\n    class A["甲"]\n    class B["乙"]\n    A --> B : $x$ rel'
+        result, fixes = self._q(body)
+        assert "A --> B : $x$ rel" in result
+        assert fixes == []
+
     def test_does_not_hoist_if_class_already_declared(self):
         body = 'classDiagram\n    class B["乙"]\n    A *-- B["乙"] : part-of'
         result, _ = self._q(body)
