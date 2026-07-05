@@ -158,6 +158,16 @@ _CLASSDIAGRAM_STANDALONE_STEREOTYPE_RE = re.compile(
     r"^(\s*)<<[A-Za-z][^<>]*>>\s+([A-Za-z_]\w*)\s*$"
 )
 
+# A member/attribute line the generator prefixed with a stray `class` keyword:
+# `class Animal : +name string`. The valid form drops the keyword — a member is
+# written `Animal : +name string` (only a *declaration* takes `class`, and a
+# declaration never has a `:` — it's `class Animal` / `class Animal["label"]` /
+# `class Animal {`). So `class Id : <rest>` is unambiguously a mis-prefixed
+# member; strip the keyword. Requires content after the colon so an empty
+# `class Id :` (never emitted here, but defensive) is left alone, and the
+# id must NOT carry an inline `["label"]` so real declarations can't match.
+_CLASSDIAGRAM_MEMBER_KEYWORD_RE = re.compile(r"^(\s*)class\s+([A-Za-z_]\w*)\s*:\s*(\S.*)$")
+
 # A fullwidth period `．` (U+FF0E) the LLM injects into an ASCII class id —
 # `DreamBooth ..> ImageDiffusion．Model` — is a lexical error (mermaid ids are
 # `\w`). Removing it rejoins the token (`ImageDiffusionModel`), which matches
@@ -1336,8 +1346,12 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
        member or stereotype — ``{}``, ``{ <> }``, ``{ <<>> }`` — is dropped to a
        bare ``class X["label"]``. A body with a genuine stereotype
        (``<<instance>>``) or attribute (``+name string``) is kept intact.
+    4. **Demote mis-prefixed members.** ``class X : +member`` carries a stray
+       ``class`` keyword (a member takes none); the keyword is stripped to the
+       valid ``X : +member``.
 
-    Idempotent: once hoisted, deduped and stripped, no pattern matches again.
+    Idempotent: once hoisted, deduped, stripped and demoted, no pattern matches
+    again.
     """
     fixes: list[dict] = []
 
@@ -1402,6 +1416,29 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
         )
         extracted.extend(new_lines)
     body = extracted
+
+    # Strip the stray `class` keyword the generator prefixes onto member lines
+    # (`class Animal : +name string` → `Animal : +name string`). A member takes
+    # no keyword; only a declaration does, and a declaration never has a `:`.
+    # Done BEFORE the decl pre-scan so the demoted line is treated as an
+    # ordinary member below (not mistaken for a declaration).
+    demoted: list[str] = []
+    for offset, ln in enumerate(body):
+        m = _CLASSDIAGRAM_MEMBER_KEYWORD_RE.match(ln)
+        if not m:
+            demoted.append(ln)
+            continue
+        fixed = f"{m.group(1)}{m.group(2)} : {m.group(3)}"
+        fixes.append(
+            _make_fix(
+                "stripped_class_keyword_from_member",
+                line=base_line + offset,
+                before=ln,
+                after=fixed,
+            )
+        )
+        demoted.append(fixed)
+    body = demoted
 
     # Pre-scan: ids already given a `class` declaration (any form), and the
     # indentation to reuse for hoisted declarations.

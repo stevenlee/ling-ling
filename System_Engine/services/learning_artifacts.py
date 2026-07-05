@@ -126,7 +126,8 @@ _MERMAID_HINTS = {
         "stereotype 一律用英文，mermaid 的 `<<>>` 不支援中文，"
         "寫成 `<<個體>>` 會導致語法錯誤。最後用虛線依賴 `Fido ..> Dog : instance-of` 連到其類別。"
         "大括號 `{}` 只在放資料屬性時才加；stereotype 用上面的獨立行寫法，不要留空的或殘缺的 `{}`。"
-        "資料屬性 (data property) 寫在 class 內部，如 `Animal : +name string`。"
+        "資料屬性 (data property) 寫成獨立一行、直接以類別名開頭，如 `Animal : +name string`；"
+        "這行**開頭不要加 `class`**（`class` 只用於最上方的宣告行，成員／屬性行絕不加）。"
         "目標是讓階層、組成、屬性、個體在圖上一眼可辨，而非畫成扁平的概念網。"
     ),
 }

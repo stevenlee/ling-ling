@@ -937,6 +937,33 @@ class TestClassDiagramRepair:
         result, _ = self._q(body)
         assert "X --> Y : rel" in result
 
+    def test_strips_class_keyword_from_member(self):
+        body = (
+            "classDiagram\n"
+            '    class ProbabilityInference["機率推理"]\n'
+            "    class ProbabilityInference : +utilityTheory"
+        )
+        result, fixes = self._q(body)
+        assert "    ProbabilityInference : +utilityTheory" in result
+        assert "class ProbabilityInference : +utilityTheory" not in result
+        # The real declaration is untouched.
+        assert result.count('class ProbabilityInference["機率推理"]') == 1
+        assert any(f["type"] == "stripped_class_keyword_from_member" for f in fixes)
+
+    def test_does_not_touch_valid_declaration(self):
+        # A bare/labelled/body-opening declaration has no colon — must not match.
+        body = (
+            "classDiagram\n"
+            "    class Bare\n"
+            '    class Labelled["標籤"]\n'
+            '    class WithBody["身體"] {\n        +attr string\n    }'
+        )
+        result, fixes = self._q(body)
+        assert "class Bare" in result
+        assert 'class Labelled["標籤"]' in result
+        assert 'class WithBody["身體"]' in result
+        assert fixes == []
+
     def test_does_not_hoist_if_class_already_declared(self):
         body = 'classDiagram\n    class B["乙"]\n    A *-- B["乙"] : part-of'
         result, _ = self._q(body)
