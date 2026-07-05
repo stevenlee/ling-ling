@@ -191,6 +191,22 @@ class TestMathLabelQuotes:
         result, _ = self._q('graph TD\n    E["係數 $\\binom{n"}{k}$] --> F["視覺化"]')
         assert '["係數 $\\binom{n}{k}$"] --> F["視覺化"]' in result
 
+    def test_strips_quotes_in_bare_latex_group(self):
+        # `_{…}`/`^{…}`/`\cmd{…}` with no `$` delimiters still leak label quotes.
+        result, _ = self._q('graph TD\n    D["遞迴 F_{"n-2"}"] --> E')
+        assert '["遞迴 F_{n-2}"]' in result
+
+    def test_recloses_bare_latex_when_quote_was_closer(self):
+        result, _ = self._q('graph TD\n    C["高斯 e^{-t^2/m"}] --> D')
+        assert '["高斯 e^{-t^2/m}"] --> D' in result
+
+    def test_diamond_node_braces_not_touched(self):
+        # A real diamond `X{"…"}` (not a LaTeX group) must be left alone.
+        body = 'graph TD\n    A{"規模過大?"} --> B'
+        result, fixes = self._q(body)
+        assert fixes == []
+        assert '{"規模過大?"}' in result
+
     def test_clean_double_dollar_untouched(self):
         body = 'graph TD\n    A["公式 $$\\binom{n}{2}$$ 成立"] --> B'
         result, fixes = self._q(body)
