@@ -45,6 +45,7 @@ from core.parsing.mermaid_repair import (  # noqa: F401
     repair_mermaid_fences,
     repair_mermaid_label_quotes,
     repair_mermaid_latex_labels,
+    repair_mermaid_math_quotes,
     repair_mermaid_mindmap_brackets,
     repair_mermaid_mindmap_labels,
     repair_mermaid_mindmap_math,

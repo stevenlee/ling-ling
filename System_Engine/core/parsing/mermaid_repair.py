@@ -2093,6 +2093,63 @@ def repair_mermaid_rect_rgb_quotes(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+# A node whose quoted label opened with `["` but was left UNTERMINATED because
+# the closing `"` leaked into the math (removed above): `ID["…$…]`. Close it
+# right before the shape's `]`. The label body must contain `$` (math) and no
+# `"`; the `]` must be a real shape closer — followed by end, `;`, or a flowchart
+# arrow (`-`/`=`/`<`). A properly-quoted math label (`["…$[a,b]$"]`) is NOT
+# matched: its inner `]` is followed by `"`, and its real `]` by `"` too.
+_MERMAID_UNTERMINATED_MATH_LABEL_RE = re.compile(
+    r'\["(?P<body>[^"\n]*\$[^"\n]*?)\](?=\s*(?:;|$|[-=<]))'
+)
+
+
+def repair_mermaid_math_quotes(text: str) -> tuple[str, list[dict]]:
+    r"""Fix a node label's quote that the generator leaked into its math.
+
+    KaTeX never contains ``"``. The generator emits the enclosing label's quote
+    INSIDE the math span — ``C["… $\binom{n"}{2}$"]`` (extra) or, worse, in place
+    of the closing quote — ``C["… $\binom{n}{2}$]`` (label now unterminated).
+    Both crash the whole flowchart. Remove every ``"`` inside a ``$…$``/``$$…$$``
+    span, then re-close a rectangle label left unterminated by the removal. Clean
+    KaTeX (``$$\binom{n}{2}$$``) is untouched — mermaid renders it fine.
+    """
+    if "$" not in text or '"' not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+        elif in_mermaid and stripped == "```":
+            in_mermaid = False
+        elif in_mermaid and "$" in line and '"' in line:
+            new_line = _MERMAID_MATH_SPAN_RE.sub(lambda m: m.group(0).replace('"', ""), line)
+            # Removing the leaked quote can leave `["…$…]` unterminated — the
+            # only `"` on the token was the misplaced closer. Restore it.
+            new_line = _MERMAID_UNTERMINATED_MATH_LABEL_RE.sub(
+                lambda m: f'["{m.group("body")}"]', new_line
+            )
+            if new_line != line:
+                fixes.append(
+                    _make_fix(
+                        "stripped_math_label_quotes",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
+                out.append(new_line)
+                continue
+        out.append(line)
+
+    return "\n".join(out), fixes
+
+
 # ─── Mermaid: fence repair ────────────────────────────────────────────
 
 _FENCE_RE = re.compile(r"^```(\w*)\s*$")

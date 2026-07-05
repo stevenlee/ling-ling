@@ -165,6 +165,46 @@ class TestBrokenHeuristic:
         assert self.check("   \n  ")
 
 
+# ── Stray quotes inside math spans ─────────────────────────────────
+
+
+class TestMathLabelQuotes:
+    """A node label's `"` leaked into its KaTeX math (`$\\binom{n"}{2}$`), which
+    crashes the flowchart. KaTeX never contains `"`, so strip it; if the leaked
+    quote WAS the label's closer, re-close the label."""
+
+    def _q(self, body):
+        from core.parser import repair_mermaid_math_quotes
+
+        return repair_mermaid_math_quotes(f"```mermaid\n{body}\n```")
+
+    def test_strips_extra_quote_label_stays_closed(self):
+        result, fixes = self._q('graph TD\n    H["$\\binom{"n-1"}{k}$"] --> I')
+        assert '["$\\binom{n-1}{k}$"]' in result
+        assert any(f["type"] == "stripped_math_label_quotes" for f in fixes)
+
+    def test_recloses_when_quote_was_the_closer_at_eol(self):
+        result, _ = self._q('graph TD\n    C["比較 $\\binom{n"}{2}$];')
+        assert '["比較 $\\binom{n}{2}$"];' in result
+
+    def test_recloses_midline_before_arrow(self):
+        result, _ = self._q('graph TD\n    E["係數 $\\binom{n"}{k}$] --> F["視覺化"]')
+        assert '["係數 $\\binom{n}{k}$"] --> F["視覺化"]' in result
+
+    def test_clean_double_dollar_untouched(self):
+        body = 'graph TD\n    A["公式 $$\\binom{n}{2}$$ 成立"] --> B'
+        result, fixes = self._q(body)
+        assert fixes == []
+        assert "$$\\binom{n}{2}$$" in result
+
+    def test_properly_quoted_math_with_brackets_untouched(self):
+        # `$[a,b]$` inside a closed label: the inner `]` must not trigger reclose.
+        body = 'graph TD\n    J["範圍 $[a, b]$"] --> K'
+        result, fixes = self._q(body)
+        assert fixes == []
+        assert '["範圍 $[a, b]$"]' in result
+
+
 # ── LaTeX-in-label degradation ─────────────────────────────────────
 
 
