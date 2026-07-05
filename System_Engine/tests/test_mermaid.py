@@ -221,6 +221,27 @@ class TestMathLabelQuotes:
         assert '["範圍 $[a, b]$"]' in result
 
 
+class TestRootWrap:
+    """A mindmap `root(("…"))` stuffed into a flowchart rectangle label crashes
+    the flowchart; unwrap it to a plain label. A real mindmap root is untouched."""
+
+    def _q(self, body):
+        from core.parser import repair_mermaid_root_wrap
+
+        return repair_mermaid_root_wrap(f"```mermaid\n{body}\n```")
+
+    def test_unwraps_root_in_flowchart_label(self):
+        result, fixes = self._q('graph TD\n    A["root((\\"數學謎題\\"))"] --> B{"核心"}')
+        assert '["數學謎題"] --> B{"核心"}' in result
+        assert any(f["type"] == "unwrapped_mindmap_root" for f in fixes)
+
+    def test_real_mindmap_root_untouched(self):
+        body = "mindmap\n  root((中心主題))\n    分支"
+        result, fixes = self._q(body)
+        assert fixes == []
+        assert "root((中心主題))" in result
+
+
 # ── LaTeX-in-label degradation ─────────────────────────────────────
 
 

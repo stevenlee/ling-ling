@@ -2160,6 +2160,47 @@ def repair_mermaid_math_quotes(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+# A flowchart node whose label wraps mindmap root syntax: the diagram was meant
+# as a mindmap but rendered as a flowchart, so the root `root(("TEXT"))` got
+# stuffed into a rectangle label — `A["root((\"TEXT\"))"]` — which mermaid's
+# flowchart parser rejects. Unwrap to the plain label `A["TEXT"]`. A genuine
+# mindmap `root((TEXT))` is at line start (not inside `["…"]`) and never matches.
+_MERMAID_ROOT_WRAP_RE = re.compile(r'\["root\(\(\\?"?(?P<inner>[^"\\\n]+?)\\?"?\)\)"\]')
+
+
+def repair_mermaid_root_wrap(text: str) -> tuple[str, list[dict]]:
+    """Unwrap a mindmap `root(("…"))` mistakenly nested in a flowchart label."""
+    if "root((" not in text:
+        return text, []
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+        elif in_mermaid and stripped == "```":
+            in_mermaid = False
+        elif in_mermaid and '["root((' in line:
+            new_line = _MERMAID_ROOT_WRAP_RE.sub(lambda m: f'["{m.group("inner")}"]', line)
+            if new_line != line:
+                fixes.append(
+                    _make_fix(
+                        "unwrapped_mindmap_root",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
+                out.append(new_line)
+                continue
+        out.append(line)
+
+    return "\n".join(out), fixes
+
+
 # ─── Mermaid: fence repair ────────────────────────────────────────────
 
 _FENCE_RE = re.compile(r"^```(\w*)\s*$")
