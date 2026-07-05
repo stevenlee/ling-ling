@@ -1368,9 +1368,12 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
     5. **Degrade member math.** LaTeX on a member line (``+$\\rho_{"1:n"}$ 權重``)
        is illegal in mermaid's member grammar and crashes the diagram; it is
        flattened to plain text (``+ρ_1:n 權重``).
+    6. **Neutralize shorthand-member colons.** A ``:`` inside a ``X : value``
+       shorthand value (``X : +α_1:n``) is read as a second separator and errors;
+       it becomes a fullwidth ``：`` (same glyph, lexes as text).
 
-    Idempotent: once hoisted, deduped, stripped, demoted and de-mathed, no
-    pattern matches again.
+    Idempotent: once hoisted, deduped, stripped, demoted, de-mathed and
+    re-coloned, no pattern matches again.
     """
     fixes: list[dict] = []
 
@@ -1500,6 +1503,29 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
             )
         demathed.append(new)
     body = demathed
+
+    # Neutralize an ASCII `:` inside a shorthand member VALUE. `X : +α_1:n` — the
+    # first `:` is the member separator; a second `:` in the value is read as
+    # another separator and errors (`got 'LABEL'`). A fullwidth `：` renders the
+    # same but lexes as text. Body `{ }` members allow `:` (left alone); a
+    # relationship label (arrow present) keeps its `:`.
+    recoloned: list[str] = []
+    for offset, ln in enumerate(body):
+        new = ln
+        m = _CLASSDIAGRAM_MEMBER_SHORTHAND_RE.match(ln)
+        if m and ":" in m.group(2) and not _CLASSDIAGRAM_ARROW_RE.search(ln):
+            new = f"{m.group(1)}{m.group(2).replace(':', '：')}"
+        if new != ln:
+            fixes.append(
+                _make_fix(
+                    "neutralized_member_colon",
+                    line=base_line + offset,
+                    before=ln,
+                    after=new,
+                )
+            )
+        recoloned.append(new)
+    body = recoloned
 
     # Pre-scan: ids already given a `class` declaration (any form), and the
     # indentation to reuse for hoisted declarations.

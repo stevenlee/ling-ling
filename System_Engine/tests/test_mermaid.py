@@ -1000,6 +1000,29 @@ class TestClassDiagramRepair:
         assert "A : +μ 平均值" in result
         assert any(f["type"] == "degraded_classdiagram_member_math" for f in fixes)
 
+    def test_neutralizes_colon_in_shorthand_member(self):
+        # A `:` in a shorthand member value is a second separator → parse error;
+        # it becomes a fullwidth `：`. The separator colon stays ASCII.
+        body = 'classDiagram\n    class A["甲"]\n    A : +α_1:n'
+        result, fixes = self._q(body)
+        assert "    A : +α_1：n" in result
+        assert "A : +α_1:n" not in result
+        assert any(f["type"] == "neutralized_member_colon" for f in fixes)
+
+    def test_colon_untouched_in_body_member_and_relationship(self):
+        # Body members allow `:`; relationship labels keep their `:`.
+        body = (
+            "classDiagram\n"
+            '    class A["甲"]\n'
+            '    class B["乙"]\n'
+            "    class A {\n        +ρ_1:n 權重\n    }\n"
+            "    A --> B : owns:many"
+        )
+        result, fixes = self._q(body)
+        assert "+ρ_1:n 權重" in result
+        assert "A --> B : owns:many" in result
+        assert fixes == []
+
     def test_member_math_does_not_touch_relationship_label(self):
         # A relationship label is not a member; even with a `$`, it is left alone
         # (relationship labels aren't parsed by the member grammar).
