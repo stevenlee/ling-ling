@@ -179,6 +179,18 @@ _CLASSDIAGRAM_MEMBER_BODY_LINE_RE = re.compile(r"^(\s*[+\-#~])(.*)$")
 # (`A --> B : x`) by the absence of an arrow token (see _CLASSDIAGRAM_ARROW_RE).
 _CLASSDIAGRAM_MEMBER_SHORTHAND_RE = re.compile(r"^(\s*[A-Za-z_]\w*\s*:\s*)(\S.*)$")
 _CLASSDIAGRAM_ARROW_RE = re.compile(r"<\|--|--\|>|\*--|--\*|o--|--o|\.\.>|<\.\.|-->|<--|\.\.|--")
+# A line beginning with the `class` keyword; group 2 is everything after it.
+# Used to detect a relationship the LLM wrongly prefixed with `class`
+# (`class A <|-- B`) — distinguished from a real declaration by the decl/body
+# matchers, and from a member by the arrow check.
+_CLASSDIAGRAM_CLASS_PREFIX_RE = re.compile(r"^(\s*)class\s+(.+)$")
+# A stereotype alone on its line (`<<instance>>`) — the generator sometimes puts
+# the target id on the NEXT line; mermaid needs `<<instance>> Id` together.
+_CLASSDIAGRAM_STEREOTYPE_ALONE_RE = re.compile(r"^(\s*)<<[A-Za-z][^<>]*>>\s*$")
+# A bare class id alone on its line — the split stereotype's target, or the
+# body-opener id when the `class` keyword was dropped (`DevExTeam {`).
+_CLASSDIAGRAM_BARE_ID_RE = re.compile(r"^\s*[A-Za-z_]\w*\s*$")
+_CLASSDIAGRAM_KEYWORDLESS_BODY_OPEN_RE = re.compile(r"^(\s*)([A-Za-z_]\w*)\s*\{\s*$")
 
 # A fullwidth period `．` (U+FF0E) the LLM injects into an ASCII class id —
 # `DreamBooth ..> ImageDiffusion．Model` — is a lexical error (mermaid ids are
@@ -1362,18 +1374,21 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
        member or stereotype — ``{}``, ``{ <> }``, ``{ <<>> }`` — is dropped to a
        bare ``class X["label"]``. A body with a genuine stereotype
        (``<<instance>>``) or attribute (``+name string``) is kept intact.
-    4. **Demote mis-prefixed members.** ``class X : +member`` carries a stray
-       ``class`` keyword (a member takes none); the keyword is stripped to the
-       valid ``X : +member``.
+    4. **Demote mis-prefixed members/relationships.** ``class X : +member`` and
+       ``class A <|-- B`` carry a stray ``class`` keyword (only a declaration
+       takes one); it is stripped to ``X : +member`` / ``A <|-- B``.
     5. **Degrade member math.** LaTeX on a member line (``+$\\rho_{"1:n"}$ 權重``)
        is illegal in mermaid's member grammar and crashes the diagram; it is
        flattened to plain text (``+ρ_1:n 權重``).
     6. **Neutralize shorthand-member colons.** A ``:`` inside a ``X : value``
        shorthand value (``X : +α_1:n``) is read as a second separator and errors;
        it becomes a fullwidth ``：`` (same glyph, lexes as text).
+    7. **Merge split stereotypes.** ``<<instance>>`` with its target id on the
+       NEXT line is joined to ``<<instance>> Id`` (mermaid needs them together).
+    8. **Restore body-opener keyword.** A multiline ``Id {`` opener missing the
+       ``class`` keyword becomes ``class Id {`` so the block parses.
 
-    Idempotent: once hoisted, deduped, stripped, demoted, de-mathed and
-    re-coloned, no pattern matches again.
+    Idempotent: each pattern rewrites to a form no pattern matches again.
     """
     fixes: list[dict] = []
 
@@ -1394,6 +1409,35 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
             )
         normalized.append(fixed)
     body = normalized
+
+    # Merge a stereotype split from its target across two lines
+    # (`<<instance>>` ⏎ `Zp` → `<<instance>> Zp`). Mermaid needs them together;
+    # the standalone form is then declared below. Only merges when the very next
+    # line is a bare id (no blank line between — that would be ambiguous).
+    merged: list[str] = []
+    i = 0
+    while i < len(body):
+        ln = body[i]
+        if (
+            _CLASSDIAGRAM_STEREOTYPE_ALONE_RE.match(ln)
+            and i + 1 < len(body)
+            and _CLASSDIAGRAM_BARE_ID_RE.match(body[i + 1])
+        ):
+            fixed = f"{ln.rstrip()} {body[i + 1].strip()}"
+            fixes.append(
+                _make_fix(
+                    "merged_split_stereotype",
+                    line=base_line + i,
+                    before=f"{ln}\n{body[i + 1]}",
+                    after=fixed,
+                )
+            )
+            merged.append(fixed)
+            i += 2
+            continue
+        merged.append(ln)
+        i += 1
+    body = merged
 
     # Strip fullwidth-period corruption from id positions (`ImageDiffusion．Model`
     # → `ImageDiffusionModel`) — a mermaid lexical error otherwise.
@@ -1439,27 +1483,72 @@ def _repair_classdiagram_body(body: list[str], base_line: int) -> tuple[list[str
         extracted.extend(new_lines)
     body = extracted
 
+    # Add the dropped `class` keyword to a multiline body opener (`DevExTeam {`
+    # → `class DevExTeam {`). The single-line `Id { <<x>> }` form was handled
+    # just above; only a bare `Id {` line reaches here, and mermaid needs the
+    # keyword for the block that follows to parse.
+    keyworded: list[str] = []
+    for offset, ln in enumerate(body):
+        m = _CLASSDIAGRAM_KEYWORDLESS_BODY_OPEN_RE.match(ln)
+        if m:
+            fixed = f"{m.group(1)}class {m.group(2)} {{"
+            fixes.append(
+                _make_fix(
+                    "added_class_keyword_to_body",
+                    line=base_line + offset,
+                    before=ln,
+                    after=fixed,
+                )
+            )
+            keyworded.append(fixed)
+        else:
+            keyworded.append(ln)
+    body = keyworded
+
     # Strip the stray `class` keyword the generator prefixes onto member lines
-    # (`class Animal : +name string` → `Animal : +name string`). A member takes
-    # no keyword; only a declaration does, and a declaration never has a `:`.
-    # Done BEFORE the decl pre-scan so the demoted line is treated as an
-    # ordinary member below (not mistaken for a declaration).
+    # (`class Animal : +name string` → `Animal : +name string`) AND onto
+    # relationship lines (`class SimplePolicy <|-- ParameterizedPolicy` →
+    # `SimplePolicy <|-- ParameterizedPolicy`). A member takes no keyword (only a
+    # declaration does, and a declaration never has a `:`); a relationship never
+    # takes one either. Done BEFORE the decl pre-scan so the demoted line is
+    # treated as an ordinary member/relationship below (not a declaration).
     demoted: list[str] = []
     for offset, ln in enumerate(body):
         m = _CLASSDIAGRAM_MEMBER_KEYWORD_RE.match(ln)
-        if not m:
-            demoted.append(ln)
-            continue
-        fixed = f"{m.group(1)}{m.group(2)} : {m.group(3)}"
-        fixes.append(
-            _make_fix(
-                "stripped_class_keyword_from_member",
-                line=base_line + offset,
-                before=ln,
-                after=fixed,
+        if m:
+            fixed = f"{m.group(1)}{m.group(2)} : {m.group(3)}"
+            fixes.append(
+                _make_fix(
+                    "stripped_class_keyword_from_member",
+                    line=base_line + offset,
+                    before=ln,
+                    after=fixed,
+                )
             )
-        )
-        demoted.append(fixed)
+            demoted.append(fixed)
+            continue
+        # `class Id <arrow> ...` — a relationship the LLM prefixed with `class`.
+        # Guard with the decl/body-open matchers so a label containing `--`/`..`
+        # (`class X["a--b"]`) is never mistaken for a relationship.
+        rm = _CLASSDIAGRAM_CLASS_PREFIX_RE.match(ln)
+        if (
+            rm
+            and _CLASSDIAGRAM_ARROW_RE.search(rm.group(2))
+            and not _CLASSDIAGRAM_DECL_RE.match(ln)
+            and not _CLASSDIAGRAM_BODY_OPEN_RE.match(ln)
+        ):
+            fixed = f"{rm.group(1)}{rm.group(2)}"
+            fixes.append(
+                _make_fix(
+                    "stripped_class_keyword_from_relationship",
+                    line=base_line + offset,
+                    before=ln,
+                    after=fixed,
+                )
+            )
+            demoted.append(fixed)
+            continue
+        demoted.append(ln)
     body = demoted
 
     # Degrade LaTeX math on member lines. Mermaid's classDiagram member grammar

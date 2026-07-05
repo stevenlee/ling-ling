@@ -950,6 +950,39 @@ class TestClassDiagramRepair:
         assert result.count('class ProbabilityInference["機率推理"]') == 1
         assert any(f["type"] == "stripped_class_keyword_from_member" for f in fixes)
 
+    def test_merges_split_stereotype(self):
+        # `<<instance>>` with its target on the next line must be joined.
+        body = 'classDiagram\n    class Ring["環"]\n    <<instance>>\n    Zp\n    Zp ..> Ring : instance-of'
+        result, fixes = self._q(body)
+        assert "<<instance>> Zp" in result
+        assert any(f["type"] == "merged_split_stereotype" for f in fixes)
+        # target gets a declaration so v11 doesn't crash
+        assert "class Zp" in result
+
+    def test_restores_keywordless_body_opener(self):
+        # `DevExTeam {` (multiline body) missing `class` must get the keyword.
+        body = (
+            "classDiagram\n"
+            '    class DevExTeam["團隊"]\n'
+            "    DevExTeam {\n        <<instance>>\n    }"
+        )
+        result, fixes = self._q(body)
+        assert "class DevExTeam {" in result
+        assert any(f["type"] == "added_class_keyword_to_body" for f in fixes)
+
+    def test_strips_class_keyword_from_relationship(self):
+        body = (
+            "classDiagram\n"
+            '    class Policy["策略"]\n'
+            '    class SimplePolicy["簡單策略"]\n'
+            "    class SimplePolicy <|-- Policy"
+        )
+        result, fixes = self._q(body)
+        assert "    SimplePolicy <|-- Policy" in result
+        assert "class SimplePolicy <|-- Policy" not in result
+        assert result.count('class SimplePolicy["簡單策略"]') == 1
+        assert any(f["type"] == "stripped_class_keyword_from_relationship" for f in fixes)
+
     def test_does_not_touch_valid_declaration(self):
         # A bare/labelled/body-opening declaration has no colon — must not match.
         body = (
