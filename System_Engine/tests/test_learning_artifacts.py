@@ -151,6 +151,28 @@ def test_validate_mermaid_rejects_single_line():
     assert _validate_mermaid("```mermaid\nflowchart TD\n```", "flowchart") is False
 
 
+def test_validate_mermaid_rejects_leaked_metatext():
+    from services.learning_artifacts import _validate_mermaid
+
+    block = (
+        "```mermaid\nclassDiagram\n    class A\n"
+        "    ModelFree^... (Wait, I'll just write the final code block)\n```"
+    )
+    assert _validate_mermaid(block, "ontology") is False
+
+
+def test_metatext_detector_high_signal_only():
+    from services.learning_artifacts import mermaid_has_metatext
+
+    # real leaks are caught
+    assert mermaid_has_metatext("x (Wait, I'll just ...)")
+    assert mermaid_has_metatext("here's the final code block")
+    assert mermaid_has_metatext("As an AI, I cannot draw this")
+    # ordinary diagram content is NOT flagged
+    assert not mermaid_has_metatext('A["使用者請求"] --> B["最終結果"]')
+    assert not mermaid_has_metatext('class Willingness["意願"]')
+
+
 # ── VisualizeAgent ───────────────────────────────────────────────────────
 
 

@@ -168,6 +168,29 @@ def _build_classify_system(limit: int, exclude_types: set[str] | None = None) ->
 
 _MERMAID_BLOCK_RE = re.compile(r"```mermaid.*?```", re.DOTALL)
 
+# The model sometimes leaks its own reasoning into the diagram body
+# (`ModelFree^... (Wait, I'll just write the final code block)`). Such garbage
+# can't be repaired — the diagram is rejected so the artifact is dropped and
+# regenerated on the next pass. These phrases are extremely high-signal LLM
+# meta-text, near-impossible in a real diagram label, so false-drops are minimal.
+_MERMAID_METATEXT_RE = re.compile(
+    r"(?i)"
+    r"wait,\s*i|"  # "Wait, I'll ..."
+    r"i'?ll\s+just|"  # "I'll just write ..."
+    r"final\s+code\s+block|"
+    r"as\s+an\s+ai\b|"
+    r"i\s+apologi[sz]e|"
+    r"i\s+can(?:no|')?t\b|"  # I cannot / I can't
+    r"let\s+me\s+(?:just|write|know)|"
+    r"here'?s\s+the\s+(?:final|code|diagram)|"
+    r"as\s+requested"
+)
+
+
+def mermaid_has_metatext(block: str) -> bool:
+    """True if the mermaid block contains leaked LLM meta-text/reasoning."""
+    return bool(_MERMAID_METATEXT_RE.search(block))
+
 
 _NONE_RESULT = {
     "type": "none",
@@ -271,6 +294,10 @@ def _validate_mermaid(block: str, kind: str) -> bool:
     """Per-kind sanity: the diagram declares the requested type and has content.
     Catches 'asked for mindmap, got flowchart' and empty/garbage blocks. Not a
     full Mermaid parser — header keyword + non-trivial body."""
+    # Leaked LLM reasoning (`(Wait, I'll just write the final code block)`) is
+    # unrepairable garbage — reject so the artifact is dropped and regenerated.
+    if mermaid_has_metatext(block):
+        return False
     inner = block.strip()
     inner = inner[inner.find("\n") + 1 :] if "\n" in inner else ""  # drop ```mermaid fence line
     inner = inner.rsplit("```", 1)[0].strip()  # drop closing fence
