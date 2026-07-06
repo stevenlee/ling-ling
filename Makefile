@@ -12,6 +12,9 @@
 #   make validate-mermaid            check lings-desktop/pages
 #   make validate-mermaid MMD=path   check a specific file/dir
 #
+# Prompt-asset lint (also runs inside `make check` via test-fast):
+#   make validate-prompts   Scripture/Profile refs, orphan variants, math-policy sentinel
+#
 # Blog delivery:
 #   make blog   transform lings-desktop/Blog/ -> $(KAFU)/content/
 #
@@ -53,4 +56,7 @@ validate-mermaid:
 	@[ -d scripts/node_modules/mermaid ] || (cd scripts && npm install --no-fund --no-audit)
 	node scripts/validate_mermaid.mjs $(MMD)
 
-.PHONY: check lint format typecheck test test-fast install-dev blog validate-mermaid
+validate-prompts:
+	$(PY)/pytest -q System_Engine/tests/test_prompt_assets.py
+
+.PHONY: check lint format typecheck test test-fast install-dev blog validate-mermaid validate-prompts

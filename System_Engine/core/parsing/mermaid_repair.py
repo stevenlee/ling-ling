@@ -1959,6 +1959,11 @@ def _normalize_math_in_mermaid_line(line: str) -> tuple[str, str | None]:
 # untouched. Worse, a message routinely carries 2+ `$$` spans, which KaTeX spans
 # greedily first-to-last into one broken expression. Degrading all math to
 # unicode/plain text is the reliable render (`$$\pi^i$$` → `π^i`).
+#
+# NOTE: the LLM-facing statement of this math policy lives in the vault at
+# lings-desktop/Templates/Prompts/mermaid_rules.md (marker `math-policy:
+# katex-v2`, fed to BaseAgent._llm_repair_mermaid). Change the policy here →
+# update that file and bump its marker; tests/test_prompt_assets.py guards it.
 _MERMAID_NON_KATEX_KINDS = ("statediagram", "statediagram-v2", "timeline", "sequencediagram")
 
 

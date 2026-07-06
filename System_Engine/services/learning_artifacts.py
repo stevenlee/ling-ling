@@ -61,6 +61,10 @@ _MERMAID_KIND = {
 # Common to every kind. Kind-specific quoting rules are added separately —
 # crucially, the double-quote rule is FLOWCHART-only: mindmap is indentation-
 # based and a quoted node (`"概念"`) is a parse error that kills the diagram.
+# NOTE: the math rules below follow `math-policy: katex-v2` — the same policy is
+# stated LLM-facing in lings-desktop/Templates/Prompts/mermaid_rules.md and
+# enforced by core/parsing/mermaid_repair.py; change all three together
+# (tests/test_prompt_assets.py guards the vault file's marker).
 _MERMAID_RULES_COMMON = (
     "只輸出一個 ```mermaid 區塊,不要任何說明文字。"
     'label 裡若要放數學式,務必用 `$$…$$` 雙錢號包起來（mermaid 的 KaTeX 語法,例 `N["增長率 $$\\alpha$$"]`）；'
