@@ -94,7 +94,7 @@ class ReviewAgent(BaseAgent):
                 wiki_context=self._synthesis_body(syn_text),
                 forced_template=template,
                 persona="reviewer",
-                operation="rev",
+                operation="review",
                 temperature=0.5,
             )
             or ""

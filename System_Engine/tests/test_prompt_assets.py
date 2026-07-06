@@ -20,6 +20,7 @@ Skipped entirely when the vault isn't checked out next to System_Engine.
 """
 
 import re
+from pathlib import Path
 
 import pytest
 import yaml
@@ -39,6 +40,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
+
+_ENGINE_ROOT = Path(__file__).resolve().parent.parent
+_OPERATION_LITERAL_RE = re.compile(r"""operation=["']([A-Za-z0-9_]+)["']""")
 
 
 def _frontmatter(path) -> dict:
@@ -83,6 +87,26 @@ class TestReferentialIntegrity:
     def test_profiles_exist_at_all(self):
         # An empty Profiles/ dir would make every ref-check vacuously pass.
         assert _profiles(), "Scripture/Profiles/ has no profile files"
+
+    def test_code_operation_literals_resolve(self):
+        # PromptComposer loads OPERATIONS_DIR/f"{operation}.md" via
+        # load_capability_body, which silently returns "" for a missing file —
+        # the operation's methodology just never reaches the system prompt.
+        # (This bit ReviewAgent: operation="rev" while the file is review.md.)
+        # Lint every hardcoded operation literal in engine code against
+        # the vault's Operations/ directory.
+        skip_parts = {"tests", "scratch", ".venv", "venv", "site-packages"}
+        broken: list[str] = []
+        found: list[str] = []
+        for py in sorted(_ENGINE_ROOT.rglob("*.py")):
+            if skip_parts & set(py.relative_to(_ENGINE_ROOT).parts):
+                continue
+            for name in _OPERATION_LITERAL_RE.findall(py.read_text(encoding="utf-8")):
+                found.append(name)
+                if not (OPERATIONS_DIR / f"{name}.md").exists():
+                    broken.append(f"{py.relative_to(_ENGINE_ROOT)}: operation '{name}'")
+        assert found, "no operation= literals found — the scan itself is broken"
+        assert not broken, f"operation 引用斷鏈(Operations/ 缺檔): {broken}"
 
     def test_no_orphan_language_variants(self):
         # `X.zh.md` / `X.ja.md` without a base `X.md` is dead localization:
