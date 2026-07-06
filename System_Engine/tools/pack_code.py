@@ -44,10 +44,19 @@ def _resolve_inside_repo(raw: str) -> Path:
 
 def _collect(srcs: list[str]) -> list[Path]:
     files: list[Path] = []
+    repo = PROJECT_ROOT.resolve()
     for raw in srcs:
         p = _resolve_inside_repo(raw)
         if p.is_dir():
-            files.extend(sorted(f for f in p.rglob("*.py") if f.is_file()))
+            for f in sorted(p.rglob("*.py")):
+                if not f.is_file():
+                    continue
+                # A symlinked file inside the tree can point outside the repo —
+                # the SRC-level check above doesn't cover it. Never silent-skip.
+                if not f.resolve().is_relative_to(repo):
+                    print(f"⚠ skipped (resolves outside repo): {f}")
+                    continue
+                files.append(f)
         elif p.is_file():
             files.append(p)
         else:

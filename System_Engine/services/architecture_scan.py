@@ -17,6 +17,8 @@ import re
 
 import yaml
 
+from services.packed_note import split_sections
+
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 _PY_BLOCK_RE = re.compile(r"```python\s*\n(.*?)\n```", re.DOTALL)
 
@@ -85,11 +87,10 @@ def scan_architecture(packed_text: str) -> dict:
 
     internal_roots = _internal_roots(source_paths)
     modules: list[dict] = []
-    for sec in re.split(r"(?m)^## (?=\S)", body):
-        sec = sec.strip()
-        if not sec:
-            continue
-        path = sec.splitlines()[0].strip()
+    # Fence-aware, whitelist-first splitting (packed_note) — a top-column `## `
+    # comment inside a fence used to sever the section, losing its closing
+    # fence and silently dropping the whole module from the facts.
+    for path, sec in split_sections(body, source_paths):
         cb = _PY_BLOCK_RE.search(sec)
         if not cb:
             continue

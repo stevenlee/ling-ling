@@ -25,6 +25,7 @@ from core.config import CODE_REVIEW_DIR
 from core.ui import ui
 from core.vault_utils import sanitize_filename
 from services.code_identifier_guard import correct_code_identifiers
+from services.packed_note import split_sections
 
 _WIKILINK_RE = re.compile(r"\[\[(.*?)\]\]")
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -81,8 +82,8 @@ class CodeReviewAgent(BaseAgent):
             )[1]
 
         raw = note.read_text(encoding="utf-8")
-        identifiers, body = self._parse_packed(raw)
-        chunks = self._chunk_by_file(body)
+        identifiers, source_paths, body = self._parse_packed(raw)
+        chunks = self._chunk_by_file(body, source_paths)
         if not chunks:
             ui.error(f"🔔 打包筆記沒有可 review 的程式碼：{title}")
             return self._write_report(
@@ -138,10 +139,11 @@ class CodeReviewAgent(BaseAgent):
 
     # ── packed-note parsing ────────────────────────────────────────────
     @staticmethod
-    def _parse_packed(raw: str) -> tuple[list[str], str]:
-        """Return (identifiers, body-without-frontmatter)."""
+    def _parse_packed(raw: str) -> tuple[list[str], list[str], str]:
+        """Return (identifiers, source_paths, body-without-frontmatter)."""
         m = _FRONTMATTER_RE.match(raw)
         identifiers: list[str] = []
+        source_paths: list[str] = []
         body = raw
         if m:
             try:
@@ -149,28 +151,33 @@ class CodeReviewAgent(BaseAgent):
                 ids = fm.get("identifiers")
                 if isinstance(ids, list):
                     identifiers = [str(x) for x in ids]
+                sp = fm.get("source_paths")
+                if isinstance(sp, list):
+                    source_paths = [str(x) for x in sp]
             except yaml.YAMLError:
                 pass
             body = raw[m.end() :]
-        return identifiers, body
+        return identifiers, source_paths, body
 
     @staticmethod
-    def _chunk_by_file(body: str) -> list[tuple[str, str]]:
+    def _chunk_by_file(body: str, known_paths: list[str] | None = None) -> list[tuple[str, str]]:
         """Split into (file_label, chunk_text) — one per `## file` section, with
-        over-long sections windowed while keeping the file header on each."""
-        sections = re.split(r"(?m)^## (?=\S)", body)
+        over-long sections windowed while keeping the file header on each.
+
+        Splitting is delegated to packed_note.split_sections: with the packed
+        note's `source_paths` as the heading whitelist, a top-column `## ` (or
+        even ```) line INSIDE a code fence can never shear a section (the
+        review-fix for the fence-unaware `^## ` regex)."""
         chunks: list[tuple[str, str]] = []
-        for sec in sections:
-            sec = sec.strip()
-            if not sec or "```" not in sec:
+        for label, full in split_sections(body, known_paths):
+            if "```" not in full:
                 continue
-            label = sec.splitlines()[0].strip()
-            full = "## " + sec
             if len(full) <= _MAX_CHUNK_CHARS:
                 chunks.append((label, full))
                 continue
             header = f"## {label}\n\n"
-            payload = full[len(header) :]
+            prefix = f"## {label}"
+            payload = full[len(prefix) :].lstrip("\n") if full.startswith(prefix) else full
             for i in range(0, len(payload), _MAX_CHUNK_CHARS):
                 chunks.append((label, header + payload[i : i + _MAX_CHUNK_CHARS]))
         return chunks

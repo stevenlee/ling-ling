@@ -50,6 +50,23 @@ def test_rejects_oversized_file(repo):
         pack_code.pack(["big.py"], None)
 
 
+def test_dir_recursion_skips_symlink_escaping_repo(repo, tmp_path):
+    # REGRESSION (review fix): the SRC-level inside-repo check didn't cover
+    # files COLLECTED by directory recursion — a symlinked .py pointing outside
+    # the repo would have had its content packed.
+    outside = tmp_path.parent / "leak_target.py"
+    outside.write_text("SECRET = 'outside'\n", encoding="utf-8")
+    pkg = repo / "pkg"
+    pkg.mkdir()
+    (pkg / "safe.py").write_text("def safe():\n    pass\n", encoding="utf-8")
+    (pkg / "leak.py").symlink_to(outside)
+    out = pack_code.pack(["pkg"], "bundle")
+    text = out.read_text(encoding="utf-8")
+    assert "safe.py" in text
+    assert "SECRET" not in text
+    assert "leak.py" not in text
+
+
 def test_refuses_path_outside_repo(repo, tmp_path):
     outside = tmp_path.parent / "outside.py"
     outside.write_text("secret = 1\n", encoding="utf-8")

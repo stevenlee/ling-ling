@@ -24,7 +24,9 @@ NOT done here: it carries false-positive risk and needs its own analysis.
 import re
 
 _BACKTICK_RE = re.compile(r"`([^`\n]+)`")
-_IDENT_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*$")
+# Leading underscore included: private names (`_load_prompt`) are everywhere in
+# this codebase, and their mangled forms (`_loadprompt`) must be correctable.
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _norm(s: str) -> str:

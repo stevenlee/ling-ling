@@ -29,6 +29,14 @@ def test_already_correct_is_no_op():
     assert fixes == []
 
 
+def test_snaps_underscore_leading_token():
+    # REGRESSION (review fix): `_IDENT_RE` once required a leading letter, so a
+    # mangled PRIVATE name — ubiquitous in this codebase — was uncorrectable.
+    out, fixes = correct_code_identifiers("see `_loadprompt`", ["_load_prompt"])
+    assert "`_load_prompt`" in out
+    assert fixes == [{"from": "_loadprompt", "to": "_load_prompt"}]
+
+
 def test_non_distinctive_canonical_is_not_protected():
     # A plain lowercase name collides with ordinary words → skip it.
     out, fixes = correct_code_identifiers("run `main` now", ["main"])

@@ -60,6 +60,19 @@ def test_classifies_internal_vs_external_imports():
     assert "difflib" in bar["imports_external"]
 
 
+def test_hash_heading_inside_fence_does_not_drop_module():
+    # REGRESSION (review fix): a top-column `## note` inside the fence severed
+    # the section, its closing fence vanished, and the module silently
+    # disappeared from the facts.
+    text = (
+        "---\ntype: packed-code\nsource_paths:\n  - pkg/mod.py\n---\n\n"
+        "## pkg/mod.py\n\n```python\n## top-column note\nclass Keep:\n    pass\n```\n"
+    )
+    scan = scan_architecture(text)
+    assert [m["path"] for m in scan["modules"]] == ["pkg/mod.py"]
+    assert scan["modules"][0]["classes"] == ["Keep"]
+
+
 def test_syntax_error_section_flagged_not_dropped():
     text = "## x.py\n\n```python\ndef (:\n```\n"
     scan = scan_architecture(text)

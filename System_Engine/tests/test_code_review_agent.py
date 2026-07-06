@@ -112,6 +112,29 @@ def test_missing_note_is_fail_open(tmp_path, monkeypatch):
     assert "make pack-code" in out  # guides the user to pack first
 
 
+def test_chunker_ignores_hash_heading_inside_fence():
+    # REGRESSION (review fix): a top-column `## comment` inside the fence used
+    # to shear the section in two (fence-unaware `^## ` split).
+    body = "## real/file.py\n\n```python\nx = 1\n## top-column comment\ny = 2\n```\n"
+    chunks = CodeReviewAgent._chunk_by_file(body)  # fallback fence-tracking mode
+    assert len(chunks) == 1
+    assert chunks[0][0] == "real/file.py"
+    assert "## top-column comment" in chunks[0][1]  # kept as code, not a boundary
+
+
+def test_chunker_whitelist_mode_survives_fenced_backticks():
+    # Whitelist mode: even a stray top-column ``` inside the code (e.g. a
+    # docstring holding a fenced example) cannot confuse the boundaries,
+    # because only headings matching source_paths split.
+    body = (
+        "## a.py\n\n```python\ns = '''\n```\n'''\n## not a real heading\n```\n\n"
+        "## b.py\n\n```python\ny = 2\n```\n"
+    )
+    chunks = CodeReviewAgent._chunk_by_file(body, ["a.py", "b.py"])
+    assert [c[0] for c in chunks] == ["a.py", "b.py"]
+    assert "## not a real heading" in chunks[0][1]
+
+
 def test_routing_code_review_vs_review():
     # substring routing: the longer trigger must win, and review must be unaffected
     assert detect_intent("@ling-code-review", "@ling-code-review") == "code-review"
