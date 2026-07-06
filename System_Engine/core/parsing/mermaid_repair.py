@@ -296,13 +296,35 @@ _MERMAID_LATEX_SYMBOLS: dict[str, str] = {
     "mu": "μ",
     "nu": "ν",
     "xi": "ξ",
+    "pi": "π",
     "rho": "ρ",
     "sigma": "σ",
     "tau": "τ",
+    "upsilon": "υ",
     "phi": "φ",
     "chi": "χ",
     "psi": "ψ",
     "omega": "ω",
+    # var-forms + a few common symbols the map was missing (dropped-as-unknown
+    # otherwise, silently losing the glyph — see the `\pi` → `π` regression).
+    "varpi": "π",
+    "varphi": "φ",
+    "varepsilon": "ε",
+    "vartheta": "θ",
+    "varrho": "ρ",
+    "varsigma": "σ",
+    "ell": "ℓ",
+    "propto": "∝",
+    "sim": "∼",
+    "simeq": "≃",
+    "perp": "⊥",
+    "mid": "∣",
+    "emptyset": "∅",
+    "varnothing": "∅",
+    "setminus": "∖",
+    "prec": "≺",
+    "succ": "≻",
+    "Upsilon": "Υ",
     "Gamma": "Γ",
     "Delta": "Δ",
     "Theta": "Θ",
@@ -1931,21 +1953,27 @@ def _normalize_math_in_mermaid_line(line: str) -> tuple[str, str | None]:
 # literal `$$…$$` string, so it must be degraded to plain text rather than
 # preserved. mindmap is handled by its own earlier pass (repair_mermaid_mindmap_math),
 # so it is intentionally absent here.
-_MERMAID_NON_KATEX_KINDS = ("statediagram", "statediagram-v2", "timeline")
+# sequenceDiagram is here (not KaTeX-capable) because its message/Note text is
+# BARE (`A->>B: text`, `Note over X: text`), not a quoted label — the KaTeX path
+# below only normalizes `"…"` labels, so any `$$…$$` in a message would be left
+# untouched. Worse, a message routinely carries 2+ `$$` spans, which KaTeX spans
+# greedily first-to-last into one broken expression. Degrading all math to
+# unicode/plain text is the reliable render (`$$\pi^i$$` → `π^i`).
+_MERMAID_NON_KATEX_KINDS = ("statediagram", "statediagram-v2", "timeline", "sequencediagram")
 
 
 def repair_mermaid_latex_labels(text: str) -> tuple[str, list[dict]]:
     r"""Normalize math inside mermaid labels so it renders in the target output.
 
-    For KaTeX-capable kinds (flowchart/graph, class, sequence…) the target
-    renderers show ``$$...$$`` as real math, so it is PRESERVED and single
-    ``$...$`` is promoted to ``$$...$$``; a bare ``\command`` with no ``$``
-    (which KaTeX never sees) is degraded to plain text.
+    For KaTeX-capable kinds (flowchart/graph, class) the target renderers show
+    ``$$...$$`` as real math, so it is PRESERVED and single ``$...$`` is promoted
+    to ``$$...$$``; a bare ``\command`` with no ``$`` (which KaTeX never sees) is
+    degraded to plain text.
 
-    For non-KaTeX kinds (stateDiagram-v2, timeline) the renderer prints the
-    literal ``$$…$$`` string, so ALL math on the line — inside quoted state
-    descriptions AND in bare transition labels / timeline events — is degraded
-    to unicode/plain text (``$$\rightarrow$$`` → ``→``).
+    For non-KaTeX kinds (stateDiagram-v2, timeline, sequenceDiagram) the renderer
+    can't show KaTeX in the relevant text (bare transition labels, timeline
+    events, sequence messages/Notes), so ALL math on the line is degraded to
+    unicode/plain text (``$$\rightarrow$$`` → ``→``, ``$$\pi^i$$`` → ``π^i``).
 
     Runs after label-quoting so every flowchart label is already wrapped in
     ``"..."``.

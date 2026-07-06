@@ -285,6 +285,29 @@ class TestLatexLabels:
         assert r"$$\frac{1}{2}(l+r)$$" in result
         assert fixes == []
 
+    def test_sequencediagram_math_degraded_in_messages(self):
+        # sequenceDiagram message/Note text is bare (not a quoted label) and
+        # carries 2+ `$$` spans → degrade all math to unicode, keep the glyph.
+        body = (
+            "sequenceDiagram\n"
+            "    A->>B: 初始化 $$\\pi_1$$\n"
+            "    Note over B: 假設 $$\\pi^{-i}$$ 為 $$x$$ 值\n"
+            "    A->>B: 信念 $$h$$ 計算策略 $$\\pi^i$$"
+        )
+        result, fixes = self._strip(body)
+        assert "初始化 π_1" in result
+        assert "假設 π^(-i) 為 x 值" in result
+        assert "信念 h 計算策略 π^i" in result
+        assert "$" not in result.split("sequenceDiagram")[1]
+        assert any(f["type"] == "degraded_mermaid_math" for f in fixes)
+
+    def test_pi_glyph_not_dropped(self):
+        # Regression: `\pi` was missing from the symbol map and dropped entirely.
+        from core.parsing.mermaid_repair import _mermaid_latex_to_plaintext
+
+        assert _mermaid_latex_to_plaintext(r"$$\pi_1$$") == "π_1"
+        assert _mermaid_latex_to_plaintext(r"$$\varphi + \ell$$") == "φ + ℓ"
+
     def test_promotes_single_dollar_to_double(self):
         # Mermaid only renders `$$...$$`, so `$...$` is promoted; the command
         # is PRESERVED (KaTeX renders it), not unicode-degraded.
