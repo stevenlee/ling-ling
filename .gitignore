@@ -45,6 +45,9 @@ lings-desktop/Database/
 lings-desktop/Backups/
 lings-desktop/toLingLing/
 lings-desktop/fromLingLing/
+# CodeReview/ holds packed source for @ling-code-review / @ling-architect —
+# transient working material (a copy of repo source), never a knowledge asset.
+lings-desktop/CodeReview/
 lings-desktop/raw/
 # Consolidate/ is the ingestion INBOX — the daemon consumes files dropped here
 # and archives them to raw/, so its contents are transient (like the other

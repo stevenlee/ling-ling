@@ -23,29 +23,31 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "500"))
 # overrides them at runtime (config-in-Scripture convention). The remaining
 # flags below stay env-only. See DesignDoc/ThoughtfulSplitter_implementation_plan.md §9.1.
 
-USE_THOUGHTFUL_SPLITTER         = os.getenv("USE_THOUGHTFUL_SPLITTER", "false").lower() == "true"
-THOUGHTFUL_USE_LLM_FOR_INGEST   = os.getenv("THOUGHTFUL_USE_LLM_FOR_INGEST", "true").lower() == "true"
-THOUGHTFUL_USE_LLM_FOR_COUNTER  = os.getenv("THOUGHTFUL_USE_LLM_FOR_COUNTER", "false").lower() == "true"
-THOUGHTFUL_EMIT_SUMMARY         = os.getenv("THOUGHTFUL_EMIT_SUMMARY", "false").lower() == "true"
-THOUGHTFUL_CACHE_DIR            = os.getenv("THOUGHTFUL_CACHE_DIR") or None
+USE_THOUGHTFUL_SPLITTER = os.getenv("USE_THOUGHTFUL_SPLITTER", "false").lower() == "true"
+THOUGHTFUL_USE_LLM_FOR_INGEST = os.getenv("THOUGHTFUL_USE_LLM_FOR_INGEST", "true").lower() == "true"
+THOUGHTFUL_USE_LLM_FOR_COUNTER = (
+    os.getenv("THOUGHTFUL_USE_LLM_FOR_COUNTER", "false").lower() == "true"
+)
+THOUGHTFUL_EMIT_SUMMARY = os.getenv("THOUGHTFUL_EMIT_SUMMARY", "false").lower() == "true"
+THOUGHTFUL_CACHE_DIR = os.getenv("THOUGHTFUL_CACHE_DIR") or None
 
 # Long-doc synthesis runs a Critique pass against the part digests to surface
 # source-grounding defects and a keep/revise/reject verdict. Adds one LLM call
 # per long-doc ingestion; flip to "false" to disable on cost-constrained runs.
-SYNTHESIS_CRITIQUE_ENABLED      = os.getenv("SYNTHESIS_CRITIQUE_ENABLED", "true").lower() == "true"
+SYNTHESIS_CRITIQUE_ENABLED = os.getenv("SYNTHESIS_CRITIQUE_ENABLED", "true").lower() == "true"
 # When the critique verdict is revise/reject, regenerate the synthesis (with
 # the findings as feedback) up to this many times. Worst case adds one
 # synthesis + one critique call per retry. 0 disables the retry loop.
-SYNTHESIS_CRITIQUE_MAX_RETRIES  = max(0, int(os.getenv("SYNTHESIS_CRITIQUE_MAX_RETRIES", "1")))
+SYNTHESIS_CRITIQUE_MAX_RETRIES = max(0, int(os.getenv("SYNTHESIS_CRITIQUE_MAX_RETRIES", "1")))
 # LingLens quote verification: a report whose deterministically grounded
 # quote ratio falls below this gets quality_verdict "revise" instead of
 # "keep". Grounding is exact/near-exact substring match — translated or
 # heavily paraphrased quotes legitimately miss, hence the lenient default.
-LENS_QUOTE_MIN_GROUNDED_RATIO   = float(os.getenv("LENS_QUOTE_MIN_GROUNDED_RATIO", "0.8"))
-RAG_EXPLAIN_ENABLED             = os.getenv("RAG_EXPLAIN_ENABLED", "false").lower() == "true"
-MAINTENANCE_SCHEDULER_ENABLED   = os.getenv("MAINTENANCE_SCHEDULER_ENABLED", "true").lower() == "true"
-MAINTENANCE_POLL_SECONDS        = int(os.getenv("MAINTENANCE_POLL_SECONDS", "300"))
-RETRIEVAL_BENCH_MIN_PASS_RATE   = float(os.getenv("RETRIEVAL_BENCH_MIN_PASS_RATE", "0.8"))
+LENS_QUOTE_MIN_GROUNDED_RATIO = float(os.getenv("LENS_QUOTE_MIN_GROUNDED_RATIO", "0.8"))
+RAG_EXPLAIN_ENABLED = os.getenv("RAG_EXPLAIN_ENABLED", "false").lower() == "true"
+MAINTENANCE_SCHEDULER_ENABLED = os.getenv("MAINTENANCE_SCHEDULER_ENABLED", "true").lower() == "true"
+MAINTENANCE_POLL_SECONDS = int(os.getenv("MAINTENANCE_POLL_SECONDS", "300"))
+RETRIEVAL_BENCH_MIN_PASS_RATE = float(os.getenv("RETRIEVAL_BENCH_MIN_PASS_RATE", "0.8"))
 LOAD_SOURCES_MAX_CHARS_PER_SOURCE = int(os.getenv("LOAD_SOURCES_MAX_CHARS_PER_SOURCE", "20000"))
 
 # Phase 0.3.1 — Source Digest Layer
@@ -56,24 +58,24 @@ DIGEST_SOURCES_MAX_SOURCE_CHARS = int(os.getenv("DIGEST_SOURCES_MAX_SOURCE_CHARS
 
 
 # ─── Embedding Configuration ──────────────────────────────────────────
-EMBEDDING_PROVIDER              = os.getenv("EMBEDDING_PROVIDER", "local").lower()
-EMBEDDING_MODEL                 = os.getenv("EMBEDDING_MODEL") or None
-EMBEDDING_CACHE_ENABLED         = os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() == "true"
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local").lower()
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL") or None
+EMBEDDING_CACHE_ENABLED = os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() == "true"
 # Per-input char cap before embedding, to stay under the model's context window
 # (Ollama 400s past it). 0 = auto by model: nomic-embed-text has a short context
 # (~1200 chars safe), long-context models like bge-m3 get a generous cap. Set
 # explicitly to override. NOTE: too small a cap silently embeds only the head of
 # each chunk — the bug that crippled vector retrieval under nomic+CHUNK_SIZE=5000.
-EMBEDDING_MAX_CHARS             = int(os.getenv("EMBEDDING_MAX_CHARS", "0"))
+EMBEDDING_MAX_CHARS = int(os.getenv("EMBEDDING_MAX_CHARS", "0"))
 
 # ─── Reranker Configuration ───────────────────────────────────────────
-RERANKER_ENABLED                = os.getenv("RERANKER_ENABLED", "false").lower() == "true"
-RERANKER_MODEL                  = os.getenv("RERANKER_MODEL") or "BAAI/bge-reranker-v2-m3"
-RERANKER_MULTIPLIER             = int(os.getenv("RERANKER_MULTIPLIER", "5"))
+RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "false").lower() == "true"
+RERANKER_MODEL = os.getenv("RERANKER_MODEL") or "BAAI/bge-reranker-v2-m3"
+RERANKER_MULTIPLIER = int(os.getenv("RERANKER_MULTIPLIER", "5"))
 
 # ─── Hybrid Retrieval (BM25 + RRF) ────────────────────────────────────
-HYBRID_RETRIEVAL_ENABLED        = os.getenv("HYBRID_RETRIEVAL_ENABLED", "false").lower() == "true"
-BM25_MULTIPLIER                 = int(os.getenv("BM25_MULTIPLIER", "3"))
+HYBRID_RETRIEVAL_ENABLED = os.getenv("HYBRID_RETRIEVAL_ENABLED", "false").lower() == "true"
+BM25_MULTIPLIER = int(os.getenv("BM25_MULTIPLIER", "3"))
 
 # ─── Cross-lingual retrieval (query translation → candidate net) ──────
 # NOTE: the PRIMARY cross-lingual lever is the multilingual reranker
@@ -84,10 +86,10 @@ BM25_MULTIPLIER                 = int(os.getenv("BM25_MULTIPLIER", "3"))
 # can't rank it). Default off. When on, translate the query into the other
 # corpus languages, retrieve per variant, RRF-fuse, rerank against the ORIGINAL
 # query. Additive, index-untouched, one extra LLM call per query.
-CROSS_LINGUAL_ENABLED           = os.getenv("CROSS_LINGUAL_ENABLED", "false").lower() == "true"
+CROSS_LINGUAL_ENABLED = os.getenv("CROSS_LINGUAL_ENABLED", "false").lower() == "true"
 # Languages the corpus holds; a query is translated into each of these EXCEPT
 # its own detected language. Comma-separated ISO-ish codes.
-CROSS_LINGUAL_TARGET_LANGS      = [
+CROSS_LINGUAL_TARGET_LANGS = [
     s.strip() for s in os.getenv("CROSS_LINGUAL_TARGET_LANGS", "en,zh").split(",") if s.strip()
 ]
 
@@ -97,26 +99,26 @@ CROSS_LINGUAL_TARGET_LANGS      = [
 # returned 9/10 SpaceX chunks, NIST itself at rank 11). Cap how many chunks
 # from the SAME source document survive into the final top-k. 0 disables.
 # Applied on the non-MMR path (MMR is its own diversity mechanism).
-RETRIEVAL_MAX_PER_DOC           = int(os.getenv("RETRIEVAL_MAX_PER_DOC", "2"))
+RETRIEVAL_MAX_PER_DOC = int(os.getenv("RETRIEVAL_MAX_PER_DOC", "2"))
 
 # ─── Facet Index (summary-as-pointer retrieval) ───────────────────────
 # Part digests (thesis/key_points) are embedded as "facet" entries that
 # point back to their source page. A facet hit is dereferenced to the real
 # chunk before reranking — facets are retrieval pointers, never content.
-FACET_INDEX_ENABLED             = os.getenv("FACET_INDEX_ENABLED", "true").lower() == "true"
-FACET_MAX_PER_DOC               = int(os.getenv("FACET_MAX_PER_DOC", "8"))
+FACET_INDEX_ENABLED = os.getenv("FACET_INDEX_ENABLED", "true").lower() == "true"
+FACET_MAX_PER_DOC = int(os.getenv("FACET_MAX_PER_DOC", "8"))
 
 # ─── Facet Backfill (idle, low-priority) ──────────────────────────────
 # Pages indexed before the facet index existed get their facets backfilled
 # one page at a time whenever the system is idle. Strictly lower priority
 # than user work: the busy lock arbitrates, steps are small, and the pump
 # yields to fresh files in toLingLing/ or Consolidate/.
-FACET_BACKFILL_ENABLED          = os.getenv("FACET_BACKFILL_ENABLED", "true").lower() == "true"
-FACET_BACKFILL_GRACE_SECONDS    = int(os.getenv("FACET_BACKFILL_GRACE_SECONDS", "180"))
+FACET_BACKFILL_ENABLED = os.getenv("FACET_BACKFILL_ENABLED", "true").lower() == "true"
+FACET_BACKFILL_GRACE_SECONDS = int(os.getenv("FACET_BACKFILL_GRACE_SECONDS", "180"))
 FACET_BACKFILL_STEP_GAP_SECONDS = int(os.getenv("FACET_BACKFILL_STEP_GAP_SECONDS", "30"))
-FACET_BACKFILL_DAILY_BUDGET     = int(os.getenv("FACET_BACKFILL_DAILY_BUDGET", "1000"))
-FACET_BACKFILL_MAX_ATTEMPTS     = int(os.getenv("FACET_BACKFILL_MAX_ATTEMPTS", "3"))
-FACET_BACKFILL_MIN_BYTES        = int(os.getenv("FACET_BACKFILL_MIN_BYTES", "400"))
+FACET_BACKFILL_DAILY_BUDGET = int(os.getenv("FACET_BACKFILL_DAILY_BUDGET", "1000"))
+FACET_BACKFILL_MAX_ATTEMPTS = int(os.getenv("FACET_BACKFILL_MAX_ATTEMPTS", "3"))
+FACET_BACKFILL_MIN_BYTES = int(os.getenv("FACET_BACKFILL_MIN_BYTES", "400"))
 
 # ─── Daydream (daytime makeup + spontaneous reflection, idle, low-priority) ──
 # Night belongs to the scheduler's deep sleep (1–5am dreaming window). If that
@@ -127,20 +129,20 @@ FACET_BACKFILL_MIN_BYTES        = int(os.getenv("FACET_BACKFILL_MIN_BYTES", "400
 # alongside dreaming_from/to. Only the state-file path lives here (infra).
 
 # ─── Cortex Memory Phase 1 ────────────────────────────────────────────
-INSIGHT_SIGNALS_ENABLED         = os.getenv("INSIGHT_SIGNALS_ENABLED", "true").lower() == "true"
-INSIGHT_REFUTE_ENABLED          = os.getenv("INSIGHT_REFUTE_ENABLED", "true").lower() == "true"
+INSIGHT_SIGNALS_ENABLED = os.getenv("INSIGHT_SIGNALS_ENABLED", "true").lower() == "true"
+INSIGHT_REFUTE_ENABLED = os.getenv("INSIGHT_REFUTE_ENABLED", "true").lower() == "true"
 
 # ─── Cortex Memory Phase 2 (nightly consolidation) ────────────────────
 # Insights with healthy Phase-1 signals are distilled into atomic claims
 # and consolidated into Cortex/ pages during the dreaming window. Merging
 # only happens on a bidirectional-entailment verdict; everything else
 # links. Quotas bound the nightly LLM spend.
-CORTEX_CONSOLIDATION_ENABLED        = os.getenv("CORTEX_CONSOLIDATION_ENABLED", "true").lower() == "true"
-CORTEX_MAX_INSIGHTS_PER_NIGHT       = int(os.getenv("CORTEX_MAX_INSIGHTS_PER_NIGHT", "10"))
-CORTEX_MAX_ADJUDICATIONS_PER_NIGHT  = int(os.getenv("CORTEX_MAX_ADJUDICATIONS_PER_NIGHT", "20"))
-CORTEX_NEIGHBOR_TOP_K               = int(os.getenv("CORTEX_NEIGHBOR_TOP_K", "3"))
-CORTEX_NEIGHBOR_SIM_THRESHOLD       = float(os.getenv("CORTEX_NEIGHBOR_SIM_THRESHOLD", "0.80"))
-CORTEX_MAX_VARIANTS                 = int(os.getenv("CORTEX_MAX_VARIANTS", "5"))
+CORTEX_CONSOLIDATION_ENABLED = os.getenv("CORTEX_CONSOLIDATION_ENABLED", "true").lower() == "true"
+CORTEX_MAX_INSIGHTS_PER_NIGHT = int(os.getenv("CORTEX_MAX_INSIGHTS_PER_NIGHT", "10"))
+CORTEX_MAX_ADJUDICATIONS_PER_NIGHT = int(os.getenv("CORTEX_MAX_ADJUDICATIONS_PER_NIGHT", "20"))
+CORTEX_NEIGHBOR_TOP_K = int(os.getenv("CORTEX_NEIGHBOR_TOP_K", "3"))
+CORTEX_NEIGHBOR_SIM_THRESHOLD = float(os.getenv("CORTEX_NEIGHBOR_SIM_THRESHOLD", "0.80"))
+CORTEX_MAX_VARIANTS = int(os.getenv("CORTEX_MAX_VARIANTS", "5"))
 
 # ─── Cortex Memory Phase 3 (decay: dual-strength S/R model) ───────────
 # Storage strength S only grows (spacing effect: gains shrink when R is
@@ -148,12 +150,12 @@ CORTEX_MAX_VARIANTS                 = int(os.getenv("CORTEX_MAX_VARIANTS", "5"))
 # States derive from R with hysteresis. base/growth here are INITIAL
 # values — the live params live in CORTEX_DECAY_STATE_FILE and get
 # damped-calibrated against the revival rate.
-CORTEX_DECAY_ENABLED            = os.getenv("CORTEX_DECAY_ENABLED", "true").lower() == "true"
-CORTEX_DECAY_BASE_DAYS          = float(os.getenv("CORTEX_DECAY_BASE_DAYS", "21"))
-CORTEX_DECAY_GROWTH             = float(os.getenv("CORTEX_DECAY_GROWTH", "1.8"))
-CORTEX_REVALIDATIONS_PER_NIGHT  = int(os.getenv("CORTEX_REVALIDATIONS_PER_NIGHT", "3"))
-CORTEX_REVIVAL_TARGET_LOW       = float(os.getenv("CORTEX_REVIVAL_TARGET_LOW", "0.05"))
-CORTEX_REVIVAL_TARGET_HIGH      = float(os.getenv("CORTEX_REVIVAL_TARGET_HIGH", "0.10"))
+CORTEX_DECAY_ENABLED = os.getenv("CORTEX_DECAY_ENABLED", "true").lower() == "true"
+CORTEX_DECAY_BASE_DAYS = float(os.getenv("CORTEX_DECAY_BASE_DAYS", "21"))
+CORTEX_DECAY_GROWTH = float(os.getenv("CORTEX_DECAY_GROWTH", "1.8"))
+CORTEX_REVALIDATIONS_PER_NIGHT = int(os.getenv("CORTEX_REVALIDATIONS_PER_NIGHT", "3"))
+CORTEX_REVIVAL_TARGET_LOW = float(os.getenv("CORTEX_REVIVAL_TARGET_LOW", "0.05"))
+CORTEX_REVIVAL_TARGET_HIGH = float(os.getenv("CORTEX_REVIVAL_TARGET_HIGH", "0.10"))
 
 # ─── Cortex Memory Phase 4 (claim ledger + falsified) ─────────────────
 # Falsification is conservative: >=2 contradicting claims from
@@ -161,36 +163,42 @@ CORTEX_REVIVAL_TARGET_HIGH      = float(os.getenv("CORTEX_REVIVAL_TARGET_HIGH", 
 # is killed (the file stays — it records what we used to believe).
 # Un-merge tracking feeds adjudication strictness: when users keep
 # splitting merged pages, equivalent verdicts demote to links.
-CORTEX_LEDGER_ENABLED           = os.getenv("CORTEX_LEDGER_ENABLED", "true").lower() == "true"
-CORTEX_FALSIFY_PER_NIGHT        = int(os.getenv("CORTEX_FALSIFY_PER_NIGHT", "2"))
-CORTEX_FALSIFY_SAMPLES          = max(1, int(os.getenv("CORTEX_FALSIFY_SAMPLES", "3")))
+CORTEX_LEDGER_ENABLED = os.getenv("CORTEX_LEDGER_ENABLED", "true").lower() == "true"
+CORTEX_FALSIFY_PER_NIGHT = int(os.getenv("CORTEX_FALSIFY_PER_NIGHT", "2"))
+CORTEX_FALSIFY_SAMPLES = max(1, int(os.getenv("CORTEX_FALSIFY_SAMPLES", "3")))
 # Cortex Phase 5 (read side). @ling-recall feeds the LLM the whole Cortex when
 # it fits (<= LLM_MAX claims) — at this scale retrieval is the wrong tool, the
 # LLM handles typos/concepts/framing far better. Above LLM_MAX, hybrid recall
 # pre-filters to PREFILTER candidates first. TOP_K caps the rendered citations.
-CORTEX_RECALL_TOP_K             = max(1, int(os.getenv("CORTEX_RECALL_TOP_K", "8")))
-CORTEX_RECALL_LLM_MAX           = max(1, int(os.getenv("CORTEX_RECALL_LLM_MAX", "150")))
-CORTEX_RECALL_PREFILTER         = max(1, int(os.getenv("CORTEX_RECALL_PREFILTER", "40")))
+CORTEX_RECALL_TOP_K = max(1, int(os.getenv("CORTEX_RECALL_TOP_K", "8")))
+CORTEX_RECALL_LLM_MAX = max(1, int(os.getenv("CORTEX_RECALL_LLM_MAX", "150")))
+CORTEX_RECALL_PREFILTER = max(1, int(os.getenv("CORTEX_RECALL_PREFILTER", "40")))
 # Cortex Phase 5 F3 (tension digest): a claim is "dogmatic" (echo-chamber fuel)
 # when its falsifiability is <= DOGMATIC_FALS yet confidence >= DOGMATIC_CONF;
 # "thin evidence" when it has <= THIN_EVIDENCE_MAX sources.
-CORTEX_TENSION_DOGMATIC_FALS    = float(os.getenv("CORTEX_TENSION_DOGMATIC_FALS", "0.25"))
-CORTEX_TENSION_DOGMATIC_CONF    = float(os.getenv("CORTEX_TENSION_DOGMATIC_CONF", "0.5"))
+CORTEX_TENSION_DOGMATIC_FALS = float(os.getenv("CORTEX_TENSION_DOGMATIC_FALS", "0.25"))
+CORTEX_TENSION_DOGMATIC_CONF = float(os.getenv("CORTEX_TENSION_DOGMATIC_CONF", "0.5"))
 CORTEX_TENSION_THIN_EVIDENCE_MAX = max(0, int(os.getenv("CORTEX_TENSION_THIN_EVIDENCE_MAX", "1")))
 # Cortex Phase 5 F1 (grounded insight). DEFAULT OFF — must stay off until ALL
 # anti-echo-chamber defenses land (injection+gate+framing, provenance firewall
 # in consolidation, canary). Inject up to GROUND_TOP_K relevant claims with
 # falsifiability >= GROUND_MIN_FALSIFIABILITY as DIALECTICAL priors; ground only
 # GROUND_FRACTION of seeds, leaving the rest cold for the echo-chamber canary.
-CORTEX_GROUNDED_INSIGHT_ENABLED = os.getenv("CORTEX_GROUNDED_INSIGHT_ENABLED", "false").lower() == "true"
+CORTEX_GROUNDED_INSIGHT_ENABLED = (
+    os.getenv("CORTEX_GROUNDED_INSIGHT_ENABLED", "false").lower() == "true"
+)
 CORTEX_GROUND_MIN_FALSIFIABILITY = float(os.getenv("CORTEX_GROUND_MIN_FALSIFIABILITY", "0.5"))
-CORTEX_GROUND_TOP_K             = max(1, int(os.getenv("CORTEX_GROUND_TOP_K", "3")))
-CORTEX_GROUND_FRACTION          = max(0.0, min(1.0, float(os.getenv("CORTEX_GROUND_FRACTION", "0.7"))))
+CORTEX_GROUND_TOP_K = max(1, int(os.getenv("CORTEX_GROUND_TOP_K", "3")))
+CORTEX_GROUND_FRACTION = max(0.0, min(1.0, float(os.getenv("CORTEX_GROUND_FRACTION", "0.7"))))
 # Bounds for M4 auto-tuning of the grounding fraction. Never ground every seed
 # (the cold control group must survive for the canary) and never so few that
 # grounding is pointless.
-CORTEX_GROUND_MIN_FRACTION      = max(0.0, min(1.0, float(os.getenv("CORTEX_GROUND_MIN_FRACTION", "0.3"))))
-CORTEX_GROUND_MAX_FRACTION      = max(0.0, min(1.0, float(os.getenv("CORTEX_GROUND_MAX_FRACTION", "0.85"))))
+CORTEX_GROUND_MIN_FRACTION = max(
+    0.0, min(1.0, float(os.getenv("CORTEX_GROUND_MIN_FRACTION", "0.3")))
+)
+CORTEX_GROUND_MAX_FRACTION = max(
+    0.0, min(1.0, float(os.getenv("CORTEX_GROUND_MAX_FRACTION", "0.85")))
+)
 # Phase 6 (learning artifacts) — the on-demand @ling-visualize is always
 # available. The two user-facing OUTPUT PREFERENCES it grows (auto-attach to
 # synthesis/insight, extra Mermaid on argument maps) live in Scripture, NOT
@@ -201,29 +209,29 @@ CORTEX_GROUND_MAX_FRACTION      = max(0.0, min(1.0, float(os.getenv("CORTEX_GROU
 # scorecard, run one lean LLM call → structured root-cause + candidate fixes
 # (read-only analysis; M3 turns the best into gated proposals). LLM-costed →
 # default OFF until validated. SELF_ASSESSMENT_HISTORY_MAX caps the trend log.
-SELF_DIAGNOSIS_ENABLED          = os.getenv("SELF_DIAGNOSIS_ENABLED", "false").lower() == "true"
-SELF_ASSESSMENT_HISTORY_MAX     = max(2, int(os.getenv("SELF_ASSESSMENT_HISTORY_MAX", "180")))
+SELF_DIAGNOSIS_ENABLED = os.getenv("SELF_DIAGNOSIS_ENABLED", "false").lower() == "true"
+SELF_ASSESSMENT_HISTORY_MAX = max(2, int(os.getenv("SELF_ASSESSMENT_HISTORY_MAX", "180")))
 # Metacognition M3 (self-improvement): when the weekly task should auto-GENERATE
 # revision proposals (queued, never applied) after diagnosis. The @ling-improve
 # command can generate/approve on-demand regardless. Default OFF — the system
 # should propose changes to itself only when asked, until validated.
-SELF_IMPROVE_ENABLED            = os.getenv("SELF_IMPROVE_ENABLED", "false").lower() == "true"
+SELF_IMPROVE_ENABLED = os.getenv("SELF_IMPROVE_ENABLED", "false").lower() == "true"
 # Metacognition M4 (numeric auto-tune): the only no-human-gate phase, so it is
 # deliberately confined to safe numeric knobs, each bound to an outcome metric,
 # adjusted with damping (±20%/step), a min-sample gate, and AUTO-ROLLBACK on
 # regression. Models the decay-calibration loop. Default OFF.
-AUTOTUNE_ENABLED                = os.getenv("AUTOTUNE_ENABLED", "false").lower() == "true"
-CORTEX_UNMERGE_STRICT_AT        = float(os.getenv("CORTEX_UNMERGE_STRICT_AT", "0.10"))
-CORTEX_UNMERGE_RELAX_AT         = float(os.getenv("CORTEX_UNMERGE_RELAX_AT", "0.05"))
-CORTEX_UNMERGE_MIN_SAMPLES      = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))
+AUTOTUNE_ENABLED = os.getenv("AUTOTUNE_ENABLED", "false").lower() == "true"
+CORTEX_UNMERGE_STRICT_AT = float(os.getenv("CORTEX_UNMERGE_STRICT_AT", "0.10"))
+CORTEX_UNMERGE_RELAX_AT = float(os.getenv("CORTEX_UNMERGE_RELAX_AT", "0.05"))
+CORTEX_UNMERGE_MIN_SAMPLES = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))
 
 # ─── Insight generation mix (backlog: doc-anchored seeds) ─────────────
 # Nightly insights target concrete documents chosen by interest-weighted
 # sampling with an exploration share — doc-anchored material produces
 # more falsifiable claims than vault-wide rumination. Weekly full-vault
 # insight is kept as a separate task.
-INSIGHT_SEED_EPSILON                = float(os.getenv("INSIGHT_SEED_EPSILON", "0.2"))
-INSIGHT_SEED_TARGETS                = int(os.getenv("INSIGHT_SEED_TARGETS", "2"))
+INSIGHT_SEED_EPSILON = float(os.getenv("INSIGHT_SEED_EPSILON", "0.2"))
+INSIGHT_SEED_TARGETS = int(os.getenv("INSIGHT_SEED_TARGETS", "2"))
 
 # ─── Paths ────────────────────────────────────────────────────────────
 
@@ -254,6 +262,10 @@ PROMPTS_DIR = TEMPLATES_DIR / "Prompts"
 OPERATIONS_DIR = TEMPLATES_DIR / "Operations"
 PAGES_DIR = WIKI_VAULT_DIR / "pages"
 NOTES_DIR = WIKI_VAULT_DIR / "Notes"
+# Packed source code for @ling-code-review / @ling-architect. A top-level vault
+# dir deliberately OUTSIDE pages/Notes/Cortex, so _should_index() never ingests
+# or RAG-indexes packed code (see watchers/vault_watcher.py::_should_index).
+CODE_REVIEW_DIR = WIKI_VAULT_DIR / "CodeReview"
 CORTEX_DIR = WIKI_VAULT_DIR / "Cortex"
 INSIGHTS_DIR = WIKI_VAULT_DIR / "Insights"
 TAG_MAP_FILE = PAGES_DIR / "_tagScrapbook.md"
@@ -303,7 +315,7 @@ RAW_ASSETS_DIR = RAW_DIR / "assets"
 RAW_MERGED_DIR = RAW_DIR / "merged"
 
 
-_FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*(?:\n|$)', re.DOTALL | re.MULTILINE)
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", re.DOTALL | re.MULTILINE)
 
 
 class DynamicSettings:
@@ -311,42 +323,42 @@ class DynamicSettings:
 
     # (yaml_key, attr_name, type_coercer)
     _BINDINGS: tuple[tuple[str, str, type], ...] = (
-        ("be_a",               "AGENT_ROLE",         str),
-        ("say",                "OUTPUT_LANGUAGE",    str),
-        ("use_template",       "USE_TEMPLATE",       str),
-        ("creativity",         "CREATIVITY",         float),
-        ("max_output",         "MAX_OUTPUT",         int),
-        ("memory_limit",       "MEMORY_LIMIT",       int),
-        ("search_depth",       "SEARCH_DEPTH",       int),
-        ("strict_mode",        "STRICT_MODE",        bool),
-        ("digest_limit",       "DIGEST_LIMIT",       int),
-        ("digest_overlap",     "DIGEST_OVERLAP",     int),
+        ("be_a", "AGENT_ROLE", str),
+        ("say", "OUTPUT_LANGUAGE", str),
+        ("use_template", "USE_TEMPLATE", str),
+        ("creativity", "CREATIVITY", float),
+        ("max_output", "MAX_OUTPUT", int),
+        ("memory_limit", "MEMORY_LIMIT", int),
+        ("search_depth", "SEARCH_DEPTH", int),
+        ("strict_mode", "STRICT_MODE", bool),
+        ("digest_limit", "DIGEST_LIMIT", int),
+        ("digest_overlap", "DIGEST_OVERLAP", int),
         # Thoughtful-splitter knobs (P2):
-        ("overlap_chars",      "OVERLAP_CHARS",      int),
-        ("digest_max_factor",  "DIGEST_MAX_FACTOR",  float),
-        ("digest_min_factor",  "DIGEST_MIN_FACTOR",  float),
-        ("dreaming_from",      "DREAMING_FROM",      int),
-        ("dreaming_to",        "DREAMING_TO",        int),
+        ("overlap_chars", "OVERLAP_CHARS", int),
+        ("digest_max_factor", "DIGEST_MAX_FACTOR", float),
+        ("digest_min_factor", "DIGEST_MIN_FACTOR", float),
+        ("dreaming_from", "DREAMING_FROM", int),
+        ("dreaming_to", "DREAMING_TO", int),
         # Daydream: daytime makeup + spontaneous reflection (sibling of dreaming):
-        ("daydream",                   "DAYDREAM_ENABLED",              bool),
-        ("daydream_spontaneous",       "DAYDREAM_SPONTANEOUS_ENABLED",  bool),
+        ("daydream", "DAYDREAM_ENABLED", bool),
+        ("daydream_spontaneous", "DAYDREAM_SPONTANEOUS_ENABLED", bool),
         ("daydream_consolidation_budget", "DAYDREAM_CONSOLIDATION_BUDGET", int),
-        ("daydream_bite_adjudications",   "DAYDREAM_BITE_ADJUDICATIONS",   int),
-        ("daydream_insight_budget",       "DAYDREAM_INSIGHT_BUDGET",       int),
-        ("daydream_spontaneous_budget",   "DAYDREAM_SPONTANEOUS_BUDGET",   int),
-        ("self_healing",       "SELF_HEALING",       bool),
+        ("daydream_bite_adjudications", "DAYDREAM_BITE_ADJUDICATIONS", int),
+        ("daydream_insight_budget", "DAYDREAM_INSIGHT_BUDGET", int),
+        ("daydream_spontaneous_budget", "DAYDREAM_SPONTANEOUS_BUDGET", int),
+        ("self_healing", "SELF_HEALING", bool),
         # Phase 6 learning-aid output preferences (user taste, hot-reloadable):
-        ("visual_router",      "VISUAL_ROUTER_ENABLED", bool),
+        ("visual_router", "VISUAL_ROUTER_ENABLED", bool),
         ("argument_map_mermaid", "ARGUMENT_MAP_MERMAID", bool),
-        ("ontology_bias",      "ONTOLOGY_BIAS",      bool),
+        ("ontology_bias", "ONTOLOGY_BIAS", bool),
         # Inline key-point highlighting on part notes (== == spans):
-        ("highlight_spans",    "HIGHLIGHT_ENABLED",  bool),
-        ("highlight_max",      "HIGHLIGHT_MAX",      int),
+        ("highlight_spans", "HIGHLIGHT_ENABLED", bool),
+        ("highlight_max", "HIGHLIGHT_MAX", int),
         # Splitter selection (moved here per "config in Scripture, not .env"):
-        ("use_thoughtful_splitter", "USE_THOUGHTFUL_SPLITTER",      bool),
-        ("thoughtful_use_llm",      "THOUGHTFUL_USE_LLM_FOR_INGEST", bool),
+        ("use_thoughtful_splitter", "USE_THOUGHTFUL_SPLITTER", bool),
+        ("thoughtful_use_llm", "THOUGHTFUL_USE_LLM_FOR_INGEST", bool),
         # index.md "🆕 最近新增" — how many newest docs to surface at the top:
-        ("recent_count",       "RECENT_COUNT",       int),
+        ("recent_count", "RECENT_COUNT", int),
     )
 
     def __init__(self):
@@ -357,19 +369,19 @@ class DynamicSettings:
         self.DIGEST_LIMIT = 5000
         self.DIGEST_OVERLAP = 500
         # Thoughtful-splitter knobs:
-        self.OVERLAP_CHARS = 300            # Phase 3b structural overlap size
-        self.DIGEST_MAX_FACTOR = 1.5        # max_size = target * factor
-        self.DIGEST_MIN_FACTOR = 0.25       # min_size = target * factor
+        self.OVERLAP_CHARS = 300  # Phase 3b structural overlap size
+        self.DIGEST_MAX_FACTOR = 1.5  # max_size = target * factor
+        self.DIGEST_MIN_FACTOR = 0.25  # min_size = target * factor
         self.DREAMING_FROM = 1
         self.DREAMING_TO = 5
         # Daydream knobs (hot-reloadable). Daytime makeup + spontaneous
         # reflection; per-day budgets bound the LLM spend.
         self.DAYDREAM_ENABLED = True
         self.DAYDREAM_SPONTANEOUS_ENABLED = True
-        self.DAYDREAM_CONSOLIDATION_BUDGET = 10   # insight-bites/day
-        self.DAYDREAM_BITE_ADJUDICATIONS = 4      # per-bite adjudication cap
-        self.DAYDREAM_INSIGHT_BUDGET = 1          # makeup generations/day
-        self.DAYDREAM_SPONTANEOUS_BUDGET = 1      # spontaneous generations/day
+        self.DAYDREAM_CONSOLIDATION_BUDGET = 10  # insight-bites/day
+        self.DAYDREAM_BITE_ADJUDICATIONS = 4  # per-bite adjudication cap
+        self.DAYDREAM_INSIGHT_BUDGET = 1  # makeup generations/day
+        self.DAYDREAM_SPONTANEOUS_BUDGET = 1  # spontaneous generations/day
         self.SELF_HEALING = True
         self.CREATIVITY = 0.4
         self.MAX_OUTPUT = 4096
@@ -450,12 +462,32 @@ settings = DynamicSettings()
 
 
 _MANAGED_DIRECTORIES = (
-    CLIPPINGS_DIR, CONSOLIDATE_DIR, TO_LLM_DIR, FROM_LLM_DIR, PAGES_DIR, NOTES_DIR,
-    EXCALIDRAW_DIR, ASSETS_DIR, RAW_CONSOLIDATE_DIR, RAW_PROMPTS_DIR,
-    RAW_ASSETS_DIR, RAW_MERGED_DIR, SCRIPTURE_DIR, PERSONAS_DIR, PROFILES_DIR,
-    PROFILES_PENDING_DIR, GUIDELINES_DIR,
-    SKILLS_DIR, BACKUPS_DIR, TEMPLATES_DIR, PROMPTS_DIR, OPERATIONS_DIR, SCRATCH_DIR,
-    CORTEX_DIR, IMPROVEMENTS_PENDING_DIR,
+    CLIPPINGS_DIR,
+    CONSOLIDATE_DIR,
+    TO_LLM_DIR,
+    FROM_LLM_DIR,
+    PAGES_DIR,
+    NOTES_DIR,
+    EXCALIDRAW_DIR,
+    ASSETS_DIR,
+    RAW_CONSOLIDATE_DIR,
+    RAW_PROMPTS_DIR,
+    RAW_ASSETS_DIR,
+    RAW_MERGED_DIR,
+    SCRIPTURE_DIR,
+    PERSONAS_DIR,
+    PROFILES_DIR,
+    PROFILES_PENDING_DIR,
+    GUIDELINES_DIR,
+    SKILLS_DIR,
+    BACKUPS_DIR,
+    TEMPLATES_DIR,
+    PROMPTS_DIR,
+    OPERATIONS_DIR,
+    SCRATCH_DIR,
+    CORTEX_DIR,
+    IMPROVEMENTS_PENDING_DIR,
+    CODE_REVIEW_DIR,
 )
 
 

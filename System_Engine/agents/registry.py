@@ -13,6 +13,7 @@ from agents.visualize_agent import VisualizeAgent
 from agents.improve_agent import ImproveAgent
 from agents.review_agent import ReviewAgent
 from agents.blog_agent import BlogAgent
+from agents.code_review_agent import CodeReviewAgent
 
 
 class AgentRegistry:
@@ -34,6 +35,7 @@ class AgentRegistry:
             "tensions": TensionAgent,
             "visualize": VisualizeAgent,
             "improve": ImproveAgent,
+            "code-review": CodeReviewAgent,
             "review": ReviewAgent,
             "blog": BlogAgent,
         }

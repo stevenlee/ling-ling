@@ -59,4 +59,11 @@ validate-mermaid:
 validate-prompts:
 	$(PY)/pytest -q System_Engine/tests/test_prompt_assets.py
 
-.PHONY: check lint format typecheck test test-fast install-dev blog validate-mermaid validate-prompts
+# Pack repo source into a vault CodeReview/ note for @ling-code-review /
+# @ling-architect (agents are vault-only; this user-run CLI is the bridge).
+#   make pack-code SRC=System_Engine/services/identifier_guard.py
+#   make pack-code SRC="a.py b.py" TITLE=command-routing
+pack-code:
+	$(PY)/python System_Engine/tools/pack_code.py $(SRC) $(if $(TITLE),--title $(TITLE),)
+
+.PHONY: check lint format typecheck test test-fast install-dev blog validate-mermaid validate-prompts pack-code
