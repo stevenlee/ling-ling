@@ -3,6 +3,8 @@
 這個資料夾的每一個 `.md` 檔就是一個 **Profile**：一組經過驗證的「persona + template」配對。
 Ingestion 時系統選的是 Profile，而不是分別選 persona 和 template，所以兩者永遠不會配錯對。
 （本系統取代了舊的 `Scripture/DocType.md` 對照表。）
+（Profile 只是整個 prompt 系統的一環；完整架構見
+`System_Engine/DesignDoc/PromptSystem_architecture.md`。）
 
 ## Profile 檔格式
 

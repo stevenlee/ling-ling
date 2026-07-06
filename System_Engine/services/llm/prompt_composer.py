@@ -3,6 +3,9 @@
 Moved from services/llm_client.py. `lang_hint()` / `localized_suffix()` are
 pure settings reads (module functions); PromptComposer carries the file cache
 and capability manager needed to assemble a full system prompt.
+
+This is path A of three; the full map (paths, stage catalog, policy sync points)
+is in System_Engine/DesignDoc/PromptSystem_architecture.md.
 """
 
 from __future__ import annotations
