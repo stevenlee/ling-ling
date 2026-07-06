@@ -49,6 +49,9 @@ INTENT_ROUTES = [
     # substring routing means the longer trigger is tried first (same rule as
     # patrol-tags before patrol). Dispatches to CodeReviewAgent.
     (["code-review"], ["code-review"], "code-review"),
+    # Coder track — map a packed system's architecture (module map + flows +
+    # state diagrams). Dispatches to ArchitectAgent.
+    (["architect"], ["architect"], "architect"),
     # Publishing track — turn a note's Synthesis into a learning-first blog
     # review/report (報導者／書評人). Dispatches to ReviewAgent.
     (["review"], ["review"], "review"),

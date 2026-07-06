@@ -14,6 +14,7 @@ from agents.improve_agent import ImproveAgent
 from agents.review_agent import ReviewAgent
 from agents.blog_agent import BlogAgent
 from agents.code_review_agent import CodeReviewAgent
+from agents.architect_agent import ArchitectAgent
 
 
 class AgentRegistry:
@@ -36,6 +37,7 @@ class AgentRegistry:
             "visualize": VisualizeAgent,
             "improve": ImproveAgent,
             "code-review": CodeReviewAgent,
+            "architect": ArchitectAgent,
             "review": ReviewAgent,
             "blog": BlogAgent,
         }
