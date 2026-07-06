@@ -21,6 +21,11 @@ applicable_when: Recipes, cooking instructions, kitchen techniques
 > **`applicable_when` 是路由準確度的關鍵**：系統會把所有 profile 的這一行餵給 LLM
 > 做封閉式選擇。寫得越具體（包含典型文件特徵、關鍵詞），選得越準。
 
+> **`operations` 目前不被消費**：欄位由系統定義、引用完整性由
+> `System_Engine/tests/test_prompt_assets.py` 檢查（每個名稱須對應
+> `Templates/Operations/*.md`），但實際編排要等 Phase 6 的 Planner 實裝後才會讀取。
+> 現在填了不會有任何效果，也不會報錯。
+
 ## 路由順序（高到低）
 
 1. **手動指定**：文件 frontmatter 寫 `profile: 名稱`，或直接寫
