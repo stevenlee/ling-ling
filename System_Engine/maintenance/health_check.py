@@ -12,13 +12,17 @@ def check_structure():
     ensure_directories()
     print(f"✅ Directories verified at {PROJECT_ROOT}")
 
+    # Keep in sync with tests/test_prompt_assets.py::test_required_agent_prompts_exist
+    # (that test is the enforced gate; this is the human-facing health readout).
     required_prompts = [
         "system_base.md",
         "mermaid_rules.md",
-        "agent_merge.md",
+        "agent_counter.md",
         "agent_insight.md",
-        "agent_tag_patrol.md",
         "agent_linter.md",
+        "agent_merge.md",
+        "agent_recall.md",
+        "agent_tag_patrol.md",
     ]
     for p in required_prompts:
         if (PROMPTS_DIR / p).exists():

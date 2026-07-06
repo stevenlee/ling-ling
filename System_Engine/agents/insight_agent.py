@@ -187,8 +187,8 @@ class InsightAgent(
         limit = config.get("limit") or selection.get("limit", 10)
 
         context = self._get_context_by_method(method, limit, user_directive)
-        system_base = self._load_prompt("system_base.md")
-        agent_instruction = self._load_prompt("agent_insight.md")
+        system_base = self._load_prompt("system_base.md", required=True)
+        agent_instruction = self._load_prompt("agent_insight.md", required=True)
 
         custom_task = (
             f"{system_base}\n\n{agent_instruction}\n\n"

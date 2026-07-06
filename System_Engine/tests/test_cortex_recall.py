@@ -209,7 +209,7 @@ def test_execute_small_corpus_feeds_all_claims(tmp_path, monkeypatch):
     agent.rag = None
     agent.stats = {"input_chars": 0, "output_chars": 0}
     # Stay hermetic: skip the vault prompt file so the fallback prompt is used.
-    agent._load_prompt = lambda name: ""
+    agent._load_prompt = lambda name, **kw: ""
     agent._write_report = lambda title, body, rtype, meta=None: (None, body)
 
     out = agent.execute({"user_directive": "@ling-recall claim number 3"})
@@ -219,3 +219,5 @@ def test_execute_small_corpus_feeds_all_claims(tmp_path, monkeypatch):
     # Uses the lean recall system prompt, not the Q&A document scaffolding.
     assert "只輸出最終綜述" in captured["system_prompt"]
     assert "synthesis" in out
+    # P3: dropping to the hardcoded fallback is observable in stats.
+    assert agent.stats.get("used_fallback_prompt") is True

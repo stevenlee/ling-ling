@@ -311,7 +311,10 @@ class CounterAgent(BaseAgent):
     # ── Pass 1: Extraction ─────────────────────────────────────────────
 
     def _extract_from_chunk(self, concept, chunk, part, total, confidence):
-        system_prompt = self._load_prompt("agent_counter") or (
+        loaded = self._load_prompt("agent_counter", required=True)
+        if not loaded:
+            self.stats["used_fallback_prompt"] = True
+        system_prompt = loaded or (
             "You are a precise textual analyst. Your job is to scan source text "
             "and identify every instance of a user-defined concept. "
             "Return ONLY a valid JSON array. No markdown, no commentary."

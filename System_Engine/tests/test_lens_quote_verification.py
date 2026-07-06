@@ -95,10 +95,11 @@ class TestJsonCallsOptOutOfTemplateAxis:
     def _agent(self, llm):
         agent = CounterAgent.__new__(CounterAgent)
         agent.llm = llm
+        agent.stats = {"input_chars": 0, "output_chars": 0}
         return agent
 
     def test_extract_from_chunk_opts_out(self, monkeypatch):
-        monkeypatch.setattr(CounterAgent, "_load_prompt", lambda self, name: "")
+        monkeypatch.setattr(CounterAgent, "_load_prompt", lambda self, name, **kw: "")
         llm = self._CapturingLLM()
         self._agent(llm)._extract_from_chunk("c", "chunk text", 1, 1, "medium")
         assert llm.calls[0]["forced_template"] == "none"
@@ -113,7 +114,7 @@ class TestJsonCallsOptOutOfTemplateAxis:
 
     def test_extract_from_chunk_retries_once_on_no_array(self, monkeypatch):
         # Reasoning-channel miss (no JSON) on attempt 1, recovers on attempt 2.
-        monkeypatch.setattr(CounterAgent, "_load_prompt", lambda self, name: "")
+        monkeypatch.setattr(CounterAgent, "_load_prompt", lambda self, name, **kw: "")
         llm = self._CapturingLLM(
             replies=[
                 "thinking out loud, no array here",
@@ -126,7 +127,7 @@ class TestJsonCallsOptOutOfTemplateAxis:
 
     def test_extract_from_chunk_no_retry_on_genuine_empty(self, monkeypatch):
         # A literal [] is a real zero, not a parse miss — must not retry.
-        monkeypatch.setattr(CounterAgent, "_load_prompt", lambda self, name: "")
+        monkeypatch.setattr(CounterAgent, "_load_prompt", lambda self, name, **kw: "")
         llm = self._CapturingLLM(reply="[]")
         out = self._agent(llm)._extract_from_chunk("c", "chunk", 1, 1, "medium")
         assert len(llm.calls) == 1

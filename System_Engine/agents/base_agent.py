@@ -80,19 +80,36 @@ class BaseAgent:
             ui.error(self.ERROR_STATUS.format(msg=first_line))
         return body
 
-    def _load_prompt(self, prompt_name: str) -> str:
+    def _load_prompt(self, prompt_name: str, *, required: bool = False) -> str:
+        """Load a prompt template from PROMPTS_DIR (mtime-cached, hot-reloads).
+
+        Returns "" when the file is missing — callers stay fail-open (an agent
+        must not crash on a missing template). But a MISSING REQUIRED prompt is
+        a silent behavior drift: the caller falls back to a hardcoded string or
+        an empty prompt with no error. So `required=True` upgrades the miss to
+        ERROR and records the name in ``stats["missing_required_prompts"]`` so
+        the degradation is observable in the run's stats/trace.
+        """
         if not prompt_name.endswith(".md"):
             prompt_name += ".md"
         prompt_path = PROMPTS_DIR / prompt_name
         content = _PROMPT_CACHE.read(prompt_path)
         if not content and not prompt_path.exists():
-            logging.warning(f"Prompt template not found: {prompt_name}")
+            if required:
+                logging.error(
+                    f"Required prompt template not found: {prompt_name} — "
+                    "falling back to a hardcoded/empty prompt; behavior may drift."
+                )
+                self.stats.setdefault("missing_required_prompts", []).append(prompt_name)
+            else:
+                logging.warning(f"Prompt template not found: {prompt_name}")
             return ""
         self.stats["input_chars"] += len(content)
         return content
 
     def _load_mermaid_rules(self) -> str:
-        return self._load_prompt("mermaid_rules.md")
+        # Feeds _llm_repair_mermaid; without it the repair LLM loses every rule.
+        return self._load_prompt("mermaid_rules.md", required=True)
 
     def _self_correct(self, content: str) -> str:
         """Invisible healing for LLM output: unwrap, repair mermaid, normalize."""

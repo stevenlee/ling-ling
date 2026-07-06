@@ -75,7 +75,7 @@ def test_expand_seed_flag_off_is_inert(tmp_path, monkeypatch):
 
     agent = _agent()
     agent.rag = Rag()
-    agent._load_prompt = lambda name: ""
+    agent._load_prompt = lambda name, **kw: ""
     agent.llm = type(
         "L",
         (),
@@ -106,7 +106,7 @@ def test_expand_seed_grounded_injects_and_marks(tmp_path, monkeypatch):
 
     agent = _agent()
     agent.rag = Rag()
-    agent._load_prompt = lambda name: ""
+    agent._load_prompt = lambda name, **kw: ""
     agent.llm = type(
         "L",
         (),

@@ -42,8 +42,8 @@ class MergeAgent(BaseAgent):
         logging.info(f"Merging {len(valid_files)} documents...")
 
         # 2. Request LLM Synthesis
-        system_base = self._load_prompt("system_base.md")
-        agent_instruction = self._load_prompt("agent_merge.md")
+        system_base = self._load_prompt("system_base.md", required=True)
+        agent_instruction = self._load_prompt("agent_merge.md", required=True)
 
         full_system_prompt = f"{system_base}\n\n{agent_instruction}"
         if user_directive:

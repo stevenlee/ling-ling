@@ -179,8 +179,8 @@ class LinterAgent(BaseAgent):
         index_content = (
             self.index_file.read_text("utf-8") if self.index_file.exists() else "目前沒有實體紀錄。"
         )
-        system_base = self._load_prompt("system_base.md")
-        agent_instruction = self._load_prompt("agent_linter.md")
+        system_base = self._load_prompt("system_base.md", required=True)
+        agent_instruction = self._load_prompt("agent_linter.md", required=True)
 
         prompt = f"""
 {system_base}

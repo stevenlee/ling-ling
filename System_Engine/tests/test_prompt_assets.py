@@ -98,6 +98,7 @@ class TestReferentialIntegrity:
     def test_required_agent_prompts_exist(self):
         # BaseAgent._load_prompt silently returns "" (or a hardcoded fallback)
         # for a missing file — behavior drifts with no error. Fail loudly here.
+        # Keep in sync with maintenance/health_check.py::required_prompts.
         required = [
             "system_base.md",
             "mermaid_rules.md",

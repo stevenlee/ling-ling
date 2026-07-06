@@ -281,8 +281,8 @@ class MonteCarloMixin:
             "\n\n".join(evidence_docs) if evidence_docs else "(No supporting evidence found.)"
         )
 
-        system_base = self._load_prompt("system_base.md")
-        agent_instruction = self._load_prompt("agent_insight.md")
+        system_base = self._load_prompt("system_base.md", required=True)
+        agent_instruction = self._load_prompt("agent_insight.md", required=True)
 
         # Cortex-grounded insight (Phase 5 F1, flag-gated, default OFF). Inject
         # relevant falsifiable claims as DIALECTICAL priors — to challenge, not

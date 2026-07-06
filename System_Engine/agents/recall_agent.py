@@ -89,7 +89,10 @@ class RecallAgent(BaseAgent):
         # with no template/persona/visualization scaffolding, so the model
         # selects + summarizes instead of chasing a Mermaid diagram.
         user_msg = f"主題：{query}\n\n系統的所有信念：\n{source_block}"
-        system_prompt = self._load_prompt("agent_recall") or _FALLBACK_SYSTEM_PROMPT
+        loaded = self._load_prompt("agent_recall", required=True)
+        if not loaded:
+            self.stats["used_fallback_prompt"] = True
+        system_prompt = loaded or _FALLBACK_SYSTEM_PROMPT
         answer = (
             self.llm.complete(system_prompt, user_msg, temperature=0.2, stage="cortex_recall")
             or "（回想時 LLM 呼叫失敗。）"
