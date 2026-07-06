@@ -433,6 +433,7 @@ class LLMClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
         stage: str = "complete",
+        pin_language: bool = False,
     ) -> str:
         """Lean completion with a caller-supplied system prompt.
 
@@ -440,7 +441,16 @@ class LLMClient:
         scaffolding — the system prompt is used verbatim. For controlled tasks
         (e.g. Cortex recall's select-and-summarize) that must not inherit the
         Q&A document machinery (which made the model chase a Mermaid diagram and
-        dump its scratchpad). Returns "" on failure (fail-open)."""
+        dump its scratchpad). Returns "" on failure (fail-open).
+
+        ``pin_language=True`` prepends the OUTPUT-LANGUAGE banner (P4): use it for
+        USER-VISIBLE prose that must honor OUTPUT_LANGUAGE but has no language
+        guarantee of its own. Do NOT set it for strict-JSON extraction (the
+        banner pollutes the schema prompt) or for output whose language should
+        follow the content rather than OUTPUT_LANGUAGE (e.g. learning-aid
+        artifacts, which carry their own content-language rule)."""
+        if pin_language:
+            system_prompt = f"{prompt_composer.language_banner()}\n\n{system_prompt}"
         try:
             return self._complete_text(
                 system_prompt=system_prompt,

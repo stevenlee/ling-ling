@@ -45,6 +45,23 @@ def localized_suffix() -> str:
     return ""
 
 
+def language_banner() -> str:
+    """The leading OUTPUT-LANGUAGE banner used by build_system_prompt().
+
+    Extracted so the lean `complete()` path can opt in (P4): a caller that emits
+    user-visible prose but bypasses PromptComposer has no language guarantee, so
+    it can prepend this. Pins the response to OUTPUT_LANGUAGE — do NOT use it for
+    calls whose language should follow the *content* (e.g. learning-aid artifacts
+    keep an English note's diagram English) or for strict-JSON extraction."""
+    hint = lang_hint()
+    return (
+        f"OUTPUT LANGUAGE (highest priority): write the ENTIRE response — every section "
+        f"heading and all body text — in {hint}. Any English headings or labels in the "
+        f"instructions/template below are illustrative only; translate them into {hint}, "
+        f"never copy them verbatim."
+    )
+
+
 class PromptComposer:
     def __init__(self, file_cache, capability_manager):
         self._file_cache = file_cache
@@ -151,12 +168,7 @@ class PromptComposer:
         # override the model copies their English section headers verbatim and
         # the whole page can drift to English. Stated first AND restated last
         # (common_rules) so it survives the English bulk in the middle.
-        lang_banner = (
-            f"OUTPUT LANGUAGE (highest priority): write the ENTIRE response — every section "
-            f"heading and all body text — in {hint}. Any English headings or labels in the "
-            f"instructions/template below are illustrative only; translate them into {hint}, "
-            f"never copy them verbatim."
-        )
+        lang_banner = language_banner()
         common_rules = (
             f"\n## Output Language\nOutput everything — including all section headings — in {hint}. "
             f"The section headers shown in the template are illustrative; render them in {hint}, "

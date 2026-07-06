@@ -202,6 +202,7 @@ def test_execute_small_corpus_feeds_all_claims(tmp_path, monkeypatch):
         def complete(self, system_prompt, user_msg, **kw):
             captured["system_prompt"] = system_prompt
             captured["user_msg"] = user_msg
+            captured["kw"] = kw
             return "synthesis [#1]"
 
     agent = ra.RecallAgent.__new__(ra.RecallAgent)
@@ -221,3 +222,6 @@ def test_execute_small_corpus_feeds_all_claims(tmp_path, monkeypatch):
     assert "synthesis" in out
     # P3: dropping to the hardcoded fallback is observable in stats.
     assert agent.stats.get("used_fallback_prompt") is True
+    # P4: recall pins to OUTPUT_LANGUAGE (banner), not a hardcoded 繁體中文.
+    assert captured["kw"].get("pin_language") is True
+    assert "繁體中文" not in captured["system_prompt"]

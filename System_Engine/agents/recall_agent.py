@@ -31,7 +31,10 @@ _STATUS_BADGE = {"active": "🌸", "dormant": "💤", "falsified": "🍂"}
 _CITE_RE = re.compile(r"#(\d+)")
 
 # Fallback only — the canonical prompt lives in Templates/Prompts/agent_recall.md
-# (editable in the vault, hot-reloaded via the prompt mtime cache).
+# (editable in the vault, hot-reloaded via the prompt mtime cache). Keep it in
+# sync with that file, including the de-hardcoded language rule (#3): output
+# language comes from the pinned OUTPUT-LANGUAGE banner (complete(pin_language=
+# True) at the call site), not a literal 繁體中文.
 _FALLBACK_SYSTEM_PROMPT = (
     "你是 Ling-Ling 的長期記憶回想介面。使用者給一個主題，user message 裡附上系統蒸餾過的"
     "所有信念（每條編號 [#N]，含信心/可反駁性/反例）。\n\n"
@@ -39,7 +42,7 @@ _FALLBACK_SYSTEM_PROMPT = (
     "1. 挑出**真正相關**的主張，用 [#N] 引用。寧缺勿濫——若沒有相關的，只回一句"
     "「Cortex 中沒有與此主題相關的信念。」\n"
     "2. 容錯：使用者可能拼錯字或用不同說法，依語意對應（例如把 Hibert 對應到 Hilbert）。\n"
-    "3. 用繁體中文、用你自己的話綜述「關於這個主題，系統相信什麼」，主動點出不確定性與矛盾"
+    "3. 用你自己的話綜述「關於這個主題，系統相信什麼」，主動點出不確定性與矛盾"
     "（自我批判的鏡子，不是附和）。每個論點標 [#N] 溯源。\n\n"
     "嚴格輸出要求：**只輸出最終綜述本身**。不要輸出你的推理過程、自我檢查、草稿、"
     "逐條 relevant/irrelevant 清單，也不要任何圖表（Mermaid）。直接從綜述第一句開始。"
@@ -94,7 +97,13 @@ class RecallAgent(BaseAgent):
             self.stats["used_fallback_prompt"] = True
         system_prompt = loaded or _FALLBACK_SYSTEM_PROMPT
         answer = (
-            self.llm.complete(system_prompt, user_msg, temperature=0.2, stage="cortex_recall")
+            self.llm.complete(
+                system_prompt,
+                user_msg,
+                temperature=0.2,
+                stage="cortex_recall",
+                pin_language=True,
+            )
             or "（回想時 LLM 呼叫失敗。）"
         )
 
