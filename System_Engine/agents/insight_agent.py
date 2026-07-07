@@ -44,6 +44,13 @@ class InsightAgent(
     TEMP_EXPAND = 0.5
     TEMP_SYNTHESIZE = 0.3
 
+    # Per-run stage temperatures: generate_insight overrides these from the
+    # skill's frontmatter (temp_spark / temp_expand / temp_synthesize) so a
+    # creative operation can run hotter without touching other skills.
+    _temp_spark = TEMP_SPARK
+    _temp_expand = TEMP_EXPAND
+    _temp_synthesize = TEMP_SYNTHESIZE
+
     def __init__(self, llm, rag=None):
         super().__init__(llm, rag)
         self.insights_dir = WIKI_VAULT_DIR / "Insights"
@@ -79,6 +86,18 @@ class InsightAgent(
             target_titles=target_titles,
         )
 
+    @staticmethod
+    def _stage_temp(config: dict, key: str, default: float) -> float:
+        """Skill-frontmatter stage temperature, clamped to sane LLM range."""
+        value = config.get(key)
+        if value is None:
+            return default
+        try:
+            return min(max(float(value), 0.0), 1.5)
+        except (TypeError, ValueError):
+            logging.warning(f"Insight skill: invalid {key}={value!r}; using {default}")
+            return default
+
     def generate_insight(
         self,
         strategy_id: str,
@@ -106,6 +125,9 @@ class InsightAgent(
         pipeline = config.get("pipeline", "single")
         resolved_template = forced_template or config.get("template")
         self._grounded_on_acc = set()  # F1: claims this run grounded on (for frontmatter)
+        self._temp_spark = self._stage_temp(config, "temp_spark", self.TEMP_SPARK)
+        self._temp_expand = self._stage_temp(config, "temp_expand", self.TEMP_EXPAND)
+        self._temp_synthesize = self._stage_temp(config, "temp_synthesize", self.TEMP_SYNTHESIZE)
 
         if pipeline == "montecarlo":
             report_content = self._run_montecarlo(config, user_directive, resolved_template)

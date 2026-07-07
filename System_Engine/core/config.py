@@ -359,6 +359,9 @@ class DynamicSettings:
         ("thoughtful_use_llm", "THOUGHTFUL_USE_LLM_FOR_INGEST", bool),
         # index.md "🆕 最近新增" — how many newest docs to surface at the top:
         ("recent_count", "RECENT_COUNT", int),
+        # Daily-insight operation rotation: comma-separated Skills/ strategy
+        # names cycled deterministically by date (anti-homogenization):
+        ("insight_rotation", "INSIGHT_ROTATION", str),
     )
 
     def __init__(self):
@@ -408,6 +411,7 @@ class DynamicSettings:
         # block at the top (newest first); the alphabetical list stays below.
         # 0 disables the block.
         self.RECENT_COUNT = 15
+        self.INSIGHT_ROTATION = "montecarlo"
         # Splitter selection: env value is the default (deployment), but
         # Scripture (use_thoughtful_splitter / thoughtful_use_llm) can override
         # at runtime — see _BINDINGS above.

@@ -7,11 +7,12 @@ digest_overlap: 1024
 dreaming_from: 3
 dreaming_to: 5
 daydream: true
-daydream_spontaneous: true
+daydream_spontaneous: false
 daydream_consolidation_budget: 10
 daydream_bite_adjudications: 4
 daydream_insight_budget: 1
 daydream_spontaneous_budget: 1
+insight_rotation: montecarlo,counterfactual,analogy,dialogue,fable
 self_healing: true
 creativity: 0.4
 max_output: 16384
@@ -49,6 +50,7 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 - **dreaming_from**: The hour (0-23) when background analysis and maintenance start.
 - **dreaming_to**: The hour (0-23) when background operations stop.
 - **self_healing**: If `true`, Ling Ling will automatically repair tag mappings and index inconsistencies.
+- **insight_rotation**: Comma-separated list of `Skills/` strategy names for the daily insight, cycled one per day by date (deterministic). Rotating different operations (counterfactual / analogy / dialogue / fable / montecarlo) is the anti-homogenization lever — same seeds, different lenses. Unknown names are skipped with a warning; empty list falls back to `montecarlo`. Each skill's frontmatter may set `temp_spark` / `temp_expand` / `temp_synthesize` to run hotter or colder than the engine defaults (0.9 / 0.5 / 0.3).
 
 ### 🖼️ Learning Aids (Phase 6)
 - **visual_router**: If `true`, long-doc Synthesis pages and Insight reports automatically get a "🖼️ 學習輔助" section — Ling Ling picks the right visual (comparison table / flowchart / mindmap / timeline / quadrant / concept map / argument map) for the content's structure, or attaches nothing if there's no strong structure. Each attach costs one extra LLM round. The on-demand `@ling-visualize` command always works regardless of this setting.

@@ -717,3 +717,104 @@ def test_maybe_artifact_failopen(monkeypatch):
 
     monkeypatch.setattr("services.learning_artifacts.maybe_artifact_section", boom)
     assert agent._maybe_artifact("body") == ""
+
+
+# ── C-track: operation rotation + per-skill stage temperatures ──────────
+
+
+class TestStageTemperatures:
+    def test_defaults_when_frontmatter_absent(self):
+        agent = InsightAgent.__new__(InsightAgent)
+        assert agent._stage_temp({}, "temp_spark", 0.9) == 0.9
+
+    def test_frontmatter_overrides_and_clamps(self):
+        agent = InsightAgent.__new__(InsightAgent)
+        assert agent._stage_temp({"temp_expand": 0.85}, "temp_expand", 0.5) == 0.85
+        assert agent._stage_temp({"temp_expand": "0.7"}, "temp_expand", 0.5) == 0.7
+        assert agent._stage_temp({"temp_expand": 99}, "temp_expand", 0.5) == 1.5  # clamp
+        assert agent._stage_temp({"temp_expand": "hot"}, "temp_expand", 0.5) == 0.5  # invalid
+
+    def test_generate_insight_sets_per_run_temps(self, stub_agent, monkeypatch):
+        agent, _, _ = stub_agent
+        monkeypatch.setattr(
+            InsightAgent, "_check_skill_preconditions", lambda self, aw: [], raising=False
+        )
+        agent.strategies = {
+            "hotop": {
+                "name": "hotop",
+                "description": "d",
+                "pipeline": "single",
+                "system_prompt": "lens",
+                "temp_spark": 0.95,
+                "temp_synthesize": 0.8,
+            }
+        }
+        monkeypatch.setattr(
+            InsightAgent, "_run_single", lambda self, c, u, t=None: "## body", raising=False
+        )
+        monkeypatch.setattr(InsightAgent, "_signals_meta", lambda self, c, t: {}, raising=False)
+        monkeypatch.setattr(InsightAgent, "_maybe_artifact", lambda self, c: "", raising=False)
+        agent.generate_insight("hotop")
+        assert agent._temp_spark == 0.95
+        assert agent._temp_expand == 0.5  # untouched → class default
+        assert agent._temp_synthesize == 0.8
+
+
+class TestOperationLens:
+    def test_lens_from_skill_body(self):
+        from agents.insight.monte_carlo import MonteCarloMixin
+
+        lens = MonteCarloMixin._operation_lens({"system_prompt": "Act as a Fabulist."})
+        assert "Operation Lens" in lens and "Fabulist" in lens
+        assert MonteCarloMixin._operation_lens({}) == ""
+        assert MonteCarloMixin._operation_lens(None) == ""
+
+    def test_spark_prompt_carries_lens(self, stub_agent):
+        agent, _, _ = stub_agent
+
+        calls = []
+
+        class _Recorder:
+            model = "stub"
+
+            def answer_query(self, query_content, wiki_context="", **kw):
+                calls.append(kw)
+                return '{"idea": "x", "novelty_score": 7, "reasoning": "r", "source_a": "A", "source_b": "B"}'
+
+        agent.llm = _Recorder()
+        doc = {"title": "A", "tags": [], "content": "aaa"}
+        doc_b = {"title": "B", "tags": [], "content": "bbb"}
+        agent._spark_seed(doc, doc_b, {"system_prompt": "Act as a Fabulist."})
+        assert "Fabulist" in calls[0]["custom_instruction"]
+
+
+class TestRotation:
+    def _strategies(self):
+        return {n: {"name": n} for n in ("montecarlo", "counterfactual", "fable")}
+
+    def test_deterministic_cycle_by_date(self, monkeypatch):
+        from datetime import date
+
+        from maintenance.daily_insight import pick_rotation_strategy
+
+        monkeypatch.setattr(
+            "core.config.settings.INSIGHT_ROTATION",
+            "montecarlo,counterfactual,fable",
+            raising=False,
+        )
+        picks = [
+            pick_rotation_strategy(self._strategies(), today=date.fromordinal(730000 + i))
+            for i in range(6)
+        ]
+        assert picks == picks[3:] + picks[:3] or len(set(picks[:3])) == 3  # full cycle, no repeat
+        assert picks[0] == picks[3] and picks[1] == picks[4]  # period 3
+
+    def test_unknown_names_skipped_and_fallback(self, monkeypatch):
+        from maintenance.daily_insight import pick_rotation_strategy
+
+        monkeypatch.setattr("core.config.settings.INSIGHT_ROTATION", "typo,fable", raising=False)
+        assert pick_rotation_strategy(self._strategies()) == "fable"
+        monkeypatch.setattr("core.config.settings.INSIGHT_ROTATION", "typo,also-bad", raising=False)
+        assert pick_rotation_strategy(self._strategies()) == "montecarlo"
+        monkeypatch.setattr("core.config.settings.INSIGHT_ROTATION", "", raising=False)
+        assert pick_rotation_strategy(self._strategies()) == "montecarlo"

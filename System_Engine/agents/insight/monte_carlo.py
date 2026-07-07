@@ -34,6 +34,20 @@ class MonteCarloMixin:
     TEMP_SPARK: float
     TEMP_EXPAND: float
     TEMP_SYNTHESIZE: float
+    _temp_spark: float
+    _temp_expand: float
+    _temp_synthesize: float
+
+    @staticmethod
+    def _operation_lens(config: dict | None) -> str:
+        """The skill file's `# System Prompt` body, injected into all three
+        pipeline stages as the strategy-specific lens. This is what makes two
+        montecarlo-pipeline skills (e.g. counterfactual vs fable) produce
+        differently-shaped output instead of converging on one template."""
+        lens = ((config or {}).get("system_prompt") or "").strip()
+        if not lens:
+            return ""
+        return f"\n\n## Operation Lens (strategy-specific)\n{lens}"
 
     def _run_montecarlo(
         self, config: dict, user_directive: str, resolved_template: str | None = None
@@ -163,6 +177,7 @@ class MonteCarloMixin:
             "- 5-7: Interesting analogy but somewhat expected\n"
             "- 1-4: Superficial or forced connection\n"
             "Be HONEST with scoring. Most random pairs deserve 3-5. Reserve 8+ for truly novel connections."
+            f"{self._operation_lens(config)}"
         )
         user_msg = (
             f"## Note A: {doc_a['title']}\n"
@@ -181,7 +196,7 @@ class MonteCarloMixin:
                 query_content=user_msg,
                 wiki_context="",
                 custom_instruction=system_prompt,
-                temperature=self.TEMP_SPARK,
+                temperature=self._temp_spark,
                 forced_template="none",
                 persona="none",
             )
@@ -318,13 +333,14 @@ class MonteCarloMixin:
             f"3. Practical implications and actionable takeaways\n"
             f"4. A Mermaid diagram if it adds clarity\n"
             f"Cite source notes using [[title]] notation."
+            f"{self._operation_lens(config)}"
         )
 
         expansion_text = self.llm.answer_query(
             query_content=f"Expand this insight seed: {idea}",
             wiki_context="",
             custom_instruction=expand_prompt,
-            temperature=self.TEMP_EXPAND,
+            temperature=self._temp_expand,
         )
 
         return {
@@ -349,7 +365,7 @@ class MonteCarloMixin:
         scorecard = self._build_scorecard(round_results)
         round_sections, all_expanded = self._build_round_sections(round_results)
         evaluation = self._cross_round_evaluation(
-            scorecard, all_expanded, num_rounds, user_directive, resolved_template
+            scorecard, all_expanded, num_rounds, user_directive, resolved_template, config
         )
 
         total_pairs = sum(r["pairs_tried"] for r in round_results)
@@ -418,6 +434,7 @@ class MonteCarloMixin:
         num_rounds: int,
         user_directive: str,
         resolved_template: str | None,
+        config: dict | None = None,
     ) -> str:
         winner_lines = [
             f"- [R{s.get('round', '?')}, score={s.get('novelty_score', '?')}] "
@@ -437,12 +454,13 @@ class MonteCarloMixin:
             f"5. Gives 2-3 concrete action items for the knowledge base owner\n\n"
             f"Output language: {self.llm._get_lang_hint()}\n"
             f"User context: {user_directive or '(none)'}"
+            f"{self._operation_lens(config)}"
         )
         return self.llm.answer_query(
             query_content="Evaluate the multi-round Monte Carlo exploration.",
             wiki_context="",
             custom_instruction=eval_prompt,
-            temperature=self.TEMP_SYNTHESIZE,
+            temperature=self._temp_synthesize,
             forced_template=resolved_template,
             default_template="insight-rpt",
             persona="none",
@@ -504,7 +522,7 @@ class MonteCarloMixin:
             query_content="Perform cross-strategy synthesis.",
             wiki_context="",
             custom_instruction=synthesis_prompt,
-            temperature=self.TEMP_SYNTHESIZE,
+            temperature=self._temp_synthesize,
             persona="none",
             operation="synthesize",
         )
