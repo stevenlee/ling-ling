@@ -119,6 +119,38 @@ class TestLadder:
         assert ins == ["Daydream makeup"]
         assert pump._ledger["budget"]["insight"] == 1
 
+    def test_no_makeup_before_tonights_window(self, env):
+        """00:30, before DREAMING_FROM: the night hasn't happened yet, so
+        nothing is owed — an early makeup would double-generate alongside the
+        scheduler's own 1–5am run (the 2026-07-07 triple-insight night)."""
+        tmp_path, _, _, _, monkeypatch = env
+        monkeypatch.setattr(dd_mod, "has_pending_insights", lambda *a, **k: False)
+        ins = _fake_insight(monkeypatch)
+        pump = _pump(tmp_path, clock=datetime(2026, 6, 18, 0, 30, 0), ran_today=False)
+        pump._run_step()
+        assert ins == ["Daydream spontaneous"]  # ladder falls through
+        assert pump._ledger["budget"]["insight"] == 0
+
+    def test_night_window_passed_handles_midnight_wrap(self, env):
+        tmp_path, _, _, _, monkeypatch = env
+        monkeypatch.setattr(dd_mod.settings, "DREAMING_FROM", 22)
+        monkeypatch.setattr(dd_mod.settings, "DREAMING_TO", 2)
+        pump = _pump(tmp_path)
+        # After this morning's tail (02:00) and before tonight's start (22:00)
+        # the window has passed; inside tonight's window it has not.
+        for hour, expected in (
+            (2, True),
+            (3, True),
+            (10, True),
+            (21, True),
+            (22, False),
+            (23, False),
+            (0, False),
+            (1, False),
+        ):
+            pump._clock = lambda h=hour: datetime(2026, 6, 18, h, 0, 0)
+            assert pump._night_window_passed() is expected, f"hour={hour}"
+
     def test_spontaneous_when_nothing_owed(self, env):
         tmp_path, _, _, _, monkeypatch = env
         monkeypatch.setattr(dd_mod, "has_pending_insights", lambda *a, **k: False)

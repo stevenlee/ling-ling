@@ -55,11 +55,11 @@ from maintenance.daily_insight import run_daily_insight
 # driven and read live off `settings` so editing Scripture.md takes effect on
 # the next bite — same hot-reload contract as the dreaming window. The values
 # below are pure scheduling internals, not user-facing persona settings.
-_GRACE_SECONDS = 180                # delay before the first bite after an idle edge
-_STEP_GAP_SECONDS = 30              # gap between consecutive bites
-_FRESH_INBOX_SECONDS = 600          # files younger than this = pending user work
-_GLOBAL_BACKOFF_SECONDS = 3600      # provider-down backoff
-_GLOBAL_FAILURE_THRESHOLD = 3       # bites failing in a row = outage
+_GRACE_SECONDS = 180  # delay before the first bite after an idle edge
+_STEP_GAP_SECONDS = 30  # gap between consecutive bites
+_FRESH_INBOX_SECONDS = 600  # files younger than this = pending user work
+_GLOBAL_BACKOFF_SECONDS = 3600  # provider-down backoff
+_GLOBAL_FAILURE_THRESHOLD = 3  # bites failing in a row = outage
 
 
 class DaydreamPump:
@@ -179,9 +179,16 @@ class DaydreamPump:
         b = self._ledger["budget"]
         if b["consolidation"] < settings.DAYDREAM_CONSOLIDATION_BUDGET and has_pending_insights():
             return "consolidate"
-        if b["insight"] < settings.DAYDREAM_INSIGHT_BUDGET and not self._insight_ran_today():
+        if (
+            b["insight"] < settings.DAYDREAM_INSIGHT_BUDGET
+            and not self._insight_ran_today()
+            and self._night_window_passed()
+        ):
             return "insight"
-        if settings.DAYDREAM_SPONTANEOUS_ENABLED and b["spontaneous"] < settings.DAYDREAM_SPONTANEOUS_BUDGET:
+        if (
+            settings.DAYDREAM_SPONTANEOUS_ENABLED
+            and b["spontaneous"] < settings.DAYDREAM_SPONTANEOUS_BUDGET
+        ):
             return "spontaneous"
         return None
 
@@ -190,8 +197,10 @@ class DaydreamPump:
         failure that should count toward the global backoff."""
         if action == "consolidate":
             result = run_consolidation(
-                self.llm, self.rag,
-                max_insights=1, max_adjudications=settings.DAYDREAM_BITE_ADJUDICATIONS,
+                self.llm,
+                self.rag,
+                max_insights=1,
+                max_adjudications=settings.DAYDREAM_BITE_ADJUDICATIONS,
             )
             if getattr(result, "insights_processed", 0) >= 1:
                 self._ledger["budget"]["consolidation"] += 1
@@ -212,6 +221,23 @@ class DaydreamPump:
         return True
 
     # ── Gates ────────────────────────────────────────────────────────
+
+    def _night_window_passed(self) -> bool:
+        """Makeup is for a night the dreaming window already SKIPPED. Before
+        DREAMING_TO the night hasn't happened yet — a makeup fired in the
+        0:00–DREAMING_FROM gap double-generates alongside the scheduler's own
+        window run a couple of hours later (observed 2026-07-07: makeup 01:27
+        + spontaneous 02:15 + scheduled 03:01 = 3 insights in one night)."""
+        start = settings.DREAMING_FROM
+        end = settings.DREAMING_TO
+        if start is None or end is None:
+            return True  # no window configured → nothing to wait for
+        hour = self._clock().hour
+        if start <= end:
+            return hour >= end
+        # Window wraps midnight (e.g. 22→5): this morning's tail ended at
+        # `end`, and hours >= `start` belong to TONIGHT's window (not passed).
+        return end <= hour < start
 
     def _in_dreaming_window(self) -> bool:
         start = settings.DREAMING_FROM
@@ -269,7 +295,10 @@ class DaydreamPump:
         today = self._clock().strftime("%Y-%m-%d")
         if self._ledger["budget"].get("date") != today:
             self._ledger["budget"] = {
-                "date": today, "consolidation": 0, "insight": 0, "spontaneous": 0,
+                "date": today,
+                "consolidation": 0,
+                "insight": 0,
+                "spontaneous": 0,
             }
             self._ledger["completed_logged"] = False
             self._save_ledger()
@@ -292,6 +321,7 @@ class DaydreamPump:
         logging.info(message)
         try:
             from core.ui import ui
+
             ui.success("🌷 今天的白日夢做完了：該補的都補上了")
             MAINTENANCE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
             stamp = self._clock().strftime("%Y-%m-%d %H:%M")
