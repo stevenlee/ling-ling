@@ -152,6 +152,61 @@ def test_fail_open(patch_env):
     assert signals.bridging is None
 
 
+def test_bridging_nested_pages(patch_env):
+    """Pages live in per-document folders (pages/<Doc>/<Doc> (Synthesis).md);
+    source lookup must resolve them, not just flat pages/*.md."""
+    import services.insight_signals as mod
+
+    nested_a = mod.PAGES_DIR / "DocA"
+    nested_a.mkdir()
+    (nested_a / "DocA (Synthesis).md").write_text("TargetA content")
+    nested_b = mod.PAGES_DIR / "DocB"
+    nested_b.mkdir()
+    (nested_b / "DocB (Synthesis).md").write_text("TargetB content")
+
+    rag = FakeRAG([])
+    llm = FakeLLM()
+    signals = compute_signals("report", ["DocA (Synthesis)", "DocB (Synthesis)"], rag, llm)
+    assert signals.bridging == 1.0
+    # refute also depends on the same source lookup
+    assert signals.refute_verdict == "survived"
+    assert llm.called
+
+
+def test_groundedness_nested_pages(patch_env):
+    import services.insight_signals as mod
+
+    nested = mod.PAGES_DIR / "DocA"
+    nested.mkdir()
+    (nested / "DocA (Synthesis).md").write_text("TargetA content")
+
+    rag = FakeRAG([])
+    llm = FakeLLM()
+    signals = compute_signals("See [[DocA (Synthesis)]] and [[Missing]].", [], rag, llm)
+    assert signals.groundedness == 0.5
+    assert signals.broken_links == ["Missing"]
+
+
+def test_novelty_survives_embedding_dim_change(patch_env):
+    """Sidecar entries from an older embedding model (different dim) must be
+    purged, not crash the novelty computation."""
+    stale = {
+        f"old_{i}": {"embedding": [0.1, 0.2, 0.3], "ts": f"2000-01-01T00:00:{i:02d}"}
+        for i in range(3)
+    }
+    patch_env.write_text(json.dumps(stale))
+
+    rag = FakeRAG([])  # FakeRAG.ef returns 2-dim embeddings
+    llm = FakeLLM()
+
+    signals = compute_signals("novel stuff here", [], rag, llm)
+    assert signals.novelty == 1.0  # no comparable history left
+
+    history = json.loads(patch_env.read_text())
+    assert len(history) == 1  # stale 3-dim entries purged, new entry saved
+    assert all(len(v["embedding"]) == 2 for v in history.values())
+
+
 # -- S2 Tests --
 
 

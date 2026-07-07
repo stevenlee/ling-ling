@@ -59,13 +59,19 @@ def compute_signals(
             all_indexed_titles = (
                 rag.get_all_indexed_titles() if hasattr(rag, "get_all_indexed_titles") else set()
             )
+            # Pages live in nested per-document folders (pages/<Doc>/<Doc> (Synthesis).md),
+            # so a flat PAGES_DIR / f"{link}.md" check misses them — match by stem instead.
+            vault_stems: set[str] = set()
+            for directory in (PAGES_DIR, NOTES_DIR):
+                if directory.exists():
+                    vault_stems.update(p.stem for p in directory.rglob("*.md"))
             valid_count = 0
             broken_links = []
             for link in links:
                 if (
                     link in all_indexed_titles
-                    or (PAGES_DIR / f"{link}.md").exists()
-                    or (NOTES_DIR / f"{link}.md").exists()
+                    or link in vault_stems
+                    or sanitize_filename(link) in vault_stems
                 ):
                     valid_count += 1
                 else:
@@ -89,6 +95,21 @@ def compute_signals(
                     except Exception as e:
                         logging.warning(f"Failed to read {INSIGHT_SIGNALS_FILE}: {e}")
                         history = {}
+
+                # Drop sidecar entries whose embedding dim doesn't match the
+                # current model (e.g. 768-dim leftovers from before bge-m3):
+                # np.dot would raise on them, killing novelty forever — and the
+                # exception fired before the save below, so the poisoned file
+                # never healed on its own.
+                emb_dim = len(emb)
+                stale = [k for k, v in history.items() if len(v.get("embedding") or []) != emb_dim]
+                if stale:
+                    logging.info(
+                        f"InsightSignals: purging {len(stale)} sidecar entries with "
+                        f"embedding dim != {emb_dim} (embedding model changed)"
+                    )
+                    for k in stale:
+                        del history[k]
 
                 max_sim = 0.0
                 best_id = None
@@ -134,9 +155,10 @@ def compute_signals(
         contents = []
         for title in titles:
             title = sanitize_filename(title)
-            p1 = PAGES_DIR / f"{title}.md"
-            p2 = NOTES_DIR / f"{title}.md"
-            target = p1 if p1.exists() else p2 if p2.exists() else None
+            # rglob: pages are nested per-document (pages/<Doc>/<Doc> (Synthesis).md)
+            target = next(PAGES_DIR.rglob(f"{title}.md"), None) if PAGES_DIR.exists() else None
+            if target is None and NOTES_DIR.exists():
+                target = next(NOTES_DIR.rglob(f"{title}.md"), None)
             if target:
                 try:
                     raw = target.read_text(encoding="utf-8")
