@@ -20,9 +20,11 @@
 
 | # | 疑點 | 證據 |
 |---|------|------|
-| S1 | **novelty 大面積 null**：56 檔中 42 檔 `novelty: null` | Insights frontmatter 統計 |
-| S2 | **bridging 幾乎恆為 0.0**（46 檔）— 疑似訊號從未真正計算或全部退化 | 同上 |
-| S3 | **groundedness 有 5 檔為 0.0** — 零接地卻仍產出並入庫 | 同上 |
+| S1 | **novelty 大面積 null**：56 檔中 42 檔 `novelty: null`。**已追因並修復（4a17afa，2026-07-07）**：sidecar 殘留 768 維舊 embedding，換 bge-m3 後 np.dot 維度不合 throw。稽核改為驗證修復後新產出的 novelty 是否有值且分佈合理 | Insights frontmatter 統計；`services/insight_signals.py` |
+| S2 | **bridging 幾乎恆為 0.0**（46 檔）＋ refute_verdict 恆 null。**已追因並修復（4a17afa）**：`_load_source_contents` 扁平路徑找不到巢狀 pages → 來源永遠載不到。稽核改為驗證修復後新產出 | 同上 |
+| S3 | **groundedness 有 5 檔為 0.0** — 部分是同一扁平路徑缺陷的量測假象（已修）；稽核需判斷修復後仍為低值的檔案是否真的零接地、以及要不要加入庫閘門 | 同上 |
+
+> ⚠️ 修復需 daemon 重啟才生效；重啟前產出的訊號仍是舊值。稽核時以「daemon 重啟時間點」切分新舊樣本。存量 56 檔未重簽（backfill 只補未簽檔），是否重算屬稽核裁決項。
 | S4 | **grounding 集中化**：42 檔有 `grounded_on`，但前 4 個 cortex id 出現 40/33/21/19 次 — 幾乎所有 insight 都掛在同 4 個節點上（同溫層） | `grep grounded_on` 統計 |
 | S5 | sys-eval 自己報告：Cortex 44 條主張中 **43 條薄證據（≤1 來源）、2 條教條**；insight 平均 novelty 僅 0.15 | `✅sys-eval-20260629.md` |
 | S6 | 🚨retrieval alert（2026-06-11）在 bge-m3 修復**之前** — 需確認後續 ctx-valid 是否回穩、alert 是否該歸檔 | `🚨sys-alert-retrieval-20260611-0000.md` |
