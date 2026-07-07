@@ -34,7 +34,13 @@ _sidecar_lock = threading.Lock()
 
 
 def compute_signals(
-    report_content: str, related_titles: list[str], rag, llm, *, run_refute: bool = True
+    report_content: str,
+    related_titles: list[str],
+    rag,
+    llm,
+    *,
+    run_refute: bool = True,
+    update_history: bool = True,
 ) -> InsightSignals:
     if not INSIGHT_SIGNALS_ENABLED:
         return InsightSignals(None, None, None, None, None, None, "")
@@ -111,9 +117,19 @@ def compute_signals(
                     for k in stale:
                         del history[k]
 
+                # Content-hash id, computed up front so the comparison loop can
+                # skip the insight's own earlier entry — otherwise recomputing
+                # signals for the same content (backfill re-sign, retries)
+                # self-matches at sim 1.0 and reports novelty 0.
+                import hashlib
+
+                new_id = hashlib.sha256(core_text.encode("utf-8")).hexdigest()[:16]
+
                 max_sim = 0.0
                 best_id = None
                 for hist_id, data in history.items():
+                    if hist_id == new_id:
+                        continue
                     hist_emb = data.get("embedding")
                     if hist_emb:
                         # Cosine similarity
@@ -130,24 +146,21 @@ def compute_signals(
                 else:
                     novelty = 1.0
 
-                # Save new embedding (generate a quick id based on content hash)
-                import hashlib
+                if update_history:
+                    history[new_id] = {
+                        "embedding": [float(x) for x in emb],
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    }
 
-                new_id = hashlib.sha256(core_text.encode("utf-8")).hexdigest()[:16]
-                history[new_id] = {
-                    "embedding": [float(x) for x in emb],
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                }
+                    # Keep only last 500
+                    if len(history) > 500:
+                        sorted_keys = sorted(history.keys(), key=lambda k: history[k].get("ts", ""))
+                        history = {k: history[k] for k in sorted_keys[-500:]}
 
-                # Keep only last 500
-                if len(history) > 500:
-                    sorted_keys = sorted(history.keys(), key=lambda k: history[k].get("ts", ""))
-                    history = {k: history[k] for k in sorted_keys[-500:]}
-
-                INSIGHT_SIGNALS_FILE.parent.mkdir(parents=True, exist_ok=True)
-                tmp_file = INSIGHT_SIGNALS_FILE.with_suffix(".tmp")
-                tmp_file.write_text(json.dumps(history, ensure_ascii=False), encoding="utf-8")
-                tmp_file.replace(INSIGHT_SIGNALS_FILE)
+                    INSIGHT_SIGNALS_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    tmp_file = INSIGHT_SIGNALS_FILE.with_suffix(".tmp")
+                    tmp_file.write_text(json.dumps(history, ensure_ascii=False), encoding="utf-8")
+                    tmp_file.replace(INSIGHT_SIGNALS_FILE)
     except Exception as e:
         logging.error(f"InsightSignals: Novelty calculation failed: {e}")
 

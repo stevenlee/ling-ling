@@ -109,7 +109,14 @@ def test_novelty_and_sidecar(patch_env):
     signals1 = compute_signals(report1, [], rag, llm)
     assert signals1.novelty == 1.0
 
-    signals2 = compute_signals(report1, [], rag, llm)
+    # Recomputing the SAME content must not self-match (backfill re-sign,
+    # retries): its own sidecar entry is excluded by content-hash id.
+    signals_same = compute_signals(report1, [], rag, llm)
+    assert signals_same.novelty == 1.0
+
+    # A different report with an identical embedding (FakeRAG maps any
+    # "novel"-containing text to the same vector) is near-zero novelty.
+    signals2 = compute_signals("novel other things", [], rag, llm)
     # Due to floating point math with dot products, it could be very close to 0
     assert signals2.novelty < 0.001
     assert signals2.max_similar_insight is not None

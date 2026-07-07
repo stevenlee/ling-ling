@@ -73,6 +73,130 @@ class TestBackfill:
         assert doc_meta["signals"]["refute_verdict"] == "survived"  # sources loaded from filename
         assert body.strip() in doc_text  # body preserved
 
+    def _patch_dirs(self, tmp_path, monkeypatch):
+        import services.insight_signals as sig
+
+        monkeypatch.setattr(sig, "INSIGHT_SIGNALS_ENABLED", True)
+        monkeypatch.setattr(sig, "INSIGHT_REFUTE_ENABLED", True)
+        monkeypatch.setattr(sig, "INSIGHT_SIGNALS_FILE", tmp_path / "db" / "sig.json")
+        monkeypatch.setattr(sig, "PAGES_DIR", tmp_path / "pages")
+        monkeypatch.setattr(sig, "NOTES_DIR", tmp_path / "Notes")
+        (tmp_path / "pages").mkdir()
+        (tmp_path / "Notes").mkdir()
+        insights = tmp_path / "Insights"
+        insights.mkdir()
+        return tmp_path / "pages", insights
+
+    def test_force_resigns_and_preserves_verdict_without_refute(self, tmp_path, monkeypatch):
+        pages, insights = self._patch_dirs(tmp_path, monkeypatch)
+        (pages / "Doc A.md").write_text("Source content.", encoding="utf-8")
+
+        signed = insights / "[20260601-020202][Doc A][insight-recency].md"
+        signed.write_text(
+            "---\nsignals:\n  groundedness: 0.0\n  novelty: null\n  bridging: 0.0\n"
+            "  refute_verdict: survived\n---\n\nbody [[Doc A]]\n",
+            encoding="utf-8",
+        )
+
+        # Without force: skipped.
+        result = backfill_signals(FakeRAG(), None, insights_dir=insights, run_refute=False)
+        assert result.skipped_signed == 1 and result.resigned == 0
+
+        # With force: recomputed, but the earned verdict survives a no-refute run.
+        result = backfill_signals(
+            FakeRAG(), None, insights_dir=insights, run_refute=False, force=True
+        )
+        assert result.resigned == 1 and result.backfilled == 0
+        meta = parse_markdown_metadata(signed.read_text(encoding="utf-8"))
+        assert meta["signals"]["groundedness"] == 1.0  # [[Doc A]] resolves now
+        assert meta["signals"]["refute_verdict"] == "survived"  # preserved
+
+    def test_dry_run_writes_nothing(self, tmp_path, monkeypatch):
+        pages, insights = self._patch_dirs(tmp_path, monkeypatch)
+        f = insights / "[20260601-010101][Vault][full-insight].md"
+        original = "---\ntitle: t\n---\n\nbody\n"
+        f.write_text(original, encoding="utf-8")
+
+        result = backfill_signals(
+            FakeRAG(), None, insights_dir=insights, run_refute=False, dry_run=True
+        )
+        assert result.backfilled == 1
+        assert f.read_text(encoding="utf-8") == original
+
+    def test_mirror_segment_truncated_and_plus_joined(self, tmp_path, monkeypatch):
+        """Filename related-segment: titles joined with '+', each truncated —
+        must resolve back to real page stems by prefix."""
+        pages, insights = self._patch_dirs(tmp_path, monkeypatch)
+        nested = pages / "The Bitter Lesson"
+        nested.mkdir()
+        (nested / "The Bitter Lesson (Synthesis).md").write_text("bitter", encoding="utf-8")
+        nested2 = (
+            pages / "Identifying and remediating a persistent memory compromise in Claude Code"
+        )
+        nested2.mkdir()
+        (
+            nested2
+            / "Identifying and remediating a persistent memory compromise in Claude Code (Synthesis).md"
+        ).write_text("memory", encoding="utf-8")
+
+        f = (
+            insights
+            / "[20260707-041607][Identifying and remediating a persistent memory compromise in Claude Code (Synth+The Bitter Lesson (Synthesis)][insight-montecarlo].md"
+        )
+        f.write_text("---\ntitle: mc\n---\n\nbody\n", encoding="utf-8")
+
+        result = backfill_signals(FakeRAG(), None, insights_dir=insights, run_refute=False)
+        assert result.backfilled == 1
+        assert result.unresolved == []
+        meta = parse_markdown_metadata(f.read_text(encoding="utf-8"))
+        # Both sources resolved → bridging computed (FakeRAG embeds everything
+        # identically → similarity 1.0 → bridging 0.0, but NOT via the
+        # missing-sources fallback: unresolved is empty above).
+        assert meta["signals"]["bridging"] is not None
+
+    def test_bare_title_prefers_synthesis_among_siblings(self, tmp_path, monkeypatch):
+        pages, insights = self._patch_dirs(tmp_path, monkeypatch)
+        nested = pages / "Doc B"
+        nested.mkdir()
+        for suffix in ("(Part 1)", "(Part 2)", "(Synthesis)", "(Stitched)"):
+            (nested / f"Doc B {suffix}.md").write_text("content", encoding="utf-8")
+        (pages / "Doc C.md").write_text("content c", encoding="utf-8")
+
+        f = insights / "[20260601-030303][Doc B+Doc C][insight-montecarlo].md"
+        f.write_text("---\ntitle: t\n---\n\nbody\n", encoding="utf-8")
+
+        result = backfill_signals(FakeRAG(), None, insights_dir=insights, run_refute=False)
+        assert result.backfilled == 1
+        assert result.unresolved == []  # "Doc B" → "Doc B (Synthesis)", "Doc C" exact
+
+    def test_replay_order_follows_date_created(self, tmp_path, monkeypatch):
+        """Novelty replay must run oldest-first by date_created, not filename
+        order (legacy 🎐 files sort after mirror-named ones alphabetically)."""
+        pages, insights = self._patch_dirs(tmp_path, monkeypatch)
+
+        # Legacy file is OLDER but its name sorts after "[2026..." names.
+        # Bodies differ (distinct content-hash ids) but FakeRAG embeds both
+        # identically, so whichever runs second sees the first at sim 1.0.
+        legacy = insights / "🎐insight-plan-20260526-171611.md"
+        legacy.write_text(
+            "---\ndate_created: '2026-05-26 17:16:11'\n---\n\nnovel stuff here\n",
+            encoding="utf-8",
+        )
+        newer = insights / "[20260601-010101][Vault][full-insight].md"
+        newer.write_text(
+            "---\ndate_created: '2026-06-01 01:01:01'\n---\n\nnovel other things\n",
+            encoding="utf-8",
+        )
+
+        backfill_signals(FakeRAG(), None, insights_dir=insights, run_refute=False)
+
+        legacy_meta = parse_markdown_metadata(legacy.read_text(encoding="utf-8"))
+        newer_meta = parse_markdown_metadata(newer.read_text(encoding="utf-8"))
+        # Oldest goes first: nothing in history → novelty 1.0; the newer one
+        # then sees it (identical body) → novelty ~0.
+        assert legacy_meta["signals"]["novelty"] == 1.0
+        assert newer_meta["signals"]["novelty"] < 0.01
+
 
 class TestValidationReport:
     def _page(self, cortex_dir, claim):
