@@ -404,7 +404,17 @@ class CommandDispatcher:
         Sidecar images are restored too so `images/<title>/` links resolve."""
         from core.config import CONSOLIDATE_DIR, RAW_CONSOLIDATE_DIR
 
-        titles = [t.split("|")[0].strip() for t in target_entities]
+        # Obsidian link autocomplete often writes path-qualified targets
+        # ([[raw/consolidate/妙法蓮華經|妙法蓮華經]]) — reduce each target to a
+        # bare title: alias off, path components off, .md suffix off.
+        titles = []
+        for t in target_entities:
+            title = t.split("|")[0].strip()
+            title = title.replace("\\", "/").rsplit("/", 1)[-1].strip()
+            if title.lower().endswith(".md"):
+                title = title[:-3]
+            if title:
+                titles.append(title)
         if not titles:
             return "skipped：請以 [[標題]] 指定要重新 synthesis 的文件。"
         done, missing = [], []

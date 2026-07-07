@@ -243,6 +243,24 @@ class TestPromptWatcherBrainOps:
         assert (cons / "images" / "MyDoc" / "a.jpeg").exists()  # sidecar restored
         assert "MyDoc" in msg
 
+    def test_resynthesize_strips_path_and_extension(self, monkeypatch, tmp_path):
+        """Obsidian autocomplete writes [[raw/consolidate/妙法蓮華經|妙法蓮華經]] —
+        the path-qualified target must still resolve to the bare title."""
+        raw = tmp_path / "raw_consolidate"
+        raw.mkdir()
+        (raw / "妙法蓮華經.md").write_text("# 經", encoding="utf-8")
+        cons = tmp_path / "Consolidate"
+        monkeypatch.setattr("core.config.RAW_CONSOLIDATE_DIR", raw)
+        monkeypatch.setattr("core.config.CONSOLIDATE_DIR", cons)
+
+        w = PromptWatcher(MagicMock(), MagicMock())
+        msg = w._resynthesize(["raw/consolidate/妙法蓮華經|妙法蓮華經"])
+        assert (cons / "妙法蓮華經.md").exists()
+        assert "找不到" not in msg
+
+        msg2 = w._resynthesize(["raw/consolidate/妙法蓮華經.md"])
+        assert "找不到" not in msg2
+
     def test_resynthesize_reports_missing_source(self, monkeypatch, tmp_path):
         raw = tmp_path / "raw_consolidate"
         raw.mkdir()
