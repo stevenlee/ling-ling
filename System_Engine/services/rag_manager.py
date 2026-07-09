@@ -663,6 +663,37 @@ class RAGManager:
         except Exception as e:
             logging.debug(f"Facet cleanup failed for {doc_id[:8]}: {e}")
 
+    def sample_document_embeddings(self, limit: int = 300) -> list[list[float]]:
+        """Up to `limit` non-facet chunk embeddings, for corpus-diversity
+        metrics (semantic entropy). Read-only, best-effort: returns [] on any
+        error. Facet rows are excluded so the sample reflects real content."""
+        out: list[list[float]] = []
+        try:
+            PAGE = 500
+            offset = 0
+            while len(out) < limit:
+                batch = self.collection.get(
+                    include=["embeddings", "metadatas"], limit=PAGE, offset=offset
+                )
+                ids = batch.get("ids") or []
+                if not ids:
+                    break
+                embs = batch.get("embeddings") or []
+                metas = batch.get("metadatas") or []
+                for emb, meta in zip(embs, metas):
+                    if (meta or {}).get("role") == "facet":
+                        continue
+                    if emb is not None and len(emb):
+                        out.append([float(x) for x in emb])
+                        if len(out) >= limit:
+                            break
+                if len(ids) < PAGE:
+                    break
+                offset += PAGE
+        except Exception as e:
+            logging.warning(f"sample_document_embeddings failed: {e}")
+        return out
+
     def get_facet_entries(self) -> list[dict]:
         """All facet entries: [{title, text, facet_index, timestamp}].
 

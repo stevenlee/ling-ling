@@ -223,7 +223,9 @@ class MaintenanceScheduler(threading.Thread):
                 return MaintenanceResult("skipped", "No trace store associated with LLM client.")
             from maintenance.self_assessment import run_self_assessment
 
-            result = run_self_assessment(trace_store)
+            # rag → the semantic-entropy axis samples source-doc embeddings from
+            # ChromaDB for the output/input diversity ratio (read-only).
+            result = run_self_assessment(trace_store, rag=self.rag)
             msg = result.message
             from core.config import SELF_DIAGNOSIS_ENABLED, SELF_IMPROVE_ENABLED
 

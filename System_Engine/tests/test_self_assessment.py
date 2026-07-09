@@ -42,6 +42,8 @@ def _paths(tmp_path):
         bench_history_file=tmp_path / "bench.json",
         decay_file=tmp_path / "decay.json",
         ledger_file=tmp_path / "ledger.json",
+        insight_signals_file=tmp_path / "insight_signals.json",
+        cortex_state_file=tmp_path / "cortex_state.json",
         report_dir=tmp_path / "out",
         log_path=tmp_path / "maint.log.md",
     )
@@ -69,7 +71,15 @@ def test_empty_everything_is_green_and_quiet(tmp_path):
 def test_six_axes_always_present(tmp_path):
     r = run_self_assessment(FakeTrace(), **_paths(tmp_path))
     names = {a.name for a in r.axes}
-    assert names == {"報告品質", "LLM 健康", "檢索品質", "Cortex 信念", "記憶衰減", "洞察品質"}
+    assert names == {
+        "報告品質",
+        "LLM 健康",
+        "檢索品質",
+        "Cortex 信念",
+        "記憶衰減",
+        "洞察品質",
+        "語義熵",
+    }
 
 
 # ── report-quality axis ───────────────────────────────────────────────────
@@ -251,3 +261,99 @@ def test_chronic_axis_adds_observation(tmp_path):
         r = run_self_assessment(FakeTrace(), history_file=hist_file, **p)
     # 3 consecutive reds on retrieval → a "慢性問題" observation appears.
     assert any("慢性" in o and "檢索品質" in o for o in r.observations)
+
+
+# ── SE: semantic entropy (effective dimensionality) ───────────────────────
+
+
+def test_effective_dimensionality_collapse_vs_spread():
+    from maintenance.semantic_entropy import effective_dimensionality
+
+    # All variance along one axis → PR ≈ 1 (collapsed).
+    line = [[1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [5.0, 0.0]]
+    assert effective_dimensionality(line) < 1.01
+
+    # Balanced spread on two orthogonal axes → PR ≈ 2.
+    balanced = [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]]
+    assert abs(effective_dimensionality(balanced) - 2.0) < 0.01
+
+    # Degenerate: identical vectors (zero variance) → None.
+    assert effective_dimensionality([[1.0, 1.0]] * 5) is None
+    # Too few samples → None.
+    assert effective_dimensionality([[1.0, 0.0], [0.0, 1.0]]) is None
+
+
+def test_compute_entropy_report_ratio(tmp_path):
+    from maintenance.semantic_entropy import compute_entropy_report
+
+    # insight embeddings: collapsed onto a line (low dim)
+    ins = {f"i{i}": {"embedding": [float(i), 0.0, 0.0]} for i in range(5)}
+    (tmp_path / "ins.json").write_text(json.dumps(ins), encoding="utf-8")
+    # cortex embeddings: spread across 3 axes (high dim)
+    cor = {
+        "claim_embeddings": {
+            "a": {"embedding": [1.0, 0.0, 0.0]},
+            "b": {"embedding": [0.0, 1.0, 0.0]},
+            "c": {"embedding": [0.0, 0.0, 1.0]},
+            "d": {"embedding": [-1.0, 0.0, 0.0]},
+        }
+    }
+    (tmp_path / "cor.json").write_text(json.dumps(cor), encoding="utf-8")
+
+    class SrcRAG:
+        def sample_document_embeddings(self, limit=300):
+            return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]
+
+    rpt = compute_entropy_report(
+        insight_signals_file=tmp_path / "ins.json",
+        cortex_state_file=tmp_path / "cor.json",
+        rag=SrcRAG(),
+    )
+    assert rpt["insight_dim"] < 1.01  # collapsed
+    assert rpt["source_dim"] > 1.5  # spread
+    assert rpt["eff_dim_ratio"] < 0.5  # output much narrower than input
+    assert rpt["n_insight"] == 5 and rpt["n_source"] == 4
+
+
+def test_semantic_entropy_axis_yellow_on_low_ratio(tmp_path):
+    # Collapsed insights + spread sources → ratio < 0.5 → yellow + observation.
+    ins = {f"i{i}": {"embedding": [float(i), 0.0, 0.0]} for i in range(5)}
+    (tmp_path / "insight_signals.json").write_text(json.dumps(ins), encoding="utf-8")
+
+    class SrcRAG:
+        def sample_document_embeddings(self, limit=300):
+            return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]
+
+    r = run_self_assessment(FakeTrace(), rag=SrcRAG(), **_paths(tmp_path))
+    ax = _axis(r, "語義熵")
+    assert ax.lamp == YELLOW
+    assert any("語義熵" in o and "生成端" in o for o in r.observations)
+
+
+def test_semantic_entropy_axis_unknown_without_embeddings(tmp_path):
+    # No sidecar → axis degrades to unknown, never crashes the run.
+    r = run_self_assessment(FakeTrace(), **_paths(tmp_path))
+    ax = _axis(r, "語義熵")
+    assert ax.lamp == UNKNOWN
+
+
+def test_semantic_entropy_axis_yellow_on_sustained_decline(tmp_path):
+
+    # Seed history with a descending insight_dim series (3 prior drops).
+    hist = [
+        {"ts": "t1", "overall": GREEN, "axes": {"語義熵": {"lamp": GREEN, "insight_dim": 9.0}}},
+        {"ts": "t2", "overall": GREEN, "axes": {"語義熵": {"lamp": GREEN, "insight_dim": 7.0}}},
+        {"ts": "t3", "overall": GREEN, "axes": {"語義熵": {"lamp": GREEN, "insight_dim": 5.0}}},
+    ]
+    hfile = tmp_path / "hist.json"
+    hfile.write_text(json.dumps(hist), encoding="utf-8")
+    # Current run: a further-collapsed insight population (dim well under 5).
+    ins = {f"i{i}": {"embedding": [float(i), 0.0, 0.0]} for i in range(6)}
+    (tmp_path / "insight_signals.json").write_text(json.dumps(ins), encoding="utf-8")
+
+    p = _paths(tmp_path)
+    p["history_file"] = hfile
+    r = run_self_assessment(FakeTrace(), **p)
+    ax = _axis(r, "語義熵")
+    assert ax.lamp == YELLOW
+    assert any("連續" in o and "下降" in o for o in r.observations)

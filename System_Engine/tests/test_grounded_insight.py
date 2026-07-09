@@ -144,7 +144,8 @@ def _worker(tmp_path):
         adjudication_cache={},
         max_adjudications=0,
         top_k=3,
-        sim_threshold=0.8,
+        link_threshold=0.6,
+        merge_threshold=0.8,
         max_variants=5,
     )
     w._index_page = lambda p: None  # isolate the firewall from RAG indexing
