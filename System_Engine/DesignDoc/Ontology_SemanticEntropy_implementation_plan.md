@@ -131,6 +131,17 @@ Cortex 節點是「命題主張」，本體論要的是「概念實體」節點�
 
 ---
 
+## 進度（2026-07-09）
+
+- **O0 已實作＋跑完第一輪**（a161b81）：連通分量 63→32、最大分量 2→29、
+  related 非空節點 4/65→38/65。雙門檻 link 0.60 / merge 0.80 走 Scripture，
+  pending 回訪佇列，`scripts/backfill_cortex_edges.py` 存量回填。
+- **SE 已實作**（1e2813c）：`maintenance/semantic_entropy.py`（有效維度）＋
+  self_assessment 第 7 軸「語義熵」。實跑 vault：insight_dim **11.2** vs
+  cortex_dim **37.6** — 產出僅信念庫三成有效維度，分佈角度證實同質化。
+  source_dim / 產出÷輸入比待 daemon 夜間跑 self_assessment（rag 唯讀
+  ChromaDB）補齊。燈號走趨勢，需累積數次 run 才有 trend。
+
 ## 建議執行順序與理由
 
 1. **O0 先做**——同時治斷圖、grounding 集中、seed 多樣性；做完會改變對 O1–O4
