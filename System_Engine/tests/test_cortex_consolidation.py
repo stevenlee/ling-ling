@@ -46,7 +46,8 @@ class FakeRAG:
 
     VECTORS = {
         "ALPHA": [1.0, 0.0],
-        "NEARALPHA": [0.95, 0.312],  # cos vs ALPHA ≈ 0.95
+        "NEARALPHA": [0.95, 0.312],  # cos vs ALPHA ≈ 0.95 (clears both floors)
+        "GAMMA": [0.68, 0.73],  # cos vs ALPHA ≈ 0.68 (links at 0.60, no merge at 0.80)
         "BETA": [0.0, 1.0],
     }
 
@@ -573,3 +574,141 @@ class TestWikilinkPenetration:
         assert "Ghost" not in sources  # 存在性過濾
         assert len(sources) == 5  # 上限 5
         assert sources[0] == "P1"  # frontmatter 來源優先且去重
+
+
+# ── O0: graph density (link/merge split, pending drain, backfill relink) ──
+
+
+class TestO0GraphDensity:
+    def _two_claim_env(self, tmp_path, mid_marker, verdict):
+        """Insight A → ALPHA claim; insight B → <mid_marker> claim; one verdict."""
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "1_a.md", body="MARKER-A")
+        _write_insight(env["insights_dir"], "2_b.md", body="MARKER-B")
+        llm = FakeLLM(
+            claims_map={
+                "MARKER-A": [{"claim": "ALPHA base claim about X.", "summary": "s"}],
+                "MARKER-B": [{"claim": f"{mid_marker} related claim about Y.", "summary": "s"}],
+            },
+            verdicts={("ALPHA base", f"{mid_marker} related"): verdict},
+        )
+        return env, llm
+
+    def test_merge_guard_links_below_merge_floor(self, tmp_path):
+        # equivalent verdict, but sim≈0.68 < 0.80 merge floor → link, don't merge.
+        env, llm = self._two_claim_env(tmp_path, "GAMMA", "equivalent")
+        run_consolidation(llm, FakeRAG(), **env)
+        pages = load_all_pages(env["cortex_dir"])
+        assert len(pages) == 2  # NOT collapsed into one
+        ids = {p.claim_id for p in pages}
+        assert any(set(p.related) & (ids - {p.claim_id}) for p in pages)  # linked instead
+
+    def test_merge_still_happens_above_merge_floor(self, tmp_path):
+        # NEARALPHA sim≈0.95 ≥ 0.80 → equivalent genuinely merges.
+        env, llm = self._two_claim_env(tmp_path, "NEARALPHA", "equivalent")
+        run_consolidation(llm, FakeRAG(), **env)
+        assert len(load_all_pages(env["cortex_dir"])) == 1
+
+    def test_midrange_pair_is_adjudicated(self, tmp_path):
+        # A 0.68 pair sat below the old 0.80 floor and was never adjudicated;
+        # at the 0.60 link floor it now gets an edge.
+        env, llm = self._two_claim_env(tmp_path, "GAMMA", "complementary")
+        run_consolidation(llm, FakeRAG(), **env)
+        assert any(
+            ("ALPHA base" in a and "GAMMA related" in b)
+            or ("ALPHA base" in b and "GAMMA related" in a)
+            for a, b in llm.adjudicate_calls
+        )
+        pages = load_all_pages(env["cortex_dir"])
+        assert sum(len(p.related) for p in pages) >= 2  # symmetric edge
+
+    def test_pending_edges_stashed_then_drained(self, tmp_path):
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "1_a.md", body="MARKER-A")
+        _write_insight(env["insights_dir"], "2_b.md", body="MARKER-B")
+        llm = FakeLLM(
+            claims_map={
+                "MARKER-A": [{"claim": "ALPHA base claim about X.", "summary": "s"}],
+                "MARKER-B": [{"claim": "GAMMA related claim about Y.", "summary": "s"}],
+            },
+            verdicts={("ALPHA base", "GAMMA related"): "complementary"},
+        )
+        # Run 1: quota 0 → B enters with no edges, its neighbor A stashed.
+        run_consolidation(llm, FakeRAG(), **env, max_adjudications=0)
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert state.get("pending_edges")  # something owed
+        pages = load_all_pages(env["cortex_dir"])
+        assert sum(len(p.related) for p in pages) == 0  # no edges yet
+
+        # Run 2: quota available → drain runs first, edge appears.
+        run_consolidation(llm, FakeRAG(), **env, max_adjudications=10)
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert not state.get("pending_edges")  # drained
+        pages = load_all_pages(env["cortex_dir"])
+        assert sum(len(p.related) for p in pages) >= 2
+
+    def test_relink_all_pages_backfill(self, tmp_path):
+        # Seed two unrelated-at-ingest pages, then backfill-relink them.
+        from maintenance.cortex_consolidation import _Consolidator
+
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "1_a.md", body="MARKER-A")
+        _write_insight(env["insights_dir"], "2_b.md", body="MARKER-B")
+        seed_llm = FakeLLM(
+            claims_map={
+                "MARKER-A": [{"claim": "ALPHA base claim about X.", "summary": "s"}],
+                "MARKER-B": [{"claim": "GAMMA related claim about Y.", "summary": "s"}],
+            },
+            verdicts={},  # unrelated at ingest → no edges written
+        )
+        run_consolidation(seed_llm, FakeRAG(), **env, max_adjudications=0)
+        assert sum(len(p.related) for p in load_all_pages(env["cortex_dir"])) == 0
+
+        # Backfill with a verdict now available.
+        relink_llm = FakeLLM(verdicts={("ALPHA base", "GAMMA related"): "complementary"})
+        worker = _Consolidator(
+            relink_llm,
+            FakeRAG(),
+            cortex_dir=env["cortex_dir"],
+            state={},
+            adjudication_cache={},
+            max_adjudications=50,
+            top_k=3,
+            link_threshold=0.60,
+            merge_threshold=0.80,
+            max_variants=0,
+        )
+        stats = worker.relink_all_pages()
+        assert stats["related"] >= 1
+        assert sum(len(p.related) for p in load_all_pages(env["cortex_dir"])) >= 2
+
+    def test_relink_dry_run_writes_nothing(self, tmp_path):
+        from maintenance.cortex_consolidation import _Consolidator
+
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "1_a.md", body="MARKER-A")
+        _write_insight(env["insights_dir"], "2_b.md", body="MARKER-B")
+        seed_llm = FakeLLM(
+            claims_map={
+                "MARKER-A": [{"claim": "ALPHA base claim about X.", "summary": "s"}],
+                "MARKER-B": [{"claim": "GAMMA related claim about Y.", "summary": "s"}],
+            },
+        )
+        run_consolidation(seed_llm, FakeRAG(), **env, max_adjudications=0)
+        relink_llm = FakeLLM(verdicts={("ALPHA base", "GAMMA related"): "complementary"})
+        worker = _Consolidator(
+            relink_llm,
+            FakeRAG(),
+            cortex_dir=env["cortex_dir"],
+            state={},
+            adjudication_cache={},
+            max_adjudications=50,
+            top_k=3,
+            link_threshold=0.60,
+            merge_threshold=0.80,
+            max_variants=0,
+        )
+        stats = worker.relink_all_pages(dry_run=True)
+        assert stats["pairs"] >= 1 and stats["adjudicated"] == 0
+        assert not relink_llm.adjudicate_calls  # no LLM in dry-run
+        assert sum(len(p.related) for p in load_all_pages(env["cortex_dir"])) == 0

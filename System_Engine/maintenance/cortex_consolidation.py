@@ -34,7 +34,6 @@ from core.config import (
     CORTEX_MAX_ADJUDICATIONS_PER_NIGHT,
     CORTEX_MAX_INSIGHTS_PER_NIGHT,
     CORTEX_MAX_VARIANTS,
-    CORTEX_NEIGHBOR_SIM_THRESHOLD,
     CORTEX_NEIGHBOR_TOP_K,
     CORTEX_STATE_FILE,
     FROM_LLM_DIR,
@@ -42,6 +41,7 @@ from core.config import (
     MAINTENANCE_LOG_FILE,
     PAGES_DIR,
     NOTES_DIR,
+    settings,
 )
 from core.parser import parse_markdown_metadata, strip_body_frontmatter
 from services.cortex_store import (
@@ -71,6 +71,8 @@ class ConsolidationResult:
     created: int = 0
     merged: int = 0
     contradiction_links: int = 0
+    related_links: int = 0
+    pending_resolved: int = 0
     insights_processed: int = 0
     adjudications_used: int = 0
     report_path: Path | None = None
@@ -137,7 +139,8 @@ class _Consolidator:
         adjudication_cache,
         max_adjudications,
         top_k,
-        sim_threshold,
+        link_threshold,
+        merge_threshold,
         max_variants,
         strict: bool = False,
     ):
@@ -151,7 +154,11 @@ class _Consolidator:
         self.cache = adjudication_cache
         self.max_adjudications = max_adjudications
         self.top_k = top_k
-        self.sim_threshold = sim_threshold
+        # O0: two thresholds. link_threshold is the neighbor-adjudication floor
+        # (graph density); merge_threshold additionally guards the destructive
+        # equivalent→merge path so a low-similarity "equivalent" only links.
+        self.link_threshold = link_threshold
+        self.merge_threshold = merge_threshold
         self.max_variants = max_variants
 
         self.pages: list[CortexPage] = load_all_pages(self.cortex_dir)
@@ -162,6 +169,7 @@ class _Consolidator:
         self.merged = 0
         self.firewalled = 0  # F1: reinforcements skipped as grounded self-agreement
         self.contradiction_links = 0
+        self.related_links = 0  # O0: symmetric related edges added this run
         self._refresh_page_embeddings()
 
     # ── Embeddings (cached in the state file, invalidated by `updated`) ──
@@ -339,24 +347,27 @@ class _Consolidator:
 
         vec = self._embed(claim)
         if vec is not None:
-            scored = [(self._sim(vec, pid), pid) for pid in self.embeddings]
-            neighbors = sorted(
-                [(s, pid) for s, pid in scored if s >= self.sim_threshold],
-                reverse=True,
-            )[: self.top_k]
+            neighbors = self._find_neighbors(vec)
 
-            for _, neighbor_id in neighbors:
+            for idx, (sim, neighbor_id) in enumerate(neighbors):
                 neighbor = self.by_claim_id.get(neighbor_id)
                 if neighbor is None:
                     continue
                 verdict = self._adjudicate(claim, neighbor.claim)
                 if verdict is None:
-                    break  # quota exhausted — remaining relations wait for tomorrow
+                    # Quota exhausted mid-loop. The claim must still enter the
+                    # cortex now, but its remaining edges would otherwise be
+                    # lost forever (no revisit). Stash them for the next run's
+                    # pending-drain (O0 root-cause #2).
+                    self._stash_pending(claim_id, [nid for _, nid in neighbors[idx:]])
+                    break
                 if verdict == "equivalent":
-                    if not self.strict:
+                    # Merge is destructive — only when similarity clears the
+                    # higher merge floor AND we're not in un-merge-feedback mode.
+                    if not self.strict and sim >= self.merge_threshold:
                         self._merge_into(neighbor, claim, evidence, grounded_on)
                         return
-                    verdict = "complementary"  # strict: link, don't merge
+                    verdict = "complementary"  # link, don't merge
                 if verdict in ("entails", "entailed_by", "complementary"):
                     related.append(neighbor_id)
                 elif verdict == "contradicts":
@@ -402,6 +413,7 @@ class _Consolidator:
             }
         self._index_page(page)
         self.created += 1
+        self.related_links += len(related)
 
         # Back-links on the counterparts (typed, symmetric).
         for other_id in related:
@@ -421,6 +433,134 @@ class _Consolidator:
 
     def _sim(self, vec, claim_id: str) -> float:
         return _cosine(vec, self.embeddings[claim_id])
+
+    def _find_neighbors(self, vec, *, exclude_id: str | None = None) -> list[tuple[float, str]]:
+        """Top-K cortex neighbors at or above the link floor, nearest first."""
+        scored = [(self._sim(vec, pid), pid) for pid in self.embeddings if pid != exclude_id]
+        return sorted(
+            [(s, pid) for s, pid in scored if s >= self.link_threshold],
+            reverse=True,
+        )[: self.top_k]
+
+    # ── O0: pending-edge revisit queue ──────────────────────────────────
+    # A claim ingested on a quota-exhausted night used to be written with
+    # partial/no edges and never revisited. We stash the un-adjudicated
+    # neighbors and drain them (oldest first) at the start of the next run,
+    # BEFORE new insights compete for the quota.
+
+    def _stash_pending(self, claim_id: str, neighbor_ids: list[str]) -> None:
+        pending = self.state.setdefault("pending_edges", {})
+        existing = pending.get(claim_id) or []
+        merged = list(dict.fromkeys(existing + [n for n in neighbor_ids if n != claim_id]))
+        if merged:
+            pending[claim_id] = merged
+
+    def drain_pending_edges(self) -> int:
+        """Adjudicate stashed neighbor pairs until quota runs out. Returns the
+        number of edges resolved. Mutates state['pending_edges'] in place."""
+        pending: dict = self.state.get("pending_edges") or {}
+        resolved = 0
+        for claim_id in list(pending.keys()):
+            page = self.by_claim_id.get(claim_id)
+            if page is None:  # claim was merged/deleted since — drop the entry
+                del pending[claim_id]
+                continue
+            remaining = pending[claim_id]
+            still: list[str] = []
+            for i, neighbor_id in enumerate(remaining):
+                neighbor = self.by_claim_id.get(neighbor_id)
+                if neighbor is None:
+                    continue
+                if neighbor_id in page.related or neighbor_id in page.contradictions:
+                    continue  # already linked (e.g. from the other side)
+                verdict = self._adjudicate(page.claim, neighbor.claim)
+                if verdict is None:  # quota gone again — keep the rest for next run
+                    still.extend(remaining[i:])
+                    break
+                # Existing pages are never merged by the drain (equivalent → link).
+                if verdict in ("equivalent", "entails", "entailed_by", "complementary"):
+                    self._add_related(page, neighbor)
+                    resolved += 1
+                elif verdict == "contradicts":
+                    self._add_contradiction(page, neighbor)
+                    resolved += 1
+            if still:
+                pending[claim_id] = list(dict.fromkeys(still))
+            else:
+                del pending[claim_id]
+        return resolved
+
+    # ── Symmetric edge writers (idempotent) ─────────────────────────────
+
+    def _add_related(self, a: CortexPage, b: CortexPage) -> None:
+        changed = False
+        if b.claim_id not in a.related:
+            a.related.append(b.claim_id)
+            a.updated = _now()
+            save_cortex_page(a)
+            changed = True
+        if a.claim_id not in b.related:
+            b.related.append(a.claim_id)
+            b.updated = _now()
+            save_cortex_page(b)
+            changed = True
+        if changed:
+            self.related_links = getattr(self, "related_links", 0) + 1
+
+    def _add_contradiction(self, a: CortexPage, b: CortexPage) -> None:
+        if b.claim_id not in a.contradictions:
+            a.contradictions.append(b.claim_id)
+            self._dent_confidence(a)
+            save_cortex_page(a)
+        if a.claim_id not in b.contradictions:
+            b.contradictions.append(a.claim_id)
+            self._dent_confidence(b)
+            save_cortex_page(b)
+            self.contradiction_links += 1
+
+    def relink_all_pages(self, *, dry_run: bool = False) -> dict:
+        """O0 backfill: re-run neighbor adjudication over every existing page
+        at the (lowered) link threshold. Never merges — only adds typed edges
+        between claims that already live in the cortex. Idempotent: pairs whose
+        edge already exists (or already sits in the adjudication cache as
+        unrelated) are skipped, so a re-run only fills what's missing."""
+        stats = {
+            "pairs": 0,
+            "adjudicated": 0,
+            "related": 0,
+            "contradictions": 0,
+            "quota_hit": False,
+        }
+        seen_pairs: set = set()
+        for page in self.pages:
+            vec = self.embeddings.get(page.claim_id)
+            if vec is None:
+                continue
+            for sim, neighbor_id in self._find_neighbors(vec, exclude_id=page.claim_id):
+                pk = tuple(sorted((page.claim_id, neighbor_id)))
+                if pk in seen_pairs:
+                    continue
+                seen_pairs.add(pk)
+                neighbor = self.by_claim_id.get(neighbor_id)
+                if neighbor is None:
+                    continue
+                if neighbor_id in page.related or neighbor_id in page.contradictions:
+                    continue
+                stats["pairs"] += 1
+                if dry_run:
+                    continue
+                verdict = self._adjudicate(page.claim, neighbor.claim)
+                if verdict is None:
+                    stats["quota_hit"] = True
+                    return stats  # budget spent; re-run continues (edges persist)
+                stats["adjudicated"] += 1
+                if verdict in ("equivalent", "entails", "entailed_by", "complementary"):
+                    self._add_related(page, neighbor)
+                    stats["related"] += 1
+                elif verdict == "contradicts":
+                    self._add_contradiction(page, neighbor)
+                    stats["contradictions"] += 1
+        return stats
 
     def prune_adjudication_cache(self) -> None:
         """Drop entries where BOTH claims have left the cortex (conservative)."""
@@ -517,7 +657,9 @@ def run_consolidation(
     max_insights: int = None,
     max_adjudications: int = None,
     top_k: int = None,
-    sim_threshold: float = None,
+    sim_threshold: float = None,  # deprecated alias for link_threshold
+    link_threshold: float = None,
+    merge_threshold: float = None,
     max_variants: int = None,
     enabled: bool = None,
 ) -> ConsolidationResult:
@@ -532,7 +674,13 @@ def run_consolidation(
         max_adjudications if max_adjudications is not None else CORTEX_MAX_ADJUDICATIONS_PER_NIGHT
     )
     top_k = top_k if top_k is not None else CORTEX_NEIGHBOR_TOP_K
-    sim_threshold = sim_threshold if sim_threshold is not None else CORTEX_NEIGHBOR_SIM_THRESHOLD
+    # link_threshold: explicit arg > deprecated sim_threshold alias > Scripture.
+    if link_threshold is None:
+        link_threshold = (
+            sim_threshold if sim_threshold is not None else settings.CORTEX_LINK_THRESHOLD
+        )
+    if merge_threshold is None:
+        merge_threshold = settings.CORTEX_MERGE_THRESHOLD
     max_variants = max_variants if max_variants is not None else CORTEX_MAX_VARIANTS
     enabled = enabled if enabled is not None else CORTEX_CONSOLIDATION_ENABLED
 
@@ -555,7 +703,12 @@ def run_consolidation(
                 continue
             if _is_candidate(meta):
                 candidates.append((path, meta))
-    if not candidates:
+
+    # A night with neither new insights NOR owed edges is a true no-op — skip
+    # before paying to load pages/embeddings. But owed edges (pending from a
+    # quota-exhausted past run) must drain even when no new insight arrived.
+    state.setdefault("pending_edges", {})
+    if not candidates and not state["pending_edges"]:
         return ConsolidationResult(
             status="skipped", message="No unprocessed insights with healthy signals."
         )
@@ -570,10 +723,17 @@ def run_consolidation(
         adjudication_cache=cache,
         max_adjudications=max_adjudications,
         top_k=top_k,
-        sim_threshold=sim_threshold,
+        link_threshold=link_threshold,
+        merge_threshold=merge_threshold,
         max_variants=max_variants,
         strict=is_adjudication_strict(),
     )
+
+    # O0 root-cause #2: finish edges owed from quota-exhausted past runs BEFORE
+    # spending tonight's quota on new insights.
+    pending_resolved = worker.drain_pending_edges()
+    if pending_resolved:
+        _save_json(state_file, state)
 
     insights_processed = 0
     for path, meta in candidates[:max_insights]:
@@ -612,22 +772,26 @@ def run_consolidation(
     _save_json(cache_file, cache)
     _save_json(state_file, state)
 
+    pending_note = f"，補回 {pending_resolved} 條 pending 邊" if pending_resolved else ""
     result = ConsolidationResult(
         status="succeeded",
         message=(
             f"Cortex: {insights_processed} insight(s) → {worker.created} new claim(s), "
-            f"{worker.merged} merged, {worker.contradiction_links} contradiction link(s), "
+            f"{worker.merged} merged, {worker.related_links} related link(s), "
+            f"{worker.contradiction_links} contradiction link(s){pending_note}, "
             f"{worker.adjudications_used}/{max_adjudications} adjudications."
         ),
         created=worker.created,
         merged=worker.merged,
         contradiction_links=worker.contradiction_links,
+        related_links=worker.related_links,
+        pending_resolved=pending_resolved,
         insights_processed=insights_processed,
         adjudications_used=worker.adjudications_used,
     )
 
     _append_log(log_path, result)
-    if worker.created or worker.merged:
+    if worker.created or worker.merged or worker.related_links or pending_resolved:
         result.report_path = _write_report(report_dir, result)
     return result
 

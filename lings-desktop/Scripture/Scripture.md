@@ -13,6 +13,8 @@ daydream_bite_adjudications: 4
 daydream_insight_budget: 1
 daydream_spontaneous_budget: 1
 insight_rotation: montecarlo,counterfactual,analogy,dialogue,fable
+cortex_link_threshold: 0.60
+cortex_merge_threshold: 0.80
 self_healing: true
 creativity: 0.4
 max_output: 16384
@@ -50,6 +52,8 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 - **dreaming_from**: The hour (0-23) when background analysis and maintenance start.
 - **dreaming_to**: The hour (0-23) when background operations stop.
 - **self_healing**: If `true`, Ling Ling will automatically repair tag mappings and index inconsistencies.
+- **cortex_link_threshold**: Cortex 信念圖「找鄰居」的相似度下限（預設 0.60）。低於此的主張配對不會被裁決、不長邊。**這條決定圖的稠密度**——太高（舊值 0.80）會濾掉跨域邊，讓圖變成一堆孤島。調低＝更多邊、更多裁決 LLM 成本。
+- **cortex_merge_threshold**: 兩條主張「合併成一條」的相似度下限（預設 0.80）。即使 LLM 判定 equivalent，相似度低於此只連邊不合併——避免把貌合神離的主張錯併。永遠應 ≥ link_threshold。
 - **insight_rotation**: Comma-separated list of `Skills/` strategy names for the daily insight, cycled one per day by date (deterministic). Rotating different operations (counterfactual / analogy / dialogue / fable / montecarlo) is the anti-homogenization lever — same seeds, different lenses. Unknown names are skipped with a warning; empty list falls back to `montecarlo`. Each skill's frontmatter may set `temp_spark` / `temp_expand` / `temp_synthesize` to run hotter or colder than the engine defaults (0.9 / 0.5 / 0.3).
 
 ### 🖼️ Learning Aids (Phase 6)

@@ -362,6 +362,12 @@ class DynamicSettings:
         # Daily-insight operation rotation: comma-separated Skills/ strategy
         # names cycled deterministically by date (anti-homogenization):
         ("insight_rotation", "INSIGHT_ROTATION", str),
+        # Cortex graph density (O0): the LINK floor decides which neighbor
+        # pairs get adjudicated at all (lower = denser graph, more edges);
+        # the MERGE floor additionally guards the destructive equivalent→merge
+        # path (a low-similarity "equivalent" verdict links instead of merges).
+        ("cortex_link_threshold", "CORTEX_LINK_THRESHOLD", float),
+        ("cortex_merge_threshold", "CORTEX_MERGE_THRESHOLD", float),
     )
 
     def __init__(self):
@@ -412,6 +418,12 @@ class DynamicSettings:
         # 0 disables the block.
         self.RECENT_COUNT = 15
         self.INSIGHT_ROTATION = "montecarlo"
+        # Cortex graph density (O0). link < merge: neighbors down to 0.60 get
+        # adjudicated (edges), but merging two claims into one still needs 0.80+
+        # similarity. The legacy CORTEX_NEIGHBOR_SIM_THRESHOLD (0.80) was one
+        # knob doing both jobs — too high, so the graph starved of edges.
+        self.CORTEX_LINK_THRESHOLD = 0.60
+        self.CORTEX_MERGE_THRESHOLD = 0.80
         # Splitter selection: env value is the default (deployment), but
         # Scripture (use_thoughtful_splitter / thoughtful_use_llm) can override
         # at runtime — see _BINDINGS above.
