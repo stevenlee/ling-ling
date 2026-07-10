@@ -2,6 +2,7 @@
 name: dialogue
 description: Adversarial dialogue — stage the two sources' authors interrogating each other's blind spots, moderated to a verdict.
 pipeline: montecarlo
+report_mode: creative
 num_rounds: 2
 num_sparks: 4
 top_k: 2

@@ -49,6 +49,16 @@ class MonteCarloMixin:
             return ""
         return f"\n\n## Operation Lens (strategy-specific)\n{lens}"
 
+    @staticmethod
+    def _is_creative(config: dict | None) -> bool:
+        """Skill frontmatter `report_mode: creative` — the operation produces an
+        artifact (fable, dialogue), not an analysis. Two effects: the expand
+        stage follows the lens instead of imposing a thesis/arguments structure,
+        and the report skips the montecarlo scorecard/cross-round scaffolding
+        (which is tonally wrong for a story AND dilutes the novelty signal, since
+        ~80% of a scaffolded report is shared boilerplate)."""
+        return ((config or {}).get("report_mode") or "").strip().lower() == "creative"
+
     def _run_montecarlo(
         self, config: dict, user_directive: str, resolved_template: str | None = None
     ) -> str:
@@ -315,24 +325,43 @@ class MonteCarloMixin:
                     self._grounded_on_acc = set()
                 self._grounded_on_acc.update(grounded_on)
 
-        expand_prompt = (
-            f"{system_base}\n\n{agent_instruction}\n\n"
-            f"{grounding_section}"
-            f"## 任務\n"
-            f"You are developing a winning insight seed into a full analysis.\n\n"
+        seed_block = (
             f"## Seed Insight\n"
             f"**Idea**: {idea}\n"
             f"**Novelty Score**: {seed.get('novelty_score', '?')}/10\n"
             f"**Reasoning**: {seed.get('reasoning', '')}\n"
             f"**Sources**: [[{seed.get('source_a', '')}]] × [[{seed.get('source_b', '')}]]\n\n"
             f"## Supporting Evidence (from semantic search)\n{evidence_context}\n\n"
-            f"## Instructions\n"
-            f"Develop this seed into a structured analysis section with:\n"
-            f"1. A clear thesis statement grounded in the source notes\n"
-            f"2. Key arguments supported by evidence from the knowledge base\n"
-            f"3. Practical implications and actionable takeaways\n"
-            f"4. A Mermaid diagram if it adds clarity\n"
-            f"Cite source notes using [[title]] notation."
+        )
+        if self._is_creative(config):
+            # Creative mode: the lens's own Expansion phase IS the instruction —
+            # don't impose the generic thesis/arguments/implications scaffold
+            # (that structure was overriding the lens, e.g. dialogue coming out
+            # as an analytical report instead of a staged dialogue).
+            instructions = (
+                "## 任務\n"
+                "依下方 **Operation Lens** 的 `Expansion` 指引，把這個種子展開成它要求的"
+                "**創作成品本身**（例如一則寓言、一段對話）。務必忠於來源的實際機制、用"
+                " [[title]] 標註來源；但**絕不要**寫成 thesis／arguments／implications 的"
+                "分析結構，也不要「戰略建議／實務影響」這類段落——那會毀掉這個 operation。\n"
+            )
+        else:
+            instructions = (
+                "## 任務\n"
+                "You are developing a winning insight seed into a full analysis.\n\n"
+                "## Instructions\n"
+                "Develop this seed into a structured analysis section with:\n"
+                "1. A clear thesis statement grounded in the source notes\n"
+                "2. Key arguments supported by evidence from the knowledge base\n"
+                "3. Practical implications and actionable takeaways\n"
+                "4. A Mermaid diagram if it adds clarity\n"
+                "Cite source notes using [[title]] notation."
+            )
+        expand_prompt = (
+            f"{system_base}\n\n{agent_instruction}\n\n"
+            f"{grounding_section}"
+            f"{instructions}\n"
+            f"{seed_block}"
             f"{self._operation_lens(config)}"
         )
 
@@ -361,6 +390,11 @@ class MonteCarloMixin:
         user_directive: str,
         resolved_template: str | None = None,
     ) -> str:
+        # Creative operations skip the scorecard/cross-round scaffolding — it's
+        # tonally wrong for a fable and dilutes the novelty signal.
+        if self._is_creative(config):
+            return self._synthesize_creative(round_results, config, user_directive)
+
         num_rounds = len(round_results)
         scorecard = self._build_scorecard(round_results)
         round_sections, all_expanded = self._build_round_sections(round_results)
@@ -382,6 +416,61 @@ class MonteCarloMixin:
             f"---\n\n"
             f"## 🔬 Per-Round Details\n\n" + "\n\n---\n\n".join(round_sections)
         )
+
+    def _synthesize_creative(
+        self, round_results: list[dict], config: dict, user_directive: str
+    ) -> str:
+        """Lean report for creative operations: emit the expanded artifacts
+        (fables / dialogues) directly with minimal framing, plus one short
+        editorial closing. No scorecard, no cross-round productivity analysis."""
+        pieces = [
+            seed
+            for r in round_results
+            for seed in r.get("expanded", [])
+            if (seed.get("expanded") or "").strip()
+        ]
+        if not pieces:
+            return "（本次未產出可用的創作片段。）"
+
+        op_name = config.get("name", "creative")
+        blocks = []
+        for seed in pieces:
+            src = f"[[{seed.get('source_a', '')}]] × [[{seed.get('source_b', '')}]]"
+            blocks.append(f"{seed.get('expanded', '').strip()}\n\n<sub>— {src}</sub>")
+        body = "\n\n---\n\n".join(blocks)
+
+        closing = self._creative_closing(pieces, config)
+        header = f"# ✨ {op_name}\n\n> 本次探索產出 {len(pieces)} 則創作片段。\n\n"
+        tail = f"\n\n---\n\n## 🧵 綜合短評\n\n{closing}" if closing else ""
+        return header + body + tail
+
+    def _creative_closing(self, pieces: list[dict], config: dict) -> str:
+        """A 2-3 sentence editorial note — which piece best realized the
+        operation. Deliberately NOT the analytical scorecard/strategy block."""
+        listing = "\n".join(
+            f"{i + 1}. [[{s.get('source_a', '?')}]] × [[{s.get('source_b', '?')}]]"
+            for i, s in enumerate(pieces)
+        )
+        prompt = (
+            f"以下是本次「{config.get('name', 'creative')}」探索產出的 {len(pieces)} 則"
+            f"創作片段的來源配對：\n{listing}\n\n"
+            "用 2-3 句話寫一段編輯短評：哪一則最成功地實現了這個 operation 的意圖、為什麼。"
+            "**不要**寫成分析報告、不要條列、不要『戰略建議／知識庫管理』這類段落。\n"
+            f"Output language: {self.llm._get_lang_hint()}"
+            f"{self._operation_lens(config)}"
+        )
+        try:
+            return self.llm.answer_query(
+                query_content="Creative closing note.",
+                wiki_context="",
+                custom_instruction=prompt,
+                temperature=self._temp_synthesize,
+                persona="none",
+                forced_template="none",
+            ).strip()
+        except Exception as e:
+            logging.debug(f"Monte Carlo: creative closing failed: {e}")
+            return ""
 
     @staticmethod
     def _build_scorecard(round_results: list[dict]) -> str:

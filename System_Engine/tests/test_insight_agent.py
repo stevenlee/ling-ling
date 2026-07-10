@@ -788,6 +788,91 @@ class TestOperationLens:
         assert "Fabulist" in calls[0]["custom_instruction"]
 
 
+class TestCreativeMode:
+    """report_mode: creative — lens-first expand + lean report (fable/dialogue)."""
+
+    def test_is_creative_flag(self):
+        from agents.insight.monte_carlo import MonteCarloMixin
+
+        assert MonteCarloMixin._is_creative({"report_mode": "creative"}) is True
+        assert MonteCarloMixin._is_creative({"report_mode": "analytical"}) is False
+        assert MonteCarloMixin._is_creative({}) is False
+        assert MonteCarloMixin._is_creative(None) is False
+
+    def _expand_agent(self, capture):
+        agent = InsightAgent.__new__(InsightAgent)
+
+        class _RAG:
+            def query_similar_notes(self, idea, top_k=5):
+                return []
+
+        class _LLM:
+            def answer_query(self, query_content, wiki_context="", **kw):
+                capture["prompt"] = kw.get("custom_instruction", "")
+                return "EXPANDED BODY"
+
+        agent.rag = _RAG()
+        agent.llm = _LLM()
+        agent._load_prompt = lambda name, required=False: "BASE"
+        agent._should_ground = lambda idea: False
+        return agent
+
+    def test_creative_expand_drops_analytical_scaffold(self):
+        cap = {}
+        agent = self._expand_agent(cap)
+        agent._expand_seed(
+            {"idea": "x", "source_a": "A", "source_b": "B", "reasoning": "r"},
+            {"report_mode": "creative", "system_prompt": "Act as a Fabulist. ## Expansion 寫寓言"},
+        )
+        p = cap["prompt"]
+        assert "Fabulist" in p  # lens present
+        assert "thesis statement" not in p.lower()  # analytical scaffold dropped
+        assert "Practical implications" not in p
+
+    def test_analytical_expand_keeps_scaffold(self):
+        cap = {}
+        agent = self._expand_agent(cap)
+        agent._expand_seed(
+            {"idea": "x", "source_a": "A", "source_b": "B", "reasoning": "r"},
+            {"system_prompt": "Act as an Epistemologist."},
+        )
+        p = cap["prompt"]
+        assert "thesis statement" in p.lower()  # unchanged analytical path
+        assert "Epistemologist" in p
+
+    def test_creative_report_is_lean(self):
+        agent = InsightAgent.__new__(InsightAgent)
+
+        class _LLM:
+            def answer_query(self, query_content, wiki_context="", **kw):
+                return "CLOSING NOTE"
+
+            def _get_lang_hint(self):
+                return "Traditional Chinese"
+
+        agent.llm = _LLM()
+        rounds = [
+            {
+                "round": 1,
+                "pairs_tried": 2,
+                "seeds": 2,
+                "expanded": [
+                    {"expanded": "從前有一座晶片圖書館……", "source_a": "A", "source_b": "B"}
+                ],
+            }
+        ]
+        out = agent._synthesize_multi_round(
+            rounds, {"name": "fable", "report_mode": "creative", "system_prompt": "Fabulist"}, ""
+        )
+        # No montecarlo scaffolding
+        assert "Monte Carlo" not in out
+        assert "Round Scorecard" not in out
+        assert "生產力" not in out
+        # Creative artifact emitted directly + light closing
+        assert "從前有一座晶片圖書館" in out
+        assert "綜合短評" in out and "CLOSING NOTE" in out
+
+
 class TestRotation:
     def _strategies(self):
         return {n: {"name": n} for n in ("montecarlo", "counterfactual", "fable")}
