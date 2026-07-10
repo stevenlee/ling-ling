@@ -451,26 +451,36 @@ class MonteCarloMixin:
             f"{i + 1}. [[{s.get('source_a', '?')}]] × [[{s.get('source_b', '?')}]]"
             for i, s in enumerate(pieces)
         )
+        # Do NOT inject the full operation lens here: the lens carries the
+        # Spark/Expansion/Synthesis phase instructions, so re-injecting it makes
+        # the model re-run the whole operation (observed: the "closing note"
+        # came back as another full 火花/擴張/綜合 piece). Give it only the
+        # operation's name + one-line description for tone.
         prompt = (
-            f"以下是本次「{config.get('name', 'creative')}」探索產出的 {len(pieces)} 則"
-            f"創作片段的來源配對：\n{listing}\n\n"
+            f"本次「{config.get('name', 'creative')}」探索"
+            f"（{config.get('description', '')}）產出了 {len(pieces)} 則創作片段，"
+            f"來源配對：\n{listing}\n\n"
             "用 2-3 句話寫一段編輯短評：哪一則最成功地實現了這個 operation 的意圖、為什麼。"
-            "**不要**寫成分析報告、不要條列、不要『戰略建議／知識庫管理』這類段落。\n"
+            "只輸出這 2-3 句話本身——不要任何標題或分節、不要條列、不要重寫作品、"
+            "不要『火花／擴張／綜合／戰略建議』這類段落。\n"
             f"Output language: {self.llm._get_lang_hint()}"
-            f"{self._operation_lens(config)}"
         )
         try:
-            return self.llm.answer_query(
+            note = self.llm.answer_query(
                 query_content="Creative closing note.",
                 wiki_context="",
                 custom_instruction=prompt,
                 temperature=self._temp_synthesize,
                 persona="none",
                 forced_template="none",
-            ).strip()
+            )
         except Exception as e:
             logging.debug(f"Monte Carlo: creative closing failed: {e}")
             return ""
+        # Defensive: a 2-3 sentence note has no headers — strip any the model
+        # adds so it can't reintroduce section scaffolding under the closing.
+        lines = [ln for ln in note.splitlines() if not ln.lstrip().startswith("#")]
+        return "\n".join(lines).strip()
 
     @staticmethod
     def _build_scorecard(round_results: list[dict]) -> str:

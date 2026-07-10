@@ -872,6 +872,29 @@ class TestCreativeMode:
         assert "從前有一座晶片圖書館" in out
         assert "綜合短評" in out and "CLOSING NOTE" in out
 
+    def test_creative_closing_strips_headers(self):
+        # The model sometimes ignores "2-3 sentences" and re-emits a whole
+        # 火花/擴張/綜合 piece with headers — those must be stripped so the
+        # closing can't reintroduce section scaffolding.
+        agent = InsightAgent.__new__(InsightAgent)
+
+        class _LLM:
+            def answer_query(self, query_content, wiki_context="", **kw):
+                # ensure the closing prompt no longer injects the full lens
+                assert "## Operation Lens" not in kw.get("custom_instruction", "")
+                return "## 編輯短評\n第 1 則最成功。\n## 火花\n不該出現的重跑段落。"
+
+            def _get_lang_hint(self):
+                return "Traditional Chinese"
+
+        agent.llm = _LLM()
+        note = agent._creative_closing(
+            [{"source_a": "A", "source_b": "B"}],
+            {"name": "fable", "description": "d", "system_prompt": "Fabulist ## Expansion ..."},
+        )
+        assert "#" not in note  # all header lines stripped
+        assert "第 1 則最成功" in note
+
 
 class TestRotation:
     def _strategies(self):
