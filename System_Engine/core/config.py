@@ -279,8 +279,14 @@ ASSETS_DIR = WIKI_VAULT_DIR / "Assets"
 SKILLS_DIR = WIKI_VAULT_DIR / "Skills"
 BACKUPS_DIR = PROJECT_ROOT / "Backups"
 
+# Scout (scheduled crawler → daily digest). The targets list is user-edited
+# vault content (Scripture/Scout.md frontmatter); behavioral knobs live in
+# DynamicSettings below. Only paths here (infra).
+SCOUT_TARGETS_FILE = SCRIPTURE_DIR / "Scout.md"
+
 DATABASE_DIR = WIKI_VAULT_DIR / "Database"
 MAINTENANCE_STATE_FILE = DATABASE_DIR / "maintenance_state.json"
+SCOUT_STATE_FILE = DATABASE_DIR / "scout_state.json"
 INSIGHT_SIGNALS_FILE = DATABASE_DIR / "insight_signals.json"
 PLANS_DIR = DATABASE_DIR / "plans"
 RETRIEVAL_BENCH_FILE = SCRATCH_DIR / "retrieval_bench.yml"
@@ -362,6 +368,12 @@ class DynamicSettings:
         # Daily-insight operation rotation: comma-separated Skills/ strategy
         # names cycled deterministically by date (anti-homogenization):
         ("insight_rotation", "INSIGHT_ROTATION", str),
+        # Scout crawler digest: master switch, report language ("" = follow
+        # OUTPUT_LANGUAGE), and per-target item cap:
+        ("scout", "SCOUT_ENABLED", bool),
+        ("scout_language", "SCOUT_LANGUAGE", str),
+        ("scout_max_items", "SCOUT_MAX_ITEMS_PER_TARGET", int),
+        ("scout_fetch_content", "SCOUT_FETCH_CONTENT", bool),
         # Cortex graph density (O0): the LINK floor decides which neighbor
         # pairs get adjudicated at all (lower = denser graph, more edges);
         # the MERGE floor additionally guards the destructive equivalent→merge
@@ -418,6 +430,14 @@ class DynamicSettings:
         # 0 disables the block.
         self.RECENT_COUNT = 15
         self.INSIGHT_ROTATION = "montecarlo"
+        # Scout: default OFF — enable with `scout: true` in Scripture.md once
+        # Scripture/Scout.md has a targets list.
+        self.SCOUT_ENABLED = False
+        self.SCOUT_LANGUAGE = ""
+        self.SCOUT_MAX_ITEMS_PER_TARGET = 10
+        # Fetch each item's page and ground the per-item analysis in the
+        # actual content (one extra HTTP GET + LLM call per new item):
+        self.SCOUT_FETCH_CONTENT = True
         # Cortex graph density (O0). link < merge: neighbors down to 0.60 get
         # adjudicated (edges), but merging two claims into one still needs 0.80+
         # similarity. The legacy CORTEX_NEIGHBOR_SIM_THRESHOLD (0.80) was one

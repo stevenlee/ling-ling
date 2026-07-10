@@ -242,6 +242,16 @@ class MaintenanceScheduler(threading.Thread):
                     msg = f"{msg} ｜ 提案：{imp.message}"
             return MaintenanceResult(result.status, msg)
 
+        def scout_digest() -> MaintenanceResult:
+            # Scout: crawl the Scripture/Scout.md targets list into a daily
+            # digest report. Master switch is the hot-reloadable `scout` knob.
+            if not settings.SCOUT_ENABLED:
+                return MaintenanceResult("skipped", "Scout disabled (scout: false).")
+            from services.scout.digest import run_scout_digest
+
+            result = run_scout_digest(self.llm)
+            return MaintenanceResult(result.status, result.summary)
+
         def tag_optimizer() -> MaintenanceResult:
             from services.tag_optimizer import TagOptimizer
             from core.config import PAGES_DIR, NOTES_DIR
@@ -285,6 +295,14 @@ class MaintenanceScheduler(threading.Thread):
                 intent="insight",
                 agent="InsightAgent",
                 initial_last_run_at=self._latest_full_insight_at(),
+            ),
+            MaintenanceTask(
+                name="scout_daily",
+                action=scout_digest,
+                daily=True,
+                idle_required=True,
+                intent="maintenance.scout",
+                agent="Scout",
             ),
             MaintenanceTask(
                 name="retrieval_bench_daily",

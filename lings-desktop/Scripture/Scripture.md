@@ -28,6 +28,10 @@ highlight_max: 5
 use_thoughtful_splitter: true
 thoughtful_use_llm: true
 recent_count: 15
+scout: true
+scout_language: ""
+scout_max_items: 10
+scout_fetch_content: true
 ---
 
 # 📜 Scripture (Settings)
@@ -64,6 +68,12 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 
 ### 🎀 Knowledge Dashboard (index.md)
 - **recent_count**: `index.md` 最上方「🆕 最近新增」區塊要列出的最新文件數（日期新→舊，依 `date_created`、無則檔案 mtime）。下方字母排序清單不受影響。設 `0` 可關閉這個區塊。預設 15。
+
+### 🔭 Scout (定時爬蟲 → 日報)
+- **scout**: If `true`, the daily `scout_daily` task crawls the targets in `Scripture/Scout.md` and writes `fromLingLing/✅Scout-YYYY-MM-DD.md`. （新任務註冊在 daemon 啟動時——第一次啟用需重啟 daemon；之後這個開關熱生效。）
+- **scout_language**: 日報語言；空字串 = 跟隨 `say`。`Scout.md` 裡的 `language:` 優先於此。
+- **scout_max_items**: 每個目標最多取幾項（目標自己的 `max_items` 優先）。
+- **scout_fetch_content**: If `true`（預設），每條新項目抓回頁面內文給 LLM 逐條分析（每條多一次 HTTP GET＋一次 LLM 呼叫）；`false` 退回輕量模式（只看標題＋列表摘錄）。
 
 ### 🔪 Chunking (how documents are split into Parts)
 - **use_thoughtful_splitter**: If `true`, split documents structure-aware — cut at chapter/heading boundaries, pack short sections up to the size budget, and recursively sub-split sections that are too long. If `false`, fall back to mechanical character-count chunks. (Takes effect on the next pipeline build / daemon restart.)
