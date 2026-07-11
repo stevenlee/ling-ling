@@ -5,18 +5,23 @@ Scout 日報的深掘搭檔——日報每條只讀一層（該項目自己的�
 真正值得跟進的幾條連結（文件、論文、原始碼、討論串——不是導覽列和廣告）、
 一併讀完，寫成一篇深掘筆記。
 
-> [!TIP]
-> **發動方式**：在 `toLingLing/` 丟一個筆記，內容含 `@ling-dig` 和目標網址
-> （取第一個出現的 URL）。筆記寫入 `fromLingLing/✅Dig-標題-時間.md`，
+> [!IMPORTANT]
+> **發動方式（路由規則：`@ling-` 看檔名、斜線看內文）**，二選一：
+> 1. 筆記**檔名**含 `@ling-dig`（最簡單：複製這個檔案），內文放目標網址；
+> 2. 檔名隨意，**內文**用斜線寫法 `/dig <網址>`。
+>
+> ⛔ 把 `@ling-dig` 寫在內文、檔名沒有——**不會**觸發，會被當成一般問答。
+> 取內文**第一個出現的 URL** 為目標。筆記寫入 `fromLingLing/✅Dig-標題-時間.md`，
 > 並鏡射到 `Notes/Scout/` 讓它可被 RAG 檢索。
 
 ---
 
 ## 用法
+檔名 `@ling-dig 挖這個.md`，內文：
 ```markdown
-@ling-dig https://github.com/some/interesting-repo
+https://github.com/some/interesting-repo
 ```
-或斜線寫法：
+或檔名隨意，內文斜線寫法：
 ```markdown
 /dig https://arxiv.org/abs/2507.01234
 ```
@@ -35,6 +40,10 @@ Scout 日報的深掘搭檔——日報每條只讀一層（該項目自己的�
   約幾分鐘。人挑目標，所以每一分成本都花在你真的在乎的東西上。
 - 內文抓取用瀏覽器 header，但 JS 渲染頁（無伺服器端內容）仍然抓不到，
   會回報「抽不出可讀內文」。
+- **失敗也有報告**：主頁抓不到（付費牆逾時、403）時，結果寫在
+  `fromLingLing/✅cmd-Error-*.md`，附原因。大媒體付費牆（WaPo 等）連瀏覽器
+  header 都擋——改挖該新聞的 HN 討論串網址（`news.ycombinator.com/item?id=…`）
+  通常是更好的路。
 - 跟日報共用 `scout_mirror` 開關；`say`（或 `scout_language`）決定輸出語言。
 
 ### 搭配使用

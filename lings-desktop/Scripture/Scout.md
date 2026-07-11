@@ -21,9 +21,10 @@ Scout 每天出門一次，把下表的目標爬回來、整理成
 
 - **啟用**：在 `Scripture.md` frontmatter 設 `scout: true`（首次啟用需重啟
   daemon，之後熱切換）。
-- **手動觸發**：在 `toLingLing/` 丟一個含 `@ling-scout` 的筆記，Scout 立刻
-  出動一趟（不受 `scout` 開關限制；去重狀態與夜間排程共用，白天手動跑過
-  晚上就只剩少量新項目）。
+- **手動觸發**：在 `toLingLing/` 丟一個**檔名**含 `@ling-scout` 的筆記
+  （或檔名隨意、內文寫 `/scout`——路由規則是 `@ling-` 看檔名、斜線看內文），
+  Scout 立刻出動一趟（不受 `scout` 開關限制；去重狀態與夜間排程共用，
+  白天手動跑過晚上就只剩少量新項目）。
 - **加目標**：在上表加一列。只有 `url` 必填，其他欄留空用預設：
   - `parser`：`github_trending` / `hackernews` / `arxiv` / `feed`；留空自動判斷
   - `cadence`：`daily` 或 `weekly`（留空 = daily）
