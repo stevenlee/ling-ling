@@ -6,7 +6,7 @@ import types
 import pytest
 
 from services.scout.models import ScoutParserError, ScoutTarget
-from services.scout.parsers import arxiv, github_trending, hackernews, resolve_parser
+from services.scout.parsers import arxiv, feed, github_trending, hackernews, resolve_parser
 
 GH_TRENDING_HTML = """
 <html><body>
@@ -155,6 +155,77 @@ def test_arxiv_section_title_includes_category():
     )
 
 
+RSS_XML = """<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <title>Some Blog</title>
+  <item>
+    <title>Post &amp; One</title>
+    <link>https://blog.example.org/post-1</link>
+    <guid>tag:blog,post-1</guid>
+    <description><![CDATA[<p>Body   <b>text</b> here.</p>]]></description>
+  </item>
+  <item><title>No link, dropped</title></item>
+</channel></rss>
+"""
+
+ATOM_XML = """<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>urn:entry-2</id>
+    <title>Atom Entry</title>
+    <link rel="alternate" href="https://blog.example.org/post-2"/>
+    <summary>Short summary.</summary>
+  </entry>
+</feed>
+"""
+
+
+class SequencedClient:
+    """Returns queued responses in order (autodiscovery = 2 fetches)."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def get(self, url, *, source, **kwargs):
+        self.calls.append((url, source))
+        return self.responses.pop(0)
+
+
+def _resp(text, content_type="text/html"):
+    return types.SimpleNamespace(text=text, headers={"Content-Type": content_type})
+
+
+def test_feed_parses_rss_directly():
+    client = SequencedClient([_resp(RSS_XML, "application/rss+xml")])
+    items = feed.fetch(client, ScoutTarget(url="https://blog.example.org/feed.xml"))
+    assert len(items) == 1  # link-less entry dropped
+    assert items[0].title == "Post & One"
+    assert items[0].url == "https://blog.example.org/post-1"
+    assert items[0].dedupe_key == "tag:blog,post-1"  # guid wins over link
+    assert items[0].snippet == "Body text here."  # embedded HTML flattened
+    assert client.calls[0][1] == "blog.example.org"  # throttled per host
+
+
+def test_feed_autodiscovers_from_html_page():
+    html = (
+        '<html><head><link rel="alternate" type="application/atom+xml" '
+        'href="/feed.atom"></head><body>hi</body></html>'
+    )
+    client = SequencedClient([_resp(html), _resp(ATOM_XML, "application/atom+xml")])
+    items = feed.fetch(client, ScoutTarget(url="https://blog.example.org/"))
+    assert client.calls[1][0] == "https://blog.example.org/feed.atom"  # resolved relative href
+    assert items[0].title == "Atom Entry"
+    assert items[0].url == "https://blog.example.org/post-2"
+    assert items[0].dedupe_key == "urn:entry-2"
+
+
+def test_feed_page_without_feed_fails_visibly():
+    client = SequencedClient([_resp("<html><body>no feed here</body></html>")])
+    with pytest.raises(ScoutParserError):
+        feed.fetch(client, ScoutTarget(url="https://blog.example.org/"))
+
+
 def test_resolve_parser_explicit_name_wins():
     target = ScoutTarget(url="https://example.com/", parser="hackernews")
     assert resolve_parser(target) is hackernews
@@ -167,7 +238,9 @@ def test_resolve_parser_auto_detects_by_url():
     )
     assert resolve_parser(ScoutTarget(url="https://news.ycombinator.com/newest")) is hackernews
     assert resolve_parser(ScoutTarget(url="https://arxiv.org/list/cs.AI/recent")) is arxiv
-    assert resolve_parser(ScoutTarget(url="https://arxiv.org/abs/2507.01234")) is None
-    assert resolve_parser(ScoutTarget(url="https://github.com/octo/rocket")) is None
-    assert resolve_parser(ScoutTarget(url="https://example.com/blog")) is None
+    # P2.1: everything unmatched falls back to the generic feed parser…
+    assert resolve_parser(ScoutTarget(url="https://arxiv.org/abs/2507.01234")) is feed
+    assert resolve_parser(ScoutTarget(url="https://github.com/octo/rocket")) is feed
+    assert resolve_parser(ScoutTarget(url="https://example.com/blog")) is feed
+    # …but a typo'd EXPLICIT parser name still fails loudly.
     assert resolve_parser(ScoutTarget(url="https://example.com/", parser="typo")) is None

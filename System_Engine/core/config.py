@@ -281,8 +281,10 @@ BACKUPS_DIR = PROJECT_ROOT / "Backups"
 
 # Scout (scheduled crawler → daily digest). The targets list is user-edited
 # vault content (Scripture/Scout.md frontmatter); behavioral knobs live in
-# DynamicSettings below. Only paths here (infra).
+# DynamicSettings below. Only paths here (infra). The mirror dir sits under
+# Notes/ ON PURPOSE — fromLingLing/ is not RAG-indexed, Notes/ is.
 SCOUT_TARGETS_FILE = SCRIPTURE_DIR / "Scout.md"
+SCOUT_MIRROR_DIR = NOTES_DIR / "Scout"
 
 DATABASE_DIR = WIKI_VAULT_DIR / "Database"
 MAINTENANCE_STATE_FILE = DATABASE_DIR / "maintenance_state.json"
@@ -374,6 +376,8 @@ class DynamicSettings:
         ("scout_language", "SCOUT_LANGUAGE", str),
         ("scout_max_items", "SCOUT_MAX_ITEMS_PER_TARGET", int),
         ("scout_fetch_content", "SCOUT_FETCH_CONTENT", bool),
+        ("scout_bridging", "SCOUT_BRIDGING", bool),
+        ("scout_mirror", "SCOUT_MIRROR", bool),
         # Cortex graph density (O0): the LINK floor decides which neighbor
         # pairs get adjudicated at all (lower = denser graph, more edges);
         # the MERGE floor additionally guards the destructive equivalent→merge
@@ -438,6 +442,10 @@ class DynamicSettings:
         # Fetch each item's page and ground the per-item analysis in the
         # actual content (one extra HTTP GET + LLM call per new item):
         self.SCOUT_FETCH_CONTENT = True
+        # P2.3/P2.4: attach related-vault-note [[links]] per item (needs rag),
+        # and mirror the report into Notes/Scout/ so it's RAG-searchable:
+        self.SCOUT_BRIDGING = True
+        self.SCOUT_MIRROR = True
         # Cortex graph density (O0). link < merge: neighbors down to 0.60 get
         # adjudicated (edges), but merging two claims into one still needs 0.80+
         # similarity. The legacy CORTEX_NEIGHBOR_SIM_THRESHOLD (0.80) was one

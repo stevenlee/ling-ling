@@ -55,21 +55,26 @@ services/scout/digest.py::run_scout_digest(llm)
 
 ## 2. targets 檔格式（`lings-desktop/Scripture/Scout.md`）
 
-```yaml
+**R3（2026-07-11）**：targets 從 frontmatter YAML 列表改為 **body 內的
+Markdown 表格**——Obsidian 的 Properties UI 不支援巢狀列表，表格人類
+好編輯、live preview 也好讀。`language` 是純量，留在 frontmatter。
+
+```markdown
 ---
-targets:
-  - url: https://github.com/trending
-    parser: github_trending   # 可省略；由 URL 自動偵測
-    cadence: daily             # daily | weekly，預設 daily
-    max_items: 10              # 可省略；預設 scout_max_items
-  - url: https://news.ycombinator.com/newest
-    cadence: daily
-language: ""                   # 報告語言；空字串 = 跟隨 Scripture 的 say（OUTPUT_LANGUAGE）
+language: ""        # 報告語言；空字串 = 跟隨 Scripture 的 say
 ---
+
+| url                                 | parser          | cadence | max_items |
+| ----------------------------------- | --------------- | ------- | --------- |
+| https://github.com/trending         | github_trending | daily   | 10        |
+| https://news.ycombinator.com/newest |                 |         |           |
 ```
 
-- frontmatter 用既有 `parse_markdown_metadata` 解析；body 可自由寫筆記，引擎不管。
-- 壞掉的 target 條目（缺 url、cadence 打錯字）記 warning 跳過，不影響其他目標。
+- 解析規則：body 中**表頭含 `url` 的第一張表**；其他表格忽略。只有 url
+  必填，空欄用預設。url 欄接受裸網址、`<url>`、`[label](url)` 三種寫法
+  （Obsidian 會自動把網址渲染成連結）。
+- 舊的 frontmatter `targets:` 列表仍可解析（向下相容，兩來源合併）。
+- 壞掉的列（缺 url、cadence 打錯字）記 warning 跳過，不影響其他目標。
 
 ## 3. 模組與檔案
 
@@ -158,9 +163,27 @@ frontmatter：`title: Scout-YYYY-MM-DD`、`type: Scout`、`date_created`、
 - **Phase 1（本計劃實作範圍）**：上述全部 —— targets 讀取、GH/HN 兩個
   parser、去重 state、兩層 LLM、daily 排程（含 weekly cadence gate）、
   報告輸出、單元測試。
-- **Phase 2**：通用 parser（任意 URL 文章抽取，`trafilatura`）、報告鏡射
-  進 RAG 可索引目錄、「連續上榜第 N 天」訊號、bridging RAG 關聯
-  （「這跟你 vault 的 [[某筆記]] 有關」）。
+- **Phase 2（2026-07-11 完成）**：
+  - **P2.1 通用 feed parser**（`parsers/feed.py`）：任意網址 fallback 到
+    RSS/Atom——URL 本身是 feed 就直接解析，否則抓 HTML 找
+    `rel=alternate` autodiscovery 再抓 feed。手寫 RSS2+Atom 解析
+    （xml.etree，零新依賴）；找不到 feed 在報告可見地失敗。
+    `resolve_parser` 對未知站點回傳 feed（explicit parser 打錯字仍報錯）。
+  - **P2.2 streak**：state seen 條目升級 v2
+    （first_seen/last_seen/streak/title，v1 字串自動遷移；prune 改依
+    last_seen——天天上榜的項目永遠不會重新變「新」）。連續 ≥3 天者
+    在該節以「🔁 持續上榜：bun（第 5 天）」列出（確定性、零 LLM）；
+    0 新項目但有 streak 的節照樣渲染。
+  - **P2.3 RAG bridging**：每條新項目以 title＋摘要查 `rag.query_notes`
+    （top 2、距離 ≤0.45 保守閘門、排除自家 Scout-* 報告），過門檻的
+    vault 筆記以「｜相關筆記: [[title]]」附在該行。scheduler 傳入
+    self.rag；`scout_bridging` knob，rag 缺席時整層跳過。
+  - **P2.4 鏡射**：報告 byte-identical 鏡射到 `Notes/Scout/`
+    （VaultWatcher watch Notes/ → 自動進 RAG，日報從此可檢索）；
+    `scout_mirror` knob。報告自帶 tags，tag_optimizer 不會重標。
+  - 綜合分析的 LLM prose 版**維持移除**：streak＋bridging 就是「有根據
+    的分析」的確定性形態，零填充風險；除非之後有明確需求才考慮
+    再加 LLM 統整層。
 - **Phase 3**：`@ling-scout` 手動指令（AgentRegistry）、註冊 AdapterRegistry
   capability 讓 Planner 可調用、`Templates/Operations/ScoutAnalysis.md`
   把分析 prompt 移進 Operations 第四軸。

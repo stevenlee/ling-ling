@@ -45,6 +45,8 @@ class CrawledItem:
     # already has it (arXiv abstract) fills it; otherwise digest fetches the
     # item URL and extracts it. "" → the summary falls back to title+snippet.
     content: str = ""
+    # P2.3 RAG bridging: titles of related vault notes, rendered as [[links]].
+    related: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -54,6 +56,9 @@ class TargetResult:
     target: ScoutTarget
     section_title: str = ""
     items: list[CrawledItem] = field(default_factory=list)  # new items only
+    # P2.2: already-seen items still riding the list N≥3 consecutive days,
+    # as (title, url, streak) — surfaced as a deterministic 持續上榜 line.
+    streaks: list[tuple[str, str, int]] = field(default_factory=list)
     fetched_count: int = 0
     skipped_reason: str | None = None  # cadence gate etc. — not an error
     error: str | None = None

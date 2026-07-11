@@ -249,7 +249,7 @@ class MaintenanceScheduler(threading.Thread):
                 return MaintenanceResult("skipped", "Scout disabled (scout: false).")
             from services.scout.digest import run_scout_digest
 
-            result = run_scout_digest(self.llm)
+            result = run_scout_digest(self.llm, rag=self.rag)
             return MaintenanceResult(result.status, result.summary)
 
         def tag_optimizer() -> MaintenanceResult:

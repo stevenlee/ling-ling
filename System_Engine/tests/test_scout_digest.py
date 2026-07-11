@@ -10,6 +10,9 @@ from core.parsing.markdown_metadata import parse_markdown_metadata
 from services.scout.digest import run_scout_digest
 from services.scout.state import ScoutState
 
+# NOTE: FakeClient serves ARTICLE_HTML for every non-listing URL, so per-item
+# content fetches succeed in all tests without extra wiring.
+
 NOW = datetime(2026, 7, 11, 8, 0, 0)
 
 GH_HTML = """
@@ -80,15 +83,27 @@ class FakeLLM:
         return [stage for stage, _ in self.calls]
 
 
-def _run(tmp_path, *, llm=None, client=None, now=NOW, targets_md=TARGETS_MD):
+class FakeRAG:
+    def __init__(self, hits=None):
+        self.hits = hits or []
+        self.queries = []
+
+    def query_notes(self, query_text, top_k=3, **kwargs):
+        self.queries.append(query_text)
+        return self.hits
+
+
+def _run(tmp_path, *, llm=None, client=None, rag=None, now=NOW, targets_md=TARGETS_MD):
     targets_file = tmp_path / "Scout.md"
     if not targets_file.exists():
         targets_file.write_text(targets_md, encoding="utf-8")
     return run_scout_digest(
         llm or FakeLLM(),
+        rag=rag,
         targets_file=targets_file,
         state_file=tmp_path / "scout_state.json",
         report_dir=tmp_path / "out",
+        mirror_dir=tmp_path / "mirror",
         client=client or FakeClient(),
         now=now,
     )
@@ -136,6 +151,55 @@ def test_dead_item_link_degrades_to_snippet_grounding(tmp_path):
     assert result.status == "succeeded"
     hn_msgs = [msg for stage, msg in llm.calls if "Show HN" in msg]
     assert hn_msgs and "(unavailable" in hn_msgs[0]
+
+
+def test_report_is_mirrored_byte_identical(tmp_path):
+    result = _run(tmp_path)
+    mirror = tmp_path / "mirror" / result.report_path.name
+    assert mirror.exists()
+    assert mirror.read_bytes() == result.report_path.read_bytes()
+
+
+def test_streak_line_for_items_riding_the_list(tmp_path):
+    # octo/rocket was on trending the two previous days → today is day 3.
+    state = ScoutState(tmp_path / "scout_state.json")
+    state.record_sighting(
+        "https://github.com/octo/rocket", title="octo/rocket", now=NOW - timedelta(days=2)
+    )
+    state.record_sighting(
+        "https://github.com/octo/rocket", title="octo/rocket", now=NOW - timedelta(days=1)
+    )
+    state.save()
+
+    result = _run(tmp_path)  # HN item is still new → report gets written
+    content = result.report_path.read_text(encoding="utf-8")
+    assert "🔁 持續上榜" in content
+    assert "[octo/rocket](https://github.com/octo/rocket)（第 3 天）" in content
+    # The riding item is NOT re-listed as a fresh entry.
+    metadata = parse_markdown_metadata(content)
+    assert metadata["new_items"] == 1
+
+
+def test_bridging_links_related_vault_notes(tmp_path):
+    rag = FakeRAG(
+        hits=[
+            {"metadata": {"title": "我的量子筆記"}, "distance": 0.30},
+            {"metadata": {"title": "太遠的筆記"}, "distance": 0.90},
+            {"metadata": {"title": "Scout-2026-07-10"}, "distance": 0.10},
+        ]
+    )
+    result = _run(tmp_path, rag=rag)
+    content = result.report_path.read_text(encoding="utf-8")
+    assert "相關筆記: [[我的量子筆記]]" in content
+    assert "太遠的筆記" not in content  # over the distance gate
+    assert "[[Scout-2026-07-10]]" not in content  # own mirrored reports excluded
+    assert rag.queries  # one query per item
+
+
+def test_no_rag_means_no_bridging(tmp_path):
+    result = _run(tmp_path, rag=None)
+    content = result.report_path.read_text(encoding="utf-8")
+    assert "相關筆記" not in content
 
 
 def test_second_run_dedupes_and_skips_report(tmp_path):

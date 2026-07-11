@@ -74,6 +74,8 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 - **scout_language**: 日報語言；空字串 = 跟隨 `say`。`Scout.md` 裡的 `language:` 優先於此。
 - **scout_max_items**: 每個目標最多取幾項（目標自己的 `max_items` 優先）。
 - **scout_fetch_content**: If `true`（預設），每條新項目抓回頁面內文給 LLM 逐條分析（每條多一次 HTTP GET＋一次 LLM 呼叫）；`false` 退回輕量模式（只看標題＋列表摘錄）。
+- **scout_bridging**: If `true`（預設），每條新項目查 RAG，把真正相關的 vault 筆記以「相關筆記: [[title]]」附在該行（確定性、零額外 LLM）。
+- **scout_mirror**: If `true`（預設），日報同步鏡射一份到 `Notes/Scout/`，讓它被 RAG 索引、可被 @ling 檢索到。`fromLingLing/` 的正本不受影響。
 
 ### 🔪 Chunking (how documents are split into Parts)
 - **use_thoughtful_splitter**: If `true`, split documents structure-aware — cut at chapter/heading boundaries, pack short sections up to the size budget, and recursively sub-split sections that are too long. If `false`, fall back to mechanical character-count chunks. (Takes effect on the next pipeline build / daemon restart.)

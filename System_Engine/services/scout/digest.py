@@ -24,6 +24,11 @@ from services.scout.state import ScoutState
 from services.scout.targets import load_targets
 
 WEEKLY_MIN_SECONDS = 6 * 86400  # "weekly" = at least 6 days since last crawl
+STREAK_MIN_DAYS = 3  # 持續上榜 line lists items riding a list this many days
+BRIDGE_TOP_K = 2  # related vault notes per item (P2.3)
+# Max vector distance for a bridging hit. Conservative on purpose: a wrong
+# [[link]] is worse than a missing one.
+BRIDGE_MAX_DISTANCE = 0.45
 
 _SUMMARIZE_SYSTEM = (
     "You are Scout, a reconnaissance assistant preparing a daily intelligence "
@@ -44,19 +49,28 @@ class ScoutDigestResult:
 
 def run_scout_digest(
     llm,
+    rag=None,
     *,
     targets_file: Path | None = None,
     state_file: Path | None = None,
     report_dir: Path | None = None,
+    mirror_dir: Path | None = None,
     client: PoliteHttpClient | None = None,
     now: datetime | None = None,
 ) -> ScoutDigestResult:
-    from core.config import FROM_LLM_DIR, SCOUT_STATE_FILE, SCOUT_TARGETS_FILE, settings
+    from core.config import (
+        FROM_LLM_DIR,
+        SCOUT_MIRROR_DIR,
+        SCOUT_STATE_FILE,
+        SCOUT_TARGETS_FILE,
+        settings,
+    )
 
     now = now or datetime.now()
     targets_file = targets_file or SCOUT_TARGETS_FILE
     state_file = state_file or SCOUT_STATE_FILE
     report_dir = report_dir or FROM_LLM_DIR
+    mirror_dir = mirror_dir or SCOUT_MIRROR_DIR
     client = client or PoliteHttpClient(dict(parsers.MIN_INTERVALS), user_agent=_scout_user_agent())
 
     targets, file_language = load_targets(targets_file)
@@ -86,6 +100,7 @@ def run_scout_digest(
     # Both steps degrade item-by-item — a dead link or a blank LLM reply just
     # means that line falls back to the listing snippet.
     fetch_content = getattr(settings, "SCOUT_FETCH_CONTENT", True)
+    bridging = rag is not None and getattr(settings, "SCOUT_BRIDGING", True)
     summaries: dict[int, dict[int, str]] = {}
     for r in results:
         if not r.items:
@@ -97,10 +112,13 @@ def run_scout_digest(
             summary = _summarize_item(llm, r, item, language)
             if summary:
                 per_target[i] = summary
+            if bridging:
+                item.related = _find_related_notes(rag, item, summary)
         summaries[id(r)] = per_target
 
     body = _render_body(now, results, summaries)
-    report_path = _write_report(report_dir, now, results, new_count, body)
+    mirror_to = mirror_dir if getattr(settings, "SCOUT_MIRROR", True) else None
+    report_path = _write_report(report_dir, now, results, new_count, body, mirror_dir=mirror_to)
     return ScoutDigestResult(
         "succeeded",
         f"Scout report written: {new_count} new item(s) from "
@@ -150,9 +168,13 @@ def _crawl_target(
 
     items = items[: target.max_items or default_max_items]
     result.fetched_count = len(items)
-    result.items = [item for item in items if not state.is_seen(item.dedupe_key)]
-    for item in result.items:
-        state.mark_seen(item.dedupe_key, now=now)
+    for item in items:
+        is_new = not state.is_seen(item.dedupe_key)
+        streak = state.record_sighting(item.dedupe_key, title=item.title, now=now)
+        if is_new:
+            result.items.append(item)
+        elif streak >= STREAK_MIN_DAYS:
+            result.streaks.append((item.title, item.url, streak))
     state.mark_crawled(target.url, now=now)
     return result
 
@@ -188,6 +210,32 @@ def _summarize_item(llm, result: TargetResult, item: CrawledItem, language: str)
     return summary
 
 
+# ── RAG bridging (P2.3) ────────────────────────────────────────────────
+
+
+def _find_related_notes(rag, item: CrawledItem, summary: str) -> list[str]:
+    """Vault-note titles genuinely related to this item (deterministic, no
+    LLM). Conservative distance gate; own mirrored Scout reports excluded so
+    yesterday's digest never becomes today's 'related note'. Fail-open."""
+    query = f"{item.title}\n{summary or item.snippet}"[:500]
+    try:
+        hits = rag.query_notes(query, top_k=BRIDGE_TOP_K)
+    except Exception as e:
+        logging.warning(f"Scout: bridging query failed for {item.url}: {e}")
+        return []
+    titles: list[str] = []
+    for hit in hits or []:
+        meta = hit.get("metadata") or {}
+        title = str(meta.get("title") or "").strip()
+        distance = hit.get("distance")
+        if not title or title in titles or title.startswith("Scout-"):
+            continue
+        if isinstance(distance, (int, float)) and distance > BRIDGE_MAX_DISTANCE:
+            continue
+        titles.append(title)
+    return titles
+
+
 # ── report ─────────────────────────────────────────────────────────────
 # NOTE (R2): the cross-source "綜合分析" section was removed on user feedback —
 # single-day trend synthesis over a handful of unrelated listings produced
@@ -202,6 +250,8 @@ def _render_item(item: CrawledItem, summary: str | None) -> str:
     text = summary or item.snippet
     if text:
         line += f" — {text}"
+    if item.related:
+        line += "｜相關筆記: " + "、".join(f"[[{title}]]" for title in item.related)
     return line
 
 
@@ -209,13 +259,20 @@ def _render_body(now: datetime, results: list[TargetResult], summaries: dict) ->
     parts = [f"# 📓 Scout 日報 {now.strftime('%Y-%m-%d')}", ""]
 
     for result in results:
-        if not result.items:
+        # A section renders when it has fresh items OR still-riding streaks —
+        # "0 new but bun is on day 5" is itself a signal worth showing.
+        if not result.items and not result.streaks:
             continue
         per_target = summaries.get(id(result), {})
         parts.append(f"## {result.section_title}")
         parts.append("")
         for i, item in enumerate(result.items, start=1):
             parts.append(_render_item(item, per_target.get(i)))
+        if result.streaks:
+            streak_bits = "、".join(
+                f"[{title}]({url})（第 {days} 天）" for title, url, days in result.streaks
+            )
+            parts.append(f"- 🔁 持續上榜：{streak_bits}")
         parts.append("")
 
     parts.append("## 🧹 抓取狀況")
@@ -233,7 +290,13 @@ def _render_body(now: datetime, results: list[TargetResult], summaries: dict) ->
 
 
 def _write_report(
-    report_dir: Path, now: datetime, results: list[TargetResult], new_count: int, body: str
+    report_dir: Path,
+    now: datetime,
+    results: list[TargetResult],
+    new_count: int,
+    body: str,
+    *,
+    mirror_dir: Path | None = None,
 ) -> Path:
     date_str = now.strftime("%Y-%m-%d")
     metadata = {
@@ -247,5 +310,14 @@ def _write_report(
     }
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"✅Scout-{date_str}.md"
-    path.write_text(dump_markdown_with_metadata(metadata, body), encoding="utf-8")
+    full_markdown = dump_markdown_with_metadata(metadata, body)
+    path.write_text(full_markdown, encoding="utf-8")
+    # P2.4: fromLingLing/ is not RAG-indexed; a byte-identical mirror under
+    # Notes/Scout/ is (VaultWatcher watches Notes/), making digests searchable.
+    if mirror_dir is not None:
+        try:
+            mirror_dir.mkdir(parents=True, exist_ok=True)
+            (mirror_dir / path.name).write_text(full_markdown, encoding="utf-8")
+        except Exception as e:
+            logging.warning(f"Scout: mirror to {mirror_dir} failed: {e}")
     return path
