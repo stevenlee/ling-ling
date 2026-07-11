@@ -18,7 +18,9 @@ from urllib.parse import urljoin, urlparse
 import requests
 
 from services.http_client import PoliteHttpClient
-from services.scout.content import BROWSER_HEADERS, extract_text
+from services.scout.content import BROWSER_HEADERS, extract_text, normalize_fetch_url
+
+WAYBACK_URL = "https://web.archive.org/web/2/{url}"
 
 MAIN_MAX_CHARS = 16000
 LINKED_MAX_CHARS = 5000
@@ -82,6 +84,7 @@ class DigResult:
     title: str = ""
     body: str = ""
     followed: list[DigSource] = field(default_factory=list)
+    via: str = ""  # "" = direct fetch; "wayback" = archived snapshot
 
 
 def first_url(text: str) -> str | None:
@@ -98,28 +101,59 @@ def run_dig(
 ) -> DigResult:
     client = client or PoliteHttpClient({}, default_interval=1.0)
 
-    try:
-        response = client.get(url, source=_host(url), headers=dict(BROWSER_HEADERS), timeout=20)
-    except requests.exceptions.RequestException as e:
-        return DigResult("failed", f"主頁抓取失敗：{e}")
-    html = response.text
-    main_text = extract_text(html, max_chars=MAIN_MAX_CHARS)
+    html, main_text, via, error = _fetch_main(client, normalize_fetch_url(url))
     if not main_text:
-        return DigResult("failed", "主頁抓到了但抽不出可讀內文（可能是 JS 渲染頁）。")
+        return DigResult("failed", error)
 
     title = _page_title(html) or url
-    candidates = extract_links(html, base_url=url)
+    # A Wayback snapshot's links are archive-prefixed and mostly stale —
+    # a wayback dig is a single-page deep read, no link following.
+    candidates = [] if via == "wayback" else extract_links(html, base_url=url)
     followed = [_fetch_linked(client, link) for link in _select_links(llm, main_text, candidates)]
 
     body = _synthesize(llm, title, url, main_text, followed, language)
     fetched = sum(1 for s in followed if s.content)
+    via_note = "（Wayback 快照）" if via == "wayback" else ""
     return DigResult(
         "succeeded",
-        f"深掘完成：主頁 + 跟進 {fetched}/{len(followed)} 條連結。",
+        f"深掘完成{via_note}：主頁 + 跟進 {fetched}/{len(followed)} 條連結。",
         title=title,
         body=body,
         followed=followed,
+        via=via,
     )
+
+
+def _fetch_main(client: PoliteHttpClient, url: str) -> tuple[str, str, str, str]:
+    """(html, extracted_text, via, error) — direct fetch first, then a
+    Wayback Machine snapshot for the bot-walled news sites (axios/WaPo 403
+    or time out even with browser headers; the archive usually has a
+    recent copy)."""
+    direct_error = ""
+    try:
+        response = client.get(url, source=_host(url), headers=dict(BROWSER_HEADERS), timeout=20)
+        text = extract_text(response.text, max_chars=MAIN_MAX_CHARS)
+        if text:
+            return response.text, text, "", ""
+        direct_error = "主頁抓到了但抽不出可讀內文（可能是 JS 渲染頁）"
+    except requests.exceptions.RequestException as e:
+        direct_error = f"主頁抓取失敗：{e}"
+
+    try:
+        response = client.get(
+            WAYBACK_URL.format(url=url),
+            source="web.archive.org",
+            headers=dict(BROWSER_HEADERS),
+            timeout=30,
+        )
+        text = extract_text(response.text, max_chars=MAIN_MAX_CHARS)
+        if text:
+            logging.info(f"Scout dig: direct fetch failed, using Wayback snapshot for {url}")
+            return response.text, text, "wayback", ""
+    except requests.exceptions.RequestException as e:
+        logging.info(f"Scout dig: Wayback fallback also failed for {url}: {e}")
+
+    return "", "", "", f"{direct_error}；Wayback 快照也拿不到。"
 
 
 def _host(url: str) -> str:

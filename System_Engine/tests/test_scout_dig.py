@@ -106,6 +106,8 @@ def test_run_dig_select_none_and_linked_failure():
 
 
 def test_run_dig_main_fetch_failure():
+    # broken=example.com also matches the Wayback URL (it embeds the original)
+    # → both direct and snapshot fail → failed, with both causes in the message.
     result = run_dig(
         FakeLLM(),
         "https://example.com/page",
@@ -113,6 +115,49 @@ def test_run_dig_main_fetch_failure():
         client=FakeClient(broken=("example.com",)),
     )
     assert result.status == "failed"
+    assert "Wayback" in result.summary
+
+
+def test_run_dig_falls_back_to_wayback_snapshot():
+    class WalledClient:
+        """Direct fetch 403s (axios/WaPo class); the archive has a copy."""
+
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, *, source, headers=None, **kwargs):
+            self.calls.append(url)
+            if url.startswith("https://web.archive.org/"):
+                return types.SimpleNamespace(text=MAIN_HTML, headers={"Content-Type": "text/html"})
+            raise requests.exceptions.HTTPError("403 Client Error: Forbidden")
+
+    llm = FakeLLM()
+    result = run_dig(llm, "https://example.com/page", language="English", client=WalledClient())
+    assert result.status == "succeeded"
+    assert result.via == "wayback"
+    assert "Wayback" in result.summary
+    assert result.followed == []  # snapshot links are archive-prefixed → not followed
+    # Only the synthesize call ran (no link selection without candidates).
+    assert [stage for stage, _ in llm.calls] == ["dig_synthesize"]
+
+
+def test_reddit_url_normalized_to_old_reddit():
+    from services.scout.content import normalize_fetch_url
+
+    assert (
+        normalize_fetch_url("https://www.reddit.com/r/x/comments/1/y/?share_id=z")
+        == "https://old.reddit.com/r/x/comments/1/y/?share_id=z"
+    )
+    assert normalize_fetch_url("https://example.com/a") == "https://example.com/a"
+
+    client = FakeClient()
+    run_dig(
+        FakeLLM(select_reply="NONE"),
+        "https://www.reddit.com/r/x/comments/1/y/",
+        language="English",
+        client=client,
+    )
+    assert client.calls[0][0].startswith("https://old.reddit.com/")
 
 
 def test_intent_route():

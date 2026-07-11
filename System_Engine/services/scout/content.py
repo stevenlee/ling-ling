@@ -40,15 +40,29 @@ _SPACES_RE = re.compile(r"[ \t]{2,}")
 _STRIP_TAGS = ("script", "style", "noscript", "svg", "nav", "header", "footer", "form")
 
 
+_REDDIT_HOSTS = ("reddit.com", "www.reddit.com", "m.reddit.com", "new.reddit.com")
+
+
+def normalize_fetch_url(url: str) -> str:
+    """Rewrite hosts whose default page is JS-only onto a server-rendered
+    twin. Reddit's shreddit UI yields zero extractable text; old.reddit.com
+    is plain HTML with the post + comments."""
+    parts = urlparse(url)
+    if (parts.hostname or "").lower() in _REDDIT_HOSTS:
+        return parts._replace(netloc="old.reddit.com").geturl()
+    return url
+
+
 def fetch_item_content(client: PoliteHttpClient, item: CrawledItem) -> str:
     """Fetch item.url and extract readable text (bounded). "" on any failure."""
     if item.content:
         return item.content[:MAX_CONTENT_CHARS]
 
-    source = (urlparse(item.url).hostname or "item").lower()
+    url = normalize_fetch_url(item.url)
+    source = (urlparse(url).hostname or "item").lower()
     try:
         response = client.get(
-            item.url, source=source, headers=dict(BROWSER_HEADERS), timeout=15, retries=1
+            url, source=source, headers=dict(BROWSER_HEADERS), timeout=15, retries=1
         )
     except requests.exceptions.RequestException as e:
         logging.info(f"Scout: content fetch failed for {item.url}: {e}")

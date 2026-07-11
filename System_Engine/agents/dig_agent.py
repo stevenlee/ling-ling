@@ -42,7 +42,10 @@ class DigAgent(BaseAgent):
         return full_markdown
 
     def _compose_body(self, url: str, result) -> str:
-        parts = [f"# 🔍 Scout 深掘：{result.title}", "", f"> 目標：{url}", "", result.body, ""]
+        parts = [f"# 🔍 Scout 深掘：{result.title}", "", f"> 目標：{url}"]
+        if result.via == "wayback":
+            parts.append("> 💧 原站拒絕抓取，內文取自 Wayback Machine 快照（未跟進站內連結）。")
+        parts += ["", result.body, ""]
 
         followed = [s for s in result.followed]
         if followed:

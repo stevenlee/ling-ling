@@ -40,10 +40,13 @@ https://github.com/some/interesting-repo
   約幾分鐘。人挑目標，所以每一分成本都花在你真的在乎的東西上。
 - 內文抓取用瀏覽器 header，但 JS 渲染頁（無伺服器端內容）仍然抓不到，
   會回報「抽不出可讀內文」。
-- **失敗也有報告**：主頁抓不到（付費牆逾時、403）時，結果寫在
-  `fromLingLing/✅cmd-Error-*.md`，附原因。大媒體付費牆（WaPo 等）連瀏覽器
-  header 都擋——改挖該新聞的 HN 討論串網址（`news.ycombinator.com/item?id=…`）
-  通常是更好的路。
+- **被擋的站有兩層後援**：Reddit 連結自動改走 old.reddit.com（伺服器端
+  渲染）；擋爬蟲的新聞站（axios、WaPo…）403 或逾時後會退而抓 Wayback
+  Machine 快照（筆記會註明「內文取自快照」，此模式不跟進站內連結）。
+  兩層都失敗（例如文章太新還沒被 archive.org 收錄）才回報失敗。
+- **失敗也有報告**：結果寫在 `fromLingLing/✅cmd-Error-*.md`，附原因。
+  剛出爐的付費牆新聞常常兩層都不通——改挖該新聞的 HN 討論串網址
+  （`news.ycombinator.com/item?id=…`）通常是更好的路。
 - 跟日報共用 `scout_mirror` 開關；`say`（或 `scout_language`）決定輸出語言。
 
 ### 搭配使用
