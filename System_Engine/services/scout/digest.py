@@ -83,15 +83,20 @@ def run_scout_digest(
     state = ScoutState(state_file)
     state.prune_seen(now=now)
 
+    # NOTE (R5): seen-marks/streaks/crawl clocks accumulate IN MEMORY and are
+    # persisted only after the report is safely on disk (or after a legitimate
+    # no-new-items outcome). The daemon restarts often — an interrupted run
+    # must not swallow items it never reported. Tradeoff accepted: a crash
+    # mid-run re-crawls and re-pays the LLM analyses on the next run.
     results = [
         _crawl_target(target, client, state, now=now, default_max_items=default_max_items)
         for target in targets
     ]
-    state.save()  # persist crawl clocks + seen marks even if the LLM below dies
 
     new_count = sum(len(r.items) for r in results)
     failed = [r for r in results if r.error]
     if new_count == 0:
+        state.save()  # nothing to report — sightings/streaks/clocks are final
         note = f"; {len(failed)} target(s) failed" if failed else ""
         return ScoutDigestResult(
             "succeeded", f"No new items across {len(targets)} target(s){note}."
@@ -120,11 +125,11 @@ def run_scout_digest(
             if bridging:
                 item.related = _find_related_notes(rag, item, summary)
         summaries[id(r)] = per_target
-    state.save()  # persist the domain strike counts gathered above
 
     body = _render_body(now, results, summaries)
     mirror_to = mirror_dir if getattr(settings, "SCOUT_MIRROR", True) else None
     report_path = _write_report(report_dir, now, results, new_count, body, mirror_dir=mirror_to)
+    state.save()  # report is on disk — NOW the seen-marks (and strikes) are true
     return ScoutDigestResult(
         "succeeded",
         f"Scout report written: {new_count} new item(s) from "

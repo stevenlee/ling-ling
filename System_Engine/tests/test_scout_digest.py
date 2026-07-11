@@ -4,6 +4,7 @@ isolation, content-grounded per-item analysis, LLM-degradation fallbacks."""
 import types
 from datetime import datetime, timedelta
 
+import pytest
 import requests
 
 from core.parsing.markdown_metadata import parse_markdown_metadata
@@ -270,6 +271,30 @@ def test_blank_llm_summary_falls_back_to_snippet(tmp_path):
     content = result.report_path.read_text(encoding="utf-8")
     # Item line falls back to the crawled snippet instead of vanishing.
     assert "A fast rocket framework." in content
+
+
+def test_interrupted_run_never_swallows_items(tmp_path):
+    # R5: seen-marks persist only AFTER the report is on disk. If the run dies
+    # before that (daemon restarts often), the next run must re-see everything.
+    (tmp_path / "Scout.md").write_text(TARGETS_MD, encoding="utf-8")
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file where the report dir should go", encoding="utf-8")
+
+    with pytest.raises(OSError):
+        run_scout_digest(
+            FakeLLM(),
+            targets_file=tmp_path / "Scout.md",
+            state_file=tmp_path / "scout_state.json",
+            report_dir=blocker / "out",  # mkdir under a file → boom, like a kill
+            mirror_dir=tmp_path / "mirror",
+            client=FakeClient(),
+            now=NOW,
+        )
+    # Nothing was persisted — a rerun starts clean and re-reports the items.
+    assert not (tmp_path / "scout_state.json").exists()
+    rerun = _run(tmp_path)
+    assert rerun.report_path is not None
+    assert parse_markdown_metadata(rerun.report_path.read_text(encoding="utf-8"))["new_items"] == 2
 
 
 def test_no_targets_file(tmp_path):
