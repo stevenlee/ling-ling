@@ -596,7 +596,7 @@ class RAGManager:
     @retry_on_db_lock()
     def add_facets(
         self, filepath: Path, title: str, facets: list[str], tags: list[str] | None = None
-    ):
+    ) -> bool:
         """Index LLM-generated facet sentences (thesis / key points) as
         retrieval pointers for a document.
 
@@ -605,10 +605,16 @@ class RAGManager:
         time a facet hit is dereferenced to the parent's real chunk — facet
         text itself is never returned as content. Stale facets for the doc
         are dropped first, so re-ingestion stays idempotent.
+
+        Fail-open by design (facets are a retrieval bonus), but the outcome
+        is RETURNED: False on a swallowed failure. Callers that must not
+        mark work as done on failure (facet backfill) check it — an Ollama
+        embedding error here once let the backfill log "+4 facets" and
+        permanently retire a page whose upsert had actually failed.
         """
         facets = [f.strip() for f in (facets or []) if isinstance(f, str) and f.strip()]
         if not facets:
-            return
+            return True
         try:
             doc_id = self._get_doc_id(filepath)
             self._delete_facets(doc_id)
@@ -637,8 +643,10 @@ class RAGManager:
             self._upsert_with_retry(documents=documents, metadatas=metadatas, ids=ids)
             self._bm25.mark_dirty()
             logging.info(f"Indexed {len(ids)} facets for '{title}' ({doc_id[:8]})")
+            return True
         except Exception as e:
             logging.error(f"Failed to add facets for '{title}': {e}")
+            return False
 
     @retry_on_db_lock()
     def remove_facets(self, filepath: Path) -> None:

@@ -52,13 +52,13 @@ from core.config import (
 from core.parser import strip_body_frontmatter
 from core.state import global_busy_state
 
-_FRESH_INBOX_SECONDS = 600          # files younger than this = pending user work
-_QUEUE_TTL_SECONDS = 24 * 3600      # rebuild the derived queue at most daily
-_GLOBAL_BACKOFF_SECONDS = 3600      # provider-down backoff
-_GLOBAL_FAILURE_THRESHOLD = 3       # distinct-page failures in a row = outage
+_FRESH_INBOX_SECONDS = 600  # files younger than this = pending user work
+_QUEUE_TTL_SECONDS = 24 * 3600  # rebuild the derived queue at most daily
+_GLOBAL_BACKOFF_SECONDS = 3600  # provider-down backoff
+_GLOBAL_FAILURE_THRESHOLD = 3  # distinct-page failures in a row = outage
 
-_THESIS_RE = re.compile(r'^\s*-\s*\*\*Thesis\*\*\s*[:：]\s*(.+)$', re.MULTILINE)
-_KEY_POINT_RE = re.compile(r'^\s {0,4}-\s+(.+)$')
+_THESIS_RE = re.compile(r"^\s*-\s*\*\*Thesis\*\*\s*[:：]\s*(.+)$", re.MULTILINE)
+_KEY_POINT_RE = re.compile(r"^\s {0,4}-\s+(.+)$")
 
 
 def parse_digest_appendix(page_text: str) -> dict | None:
@@ -259,9 +259,14 @@ class FacetBackfillPump:
             return "skipped", False
 
         try:
-            self.rag.add_facets(path, title, facets)
+            indexed = self.rag.add_facets(path, title, facets)
         except Exception as e:
             logging.warning(f"Facet backfill: add_facets failed for {title}: {e}")
+            return "failed", used_llm
+        if indexed is False:  # explicit failure signal; None (legacy fakes) = ok
+            # add_facets is fail-open and swallows upsert/embedding errors
+            # (already logged there) — but this page's facets are NOT in the
+            # index, so it must retry later, not retire as done.
             return "failed", used_llm
 
         logging.info(
@@ -287,9 +292,7 @@ class FacetBackfillPump:
 
     def _build_queue(self) -> list[tuple[int, Path, str]]:
         try:
-            facet_titles = {
-                e["title"] for e in self.rag.get_facet_entries() if e.get("title")
-            }
+            facet_titles = {e["title"] for e in self.rag.get_facet_entries() if e.get("title")}
         except Exception as e:
             logging.warning(f"Facet backfill: facet listing failed: {e}")
             return []
@@ -429,6 +432,7 @@ class FacetBackfillPump:
         logging.info(message)
         try:
             from core.ui import ui
+
             ui.success("🎯 Facet 回填完成：所有合格頁面都有 facets 了")
             MAINTENANCE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M")

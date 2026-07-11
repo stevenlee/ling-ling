@@ -57,6 +57,7 @@ class FakeRAG:
 
     def add_facets(self, path, title, facets, tags=None):
         self.added.append((title, facets))
+        return True
 
 
 @pytest.fixture
@@ -177,6 +178,25 @@ class TestYielding:
 
 
 class TestStep:
+    def test_swallowed_upsert_failure_counts_as_failed(self, env):
+        # rag_manager.add_facets is fail-open: on an embedding/upsert error it
+        # logs and returns False instead of raising. The backfill must treat
+        # that as a FAILURE (retry via attempts), not retire the page — a live
+        # Ollama NaN once produced "+4 facets" for facets that never landed.
+        tmp_path, pages, *_ = env
+
+        class FailingRAG(FakeRAG):
+            def add_facets(self, path, title, facets, tags=None):
+                return False  # swallowed failure, nothing indexed
+
+        _page(pages, "Book (Part 9)", content=PART_NOTE)
+        pump = _pump(FakeLLM(), FailingRAG(), tmp_path)
+        pump._run_step()
+        attempts = pump._ledger.get("attempts", {})
+        assert any("Book (Part 9)" in key for key in attempts), (
+            "failed add_facets must be recorded for retry, not marked done"
+        )
+
     def test_part_page_parsed_without_llm(self, env):
         tmp_path, pages, *_ = env
         _page(pages, "Book (Part 3)", content=PART_NOTE)
