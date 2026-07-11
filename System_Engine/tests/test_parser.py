@@ -240,6 +240,22 @@ class TestStructuredFixRecords:
         assert len(cr_fixes) == 3
         assert [f["line"] for f in cr_fixes] == [1, 2, 3]
 
+    def test_latex_carriage_return_repairs_rho(self):
+        """`\\rho` decodes to CR+"ho" (stock frontmatter scan: 23 hits) — but
+        the word boundary must keep CR before English words like "home" out."""
+        from core.parsing.latex_repair import repair_latex_carriage_returns
+
+        cleaned, fixes = repair_latex_carriage_returns("ratio $\rho(a,b)$ bound")
+        assert cleaned == "ratio $\\rho(a,b)$ bound"
+        assert len(fixes) == 1
+        cleaned, fixes = repair_latex_carriage_returns("$\rho_a + \rho_1$")
+        assert cleaned == "$\\rho_a + \\rho_1$"
+        assert len(fixes) == 2
+        untouched = "line one\rhome run"
+        cleaned, fixes = repair_latex_carriage_returns(untouched)
+        assert cleaned == untouched
+        assert not fixes
+
     def test_mermaid_label_fix_carries_line_before_after(self):
         text = "```mermaid\ngraph TD\nA[Hello] --> B\n```"
         _, fixes = run_markdown_quality_checks(text)

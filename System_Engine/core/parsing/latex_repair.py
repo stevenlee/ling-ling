@@ -12,7 +12,11 @@ from core.parsing.common import _make_fix
 
 # Match the CR char (\x0d) so the corruption is actually repaired; the suffix
 # list keeps real CRLF line endings (CR not followed by these) untouched.
-LATEX_CR_COMMAND_RE = re.compile("\r" + r"(ightarrow|ight|angle|brace|ceil|floor|vert|Vert)\b")
+# (?![A-Za-z]) instead of \b: LaTeX subscripts follow immediately (`\rho_a`
+# → CR+"ho_a"), and \b treats the underscore as a word char and bails.
+LATEX_CR_COMMAND_RE = re.compile(
+    "\r" + r"(ightarrow|ight|angle|brace|ceil|floor|vert|Vert|ho)(?![A-Za-z])"
+)
 
 # Finds `${\displaystyle ... $` blocks for unclosed brace repair
 UNCLOSED_LATEX_DISPLAY_RE = re.compile(r"\$\{\\displaystyle(.*?)(?<!\\)\$", re.DOTALL)
