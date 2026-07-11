@@ -336,6 +336,20 @@ class TestLatexEscapeCollisions:
         assert result == "\\vec{x}"
         assert fixes[0]["type"] == "repaired_latex_vertical_tab"
 
+    def test_ell_backslash_restored(self):
+        # Observed live across TRENCH pages: `$\ell_p$` stored as ESC + `ll_p`.
+        decoded = "Convergence in $\x1bll_p$"
+        result, fixes = repair_latex_escape_collisions(decoded)
+        assert result == "Convergence in $\\ell_p$"
+        assert fixes[0]["type"] == "repaired_latex_escape_char"
+
+    def test_ansi_csi_sequence_untouched(self):
+        # ESC followed by `[` is an ANSI control sequence, not a LaTeX command.
+        decoded = "\x1b[31mred\x1b[0m"
+        result, fixes = repair_latex_escape_collisions(decoded)
+        assert result == decoded
+        assert fixes == []
+
     def test_multiple_collisions_in_one_text(self):
         decoded = "Let \x08inom{n}{k} = \x0crac{n!}{k!(n-k)!} where n,k \x0bee N"
         result, fixes = repair_latex_escape_collisions(decoded)

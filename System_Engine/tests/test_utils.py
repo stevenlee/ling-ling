@@ -50,6 +50,20 @@ class TestDigestValueToText:
         result = digest_value_to_text({"名前": "太郎"})
         assert "太郎" in result
 
+    def test_restores_latex_escape_collisions(self):
+        # Poisoned stock digests carry JSON-escape collisions (`\forall` →
+        # `\x0c orall`); this chokepoint heals them before they reach the
+        # appendix writer, the facet index, or the embedder.
+        assert (
+            digest_value_to_text("$a \\pmod n, \x0corall a$ 與 $\x08inom{n}{k}$")
+            == "$a \\pmod n, \\forall a$ 與 $\\binom{n}{k}$"
+        )
+
+    def test_restores_collisions_inside_lists(self):
+        assert digest_value_to_text(["\x0crac{1}{2}", "\x1bll_p 空間"]) == (
+            "\\frac{1}{2}; \\ell_p 空間"
+        )
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -5,7 +5,7 @@ joined by the array-salvage logic that lived in llm_client._parse_json_array,
 so every "get JSON out of a model reply" path shares one toolbox:
 
 - extract_json_array / extract_json_object: fenced-first candidate scan,
-  strict parse, then repair of illegal backslash escapes (LaTeX/paths).
+  strict parse, then repair of illegal and LaTeX-shaped backslash escapes.
 - salvage_json_array: additionally survives tail truncation and single
   malformed entries by parsing top-level {...} objects independently.
 - is_empty_json_literal: tells a GENUINE empty answer ([] / {}) from a parse
@@ -29,24 +29,49 @@ def _candidate_payloads(text: str) -> Iterable[str]:
     yield text.strip()
 
 
-# A backslash that does NOT begin a valid JSON escape (`\" \\ \/ \b \f \n \r \t`
-# or `\uXXXX`). LLMs routinely emit LaTeX/math (`$\Delta \chi^2$`, `\mathcal`,
-# `\frac`) — and Windows paths — inside JSON string values, where `\D` / `\c`
-# are illegal escapes that make json.loads reject the WHOLE object. argument_map
-# on academic content was silently producing nothing for exactly this reason.
-_ILLEGAL_JSON_ESCAPE_RE = re.compile(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})')
+# Backslash-escape repair for LLM JSON. Two failure families share one cause —
+# LLMs routinely emit LaTeX/math (`$\Delta \chi^2$`, `\frac`) and Windows paths
+# inside JSON string values without escaping the backslash:
+#
+# 1. `\D` / `\c` / `\p` are ILLEGAL escapes → json.loads rejects the WHOLE
+#    object. argument_map on academic content was silently producing nothing.
+# 2. `\forall` / `\neq` / `\tan` / `\binom` / `\rho` begin with a VALID escape
+#    (`\f \n \t \b \r`) → json.loads "succeeds" and silently decodes them into
+#    control characters (`\x0c orall`, newline + `eq`, tab + `an`, …), which
+#    then poison embeddings (bge-m3 NaN) and split lines downstream
+#    (facet_backfill's appendix parse truncated key points at the `\x0c`).
+#
+# The scanner below repairs both in one pass: legal structural escapes are
+# kept; a control escape (`\b \f \n \r \t`) is kept only when NOT followed by
+# a lowercase letter — followed by one, it is LaTeX-command-shaped and gets its
+# backslash doubled. Tradeoff, repair path only (strict parse already failed):
+# a genuine `\n` immediately followed by a lowercase letter becomes a literal
+# `\n` in the text — cosmetic, vs. silent control-char corruption.
+_JSON_ESCAPE_REPAIR_RE = re.compile(
+    r"\\\\"  # already-escaped backslash — keep
+    r"|\\u[0-9a-fA-F]{4}"  # unicode escape — keep
+    r'|\\["/]'  # quote / solidus — keep
+    r"|\\[bfnrt](?![a-z])"  # control escape NOT LaTeX-shaped — keep
+    r"|\\"  # illegal escape or LaTeX-shaped control escape — double
+)
+
+
+def _repair_backslash_escapes(candidate: str) -> str:
+    return _JSON_ESCAPE_REPAIR_RE.sub(
+        lambda m: "\\\\" if m.group(0) == "\\" else m.group(0), candidate
+    )
 
 
 def _loads_lenient(candidate: str):
-    """json.loads, retried once with illegal backslash-escapes doubled.
+    """json.loads, retried once with suspect backslash-escapes doubled.
 
     Strict parse first (so valid JSON is never altered); only on failure do we
-    repair `\\X`→`\\\\X` for any X that isn't a legal escape and reparse. Returns
-    the parsed value or raises the original error."""
+    repair illegal and LaTeX-shaped escapes (see `_JSON_ESCAPE_REPAIR_RE`) and
+    reparse. Returns the parsed value or raises the original error."""
     try:
         return json.loads(candidate)
     except Exception:
-        repaired = _ILLEGAL_JSON_ESCAPE_RE.sub(r"\\\\", candidate)
+        repaired = _repair_backslash_escapes(candidate)
         return json.loads(repaired)  # may raise — caller handles
 
 
@@ -85,8 +110,8 @@ def extract_json_object(text: str) -> dict:
         if isinstance(parsed, dict):
             return parsed
         # Embedded object: raw_decode from each `{`, strict first then with
-        # illegal backslash-escapes repaired (same LaTeX/path failure mode).
-        for variant in (candidate, _ILLEGAL_JSON_ESCAPE_RE.sub(r"\\\\", candidate)):
+        # suspect backslash-escapes repaired (same LaTeX/path failure mode).
+        for variant in (candidate, _repair_backslash_escapes(candidate)):
             for match in re.finditer(r"\{", variant):
                 try:
                     parsed, _ = decoder.raw_decode(variant[match.start() :])

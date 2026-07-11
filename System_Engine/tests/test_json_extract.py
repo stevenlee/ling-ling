@@ -28,6 +28,38 @@ def test_array_repairs_illegal_latex_escapes():
     ]
 
 
+def test_repairs_latex_shaped_valid_escapes():
+    # `\forall` starts with the VALID escape `\f` — json.loads used to decode
+    # it into `\x0c orall` silently (NaN-poisoned embeddings, line-split
+    # truncation in facet backfill). Same family: \neq, \tan, \binom, \rho.
+    raw = r'{"kp": "$a^n \equiv a \pmod n, \forall a \neq 0$: \tan, \binom{n}{k}, \rho"}'
+    parsed = extract_json_object(raw)
+    assert parsed == {
+        "kp": "$a^n \\equiv a \\pmod n, \\forall a \\neq 0$: \\tan, \\binom{n}{k}, \\rho"
+    }
+
+
+def test_repair_keeps_non_latex_shaped_control_escapes():
+    # Repair path (the \pmod makes strict parse fail): a control escape NOT
+    # followed by a lowercase letter is a genuine newline/tab and survives.
+    raw = r'{"a": "one\nTwo\n2nd", "b": "$x \pmod y$"}'
+    assert extract_json_object(raw) == {"a": "one\nTwo\n2nd", "b": "$x \\pmod y$"}
+
+
+def test_strict_valid_json_is_never_altered():
+    # No illegal escape anywhere → strict parse wins; `\n` before a lowercase
+    # letter stays a newline (the LaTeX-shape heuristic only runs on repair).
+    raw = r'{"a": "one\ntwo", "tex": "$\\forall x$"}'
+    assert extract_json_object(raw) == {"a": "one\ntwo", "tex": "$\\forall x$"}
+
+
+def test_repair_keeps_already_escaped_backslashes():
+    # `\\forall` is correct JSON already — the repair must not double the
+    # second backslash of an escaped pair (`\\f…` is not a `\f` collision).
+    raw = r'{"tex": "$\\forall x$", "bad": "\pmod"}'
+    assert extract_json_object(raw) == {"tex": "$\\forall x$", "bad": "\\pmod"}
+
+
 def test_object_embedded_in_prose():
     assert extract_json_object('The answer is {"score": 0.5} as shown.') == {"score": 0.5}
 
