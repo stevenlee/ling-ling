@@ -275,7 +275,7 @@ def _render_item(item: CrawledItem, summary: str | None) -> str:
 
 
 def _render_body(now: datetime, results: list[TargetResult], summaries: dict) -> str:
-    parts = [f"# 📓 Scout 日報 {now.strftime('%Y-%m-%d')}", ""]
+    parts = [f"# 📓 調查兵團日報 {now.strftime('%Y-%m-%d')}", ""]
 
     for result in results:
         # A section renders when it has fresh items OR still-riding streaks —

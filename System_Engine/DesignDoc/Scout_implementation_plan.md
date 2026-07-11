@@ -127,7 +127,7 @@ frontmatter：`title: Scout-YYYY-MM-DD`、`type: Scout`、`date_created`、
 `targets_ok` / `targets_failed`、`new_items`、`tags: [Scout]`。
 
 ```markdown
-# 📓 Scout 日報 YYYY-MM-DD
+# 📓 調查兵團日報 YYYY-MM-DD
 
 ## GitHub Trending
 - [owner/repo](url) ⭐12,345 — 內文導向的 2-4 句分析…
