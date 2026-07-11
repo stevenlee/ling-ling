@@ -125,12 +125,21 @@ class OllamaEmbeddingFunction(chromadb.EmbeddingFunction):
             else:
                 bad.append(i)
         if bad and len(bad) == len(safe_input):
-            # Every item failed on its own — this is an outage, not an
-            # input-specific NaN. Don't mask it with placeholders; raise so the
-            # caller's retry / skip-and-log path handles it honestly.
-            raise RuntimeError(
-                f"Ollama embedding failed for all {len(safe_input)} inputs (model {self.model_name})"
-            )
+            # Every item failed on its own. Outage — OR every input is
+            # individually NaN-poisoned. The two are indistinguishable when
+            # the batch is small: the embedding cache shrinks retry batches
+            # to exactly the previously-failed inputs, so one deterministic
+            # NaN input (seen live: a truncated-LaTeX facet on bge-m3) became
+            # a batch of 1 that "failed for all 1 inputs" forever. Probe with
+            # a canary: healthy provider → placeholder the poisoned inputs;
+            # dead canary → genuine outage, raise honestly.
+            canary = self._embed_canary()
+            if canary is None:
+                raise RuntimeError(
+                    f"Ollama embedding failed for all {len(safe_input)} inputs "
+                    f"(model {self.model_name})"
+                )
+            dim = dim or len(canary)
         for i in bad:
             logging.warning(
                 "Ollama embedding produced NaN/error for one input; substituted a "
@@ -141,6 +150,17 @@ class OllamaEmbeddingFunction(chromadb.EmbeddingFunction):
                 placeholder[0] = 1.0  # unit vector: valid cosine, avoids zero-norm NaN
             out[i] = placeholder
         return out  # type: ignore[return-value]
+
+    def _embed_canary(self) -> list[float] | None:
+        """A known-good plain sentence; a clean vector proves the provider is
+        up (→ the failing inputs are input-specific), None means outage."""
+        try:
+            e = self._embed(["The quick brown fox jumps over the lazy dog."])
+        except Exception:
+            return None
+        if e and len(e) == 1 and not _vec_has_nan(e[0]):
+            return e[0]
+        return None
 
     def embed_query(self, input: list[str]) -> list[list[float]]:  # type: ignore[override]
         return self(input)

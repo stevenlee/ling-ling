@@ -98,7 +98,7 @@ class TestEmbeddingFunctions:
 
     @patch("requests.post")
     def test_ollama_all_fail_raises(self, mock_post):
-        # Every item failing on its own is an outage, not an input-specific NaN
+        # Every item failing on its own AND the canary failing = an outage
         # — must raise (not silently fill placeholders).
         r = MagicMock()
         r.status_code = 500
@@ -109,6 +109,33 @@ class TestEmbeddingFunctions:
 
         with pytest.raises(RuntimeError):
             fn(["a", "b"])
+
+    @patch("requests.post")
+    def test_ollama_poisoned_batch_of_one_placeholders_when_canary_ok(self, mock_post):
+        # Live case: ONE deterministically NaN input (truncated-LaTeX facet on
+        # bge-m3), and the embedding cache had shrunk the retry batch to
+        # exactly that input. "All 1 inputs failed" used to read as an outage
+        # → raise → the page's facets stuck failing forever. With a healthy
+        # canary it must placeholder instead.
+        good = [0.5] * 1024
+
+        def resp_for(*args, **kwargs):
+            inp = kwargs["json"]["input"]
+            r = MagicMock()
+            if inp[0].startswith("The quick brown fox"):  # the canary probe
+                r.status_code = 200
+                r.json.return_value = {"embeddings": [good]}
+                return r
+            r.status_code = 500
+            r.text = '{"error":"failed to encode response: json: unsupported value: NaN"}'
+            return r
+
+        mock_post.side_effect = resp_for
+        fn = OllamaEmbeddingFunction(api_base="http://t", model_name="bge-m3", max_chars=0)
+        out = fn(["卡邁克爾數定義的等價性：證明 $a^n \\equiv a \\pmod n,"])
+        assert len(out) == 1
+        assert len(out[0]) == 1024
+        assert out[0][0] == 1.0 and float(sum(out[0][1:])) == 0.0  # unit placeholder
 
     def test_gemini_embedding_function(self):
         # Mock google-genai Client structure
