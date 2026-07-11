@@ -78,7 +78,11 @@ def parse_digest_appendix(page_text: str) -> dict | None:
 
     key_points: list[str] = []
     in_key_points = False
-    for line in appendix.splitlines():
+    # split("\n"), NOT splitlines(): stock appendices carry control chars from
+    # JSON-escape collisions (`\forall` → `\x0c orall`), and splitlines() also
+    # breaks on \x0c/\x0b — which truncated key points mid-sentence and made
+    # the tail look like a stray line that ended collection early.
+    for line in appendix.split("\n"):
         stripped = line.strip()
         if stripped.startswith("- **Key Points**"):
             in_key_points = True
@@ -90,7 +94,13 @@ def parse_digest_appendix(page_text: str) -> dict | None:
             if m and line.startswith("  "):
                 key_points.append(m.group(1).strip())
             elif stripped:
-                break
+                if not key_points:
+                    break
+                # The appendix writer emits one line per bullet, so a bare
+                # continuation line is corruption debris — a key point split
+                # by a real newline (`\neq` decoded as `\n` + `eq`). Rejoin
+                # it instead of dropping every bullet after it.
+                key_points[-1] = f"{key_points[-1]} {stripped}"
 
     if not thesis and not key_points:
         return None

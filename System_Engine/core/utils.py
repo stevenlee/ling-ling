@@ -5,6 +5,11 @@ import os
 import sys
 from pathlib import Path
 
+from core.parsing.latex_repair import (
+    repair_latex_carriage_returns,
+    repair_latex_escape_collisions,
+)
+
 
 class MtimeCache:
     """Tiny cache of file contents keyed by (path, mtime).
@@ -81,11 +86,19 @@ def digest_value_to_text(value) -> str:
 
     Used by ClippingWatcher (digest appendix formatting) and LLMClient
     (part-digest-to-prompt serialisation).
+
+    String values pass through the LaTeX control-char repairs: digests born
+    before the escape-aware JSON repair carry `\\forall`→`\\x0c orall`-style
+    JSON-escape collisions, and this is the one chokepoint both the appendix
+    writer and the facet extractor share — so poisoned stock digests are
+    healed wherever they resurface instead of reaching the embedder.
     """
     if value is None:
         return ""
     if isinstance(value, str):
-        return value.strip()
+        text, _ = repair_latex_carriage_returns(value)
+        text, _ = repair_latex_escape_collisions(text)
+        return text.strip()
     if isinstance(value, (list, tuple, set)):
         parts = (digest_value_to_text(item) for item in value)
         return "; ".join(p for p in parts if p)

@@ -114,6 +114,35 @@ class TestAppendixParse:
     def test_no_appendix_returns_none(self):
         assert parse_digest_appendix("# Just a page\n\nbody") is None
 
+    def test_control_char_does_not_truncate_key_point(self):
+        # Stock corruption (number theory Part 36): `\forall` decoded by
+        # json.loads into `\x0c orall`. splitlines() treated the \x0c as a
+        # line break — the key point came out ending in `\pmod n,` and the
+        # orphan tail ended collection, dropping every later bullet.
+        note = PART_NOTE.replace(
+            "  - Recall rewrites the trace each time.",
+            "  - 證明 $a^n \\equiv a \\pmod n, \x0corall a$ 成立。",
+        )
+        digest = parse_digest_appendix(note)
+        assert digest["key_points"] == [
+            "證明 $a^n \\equiv a \\pmod n, \x0corall a$ 成立。",
+            "Confidence does not track accuracy.",
+        ]
+
+    def test_newline_split_key_point_rejoins_and_keeps_rest(self):
+        # `\neq` decoded as `\n` + `eq` leaves a REAL newline in the appendix;
+        # the tail is corruption debris, not a new bullet — rejoin it instead
+        # of dropping all bullets after it.
+        note = PART_NOTE.replace(
+            "  - Recall rewrites the trace each time.",
+            "  - 若 $x \neq 0$ 則結論成立。",
+        )
+        digest = parse_digest_appendix(note)
+        assert digest["key_points"] == [
+            "若 $x eq 0$ 則結論成立。",
+            "Confidence does not track accuracy.",
+        ]
+
 
 class TestQueue:
     def test_priority_and_exclusions(self, env):

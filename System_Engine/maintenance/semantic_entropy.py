@@ -103,7 +103,7 @@ def compute_entropy_report(
     insight = _load_map_embeddings(insight_signals_file)
     cortex = _load_map_embeddings(cortex_state_file, key="claim_embeddings")
 
-    source = []
+    source: list[list[float]] = []
     if rag is not None and hasattr(rag, "sample_document_embeddings"):
         try:
             source = rag.sample_document_embeddings(source_limit) or []
