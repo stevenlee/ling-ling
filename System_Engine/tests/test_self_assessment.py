@@ -35,7 +35,12 @@ class FakeTrace:
 
 
 def _paths(tmp_path):
-    """Return kwargs pointing every file source at empty/tmp locations."""
+    """Return kwargs pointing every file source at empty/tmp locations.
+
+    history_file MUST be redirected too — omitting it makes every test run
+    append fixture snapshots to the production trend log (and at
+    SELF_ASSESSMENT_HISTORY_MAX it evicts the real nightly history).
+    """
     return dict(
         cortex_dir=tmp_path / "cortex",
         insights_dir=tmp_path / "insights",
@@ -46,6 +51,7 @@ def _paths(tmp_path):
         cortex_state_file=tmp_path / "cortex_state.json",
         report_dir=tmp_path / "out",
         log_path=tmp_path / "maint.log.md",
+        history_file=tmp_path / "assessment_history.json",
     )
 
 
@@ -220,9 +226,9 @@ def test_history_persisted_and_capped(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sa, "SELF_ASSESSMENT_HISTORY_MAX", 3)
     p = _paths(tmp_path)
-    hist_file = tmp_path / "hist.json"
+    hist_file = p["history_file"]
     for _ in range(5):
-        run_self_assessment(FakeTrace(), history_file=hist_file, **p)
+        run_self_assessment(FakeTrace(), **p)
     snaps = json.loads(hist_file.read_text())
     assert len(snaps) == 3  # capped
     assert all("overall" in s and "axes" in s for s in snaps)
@@ -230,35 +236,33 @@ def test_history_persisted_and_capped(tmp_path, monkeypatch):
 
 def test_trend_arrows_and_streak(tmp_path):
     p = _paths(tmp_path)
-    hist_file = tmp_path / "hist.json"
     # Run 1: retrieval red.
     p["bench_history_file"].write_text(
         json.dumps([{"ts": "t", "pass_rate": 0.5}]), encoding="utf-8"
     )
-    r1 = run_self_assessment(FakeTrace(), history_file=hist_file, **p)
+    r1 = run_self_assessment(FakeTrace(), **p)
     assert r1.trend["檢索品質"]["arrow"] == "•"  # no prior → new
     assert r1.trend["檢索品質"]["streak"] == 1
     # Run 2: retrieval still red → streak grows, stable arrow.
-    r2 = run_self_assessment(FakeTrace(), history_file=hist_file, **p)
+    r2 = run_self_assessment(FakeTrace(), **p)
     assert r2.trend["檢索品質"]["arrow"] == "→"
     assert r2.trend["檢索品質"]["streak"] == 2
     # Run 3: retrieval recovers to green → improving arrow.
     p["bench_history_file"].write_text(
         json.dumps([{"ts": "t", "pass_rate": 0.95}]), encoding="utf-8"
     )
-    r3 = run_self_assessment(FakeTrace(), history_file=hist_file, **p)
+    r3 = run_self_assessment(FakeTrace(), **p)
     assert r3.trend["檢索品質"]["arrow"] == "↑"
 
 
 def test_chronic_axis_adds_observation(tmp_path):
     p = _paths(tmp_path)
-    hist_file = tmp_path / "hist.json"
     p["bench_history_file"].write_text(
         json.dumps([{"ts": "t", "pass_rate": 0.5}]), encoding="utf-8"
     )
     r = None
     for _ in range(3):
-        r = run_self_assessment(FakeTrace(), history_file=hist_file, **p)
+        r = run_self_assessment(FakeTrace(), **p)
     # 3 consecutive reds on retrieval → a "慢性問題" observation appears.
     assert any("慢性" in o and "檢索品質" in o for o in r.observations)
 
