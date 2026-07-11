@@ -686,6 +686,7 @@ class TestBuiltinAdapters:
             "llm.digest_sources",
             "llm.synthesize",
             "vault.load_sources",
+            "web.scout_digest",
         ]
 
     def test_register_populates_registry(self):
@@ -697,12 +698,14 @@ class TestBuiltinAdapters:
             "llm.critique",
             "llm.digest_sources",
             "vault.load_sources",
+            "web.scout_digest",
         }
         assert registry.has("llm.answer_from_sources")
         assert registry.has("llm.synthesize")
         assert registry.has("llm.critique")
         assert registry.has("llm.digest_sources")
         assert registry.has("vault.load_sources")
+        assert registry.has("web.scout_digest")
 
     def test_synthesize_adapter_wires_arguments(self):
         registry = AdapterRegistry()

@@ -184,9 +184,19 @@ frontmatter：`title: Scout-YYYY-MM-DD`、`type: Scout`、`date_created`、
   - 綜合分析的 LLM prose 版**維持移除**：streak＋bridging 就是「有根據
     的分析」的確定性形態，零填充風險；除非之後有明確需求才考慮
     再加 LLM 統整層。
-- **Phase 3**：`@ling-scout` 手動指令（AgentRegistry）、註冊 AdapterRegistry
-  capability 讓 Planner 可調用、`Templates/Operations/ScoutAnalysis.md`
-  把分析 prompt 移進 Operations 第四軸。
+- **Phase 3（2026-07-11 完成）**：
+  - **`@ling-scout` 手動指令**：`agents/scout_agent.py`（BaseAgent），
+    AgentRegistry key `scout`＋dispatcher INTENT_ROUTES。跑同一條
+    `run_scout_digest(llm, rag)` 路徑（含 bridging），不受 `scout` 開關
+    限制；去重狀態與夜間排程共用。
+  - **`web.scout_digest` adapter**：builtin_adapters 註冊＋
+    `Templates/Operations/scout_digest.md` capability metadata
+    （cost_class: high；輸出 status/summary/report_path）。adapter
+    factory 只拿得到 llm → 此路徑無 rag、bridging 自動跳過（已在
+    capability 文件註明）；Planner 由 metadata 自行決定何時調用。
+  - 原計劃的 `ScoutAnalysis.md` operation prompt **不做**——綜合分析
+    已於 R2 移除，逐條分析 prompt 留在 digest.py（單一使用點，
+    無 persona 交叉組合需求）。
 
 ## 8. 測試
 

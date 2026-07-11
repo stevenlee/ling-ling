@@ -406,6 +406,27 @@ def _make_digest_sources(llm: "LLMClient"):
     return digest_sources
 
 
+def _make_scout_digest(llm: "LLMClient"):
+    """Adapter for the `scout_digest` capability (Operations/scout_digest.md).
+
+    Runs the full Scout crawl → per-item analysis → report pass on demand.
+    Adapter factories only receive the LLMClient, so this path runs WITHOUT
+    rag — vault bridging is skipped (the scheduler/@ling-scout paths have it).
+    """
+
+    def scout_digest(inputs: dict) -> dict:
+        from services.scout.digest import run_scout_digest
+
+        result = run_scout_digest(llm)
+        return {
+            "status": result.status,
+            "summary": result.summary,
+            "report_path": str(result.report_path) if result.report_path else None,
+        }
+
+    return scout_digest
+
+
 # Public name → adapter-factory map. Each factory takes an LLMClient and
 # returns a callable matching the Adapter contract.
 _BUILTIN_FACTORIES = {
@@ -414,6 +435,7 @@ _BUILTIN_FACTORIES = {
     "llm.answer_from_sources": _make_answer_from_sources,
     "llm.synthesize": _make_synthesize,
     "llm.critique": _make_critique,
+    "web.scout_digest": _make_scout_digest,
 }
 
 

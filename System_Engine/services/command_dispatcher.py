@@ -58,6 +58,9 @@ INTENT_ROUTES = [
     # Publish track step 1 (ling-ling push): transform Blog/ → kafu/content/.
     # Build + deploy stay on the kafu side (`make publish`). Dispatches BlogAgent.
     (["blog"], ["blog"], "blog"),
+    # Scout — run the crawl → daily-digest pass on demand (same path as the
+    # scheduler's scout_daily; shared dedupe state). Dispatches ScoutAgent.
+    (["scout"], ["scout"], "scout"),
     (["profiles", "profile"], ["profiles", "profile"], "profiles"),
     # "recalled" before "recall": longer trigger first, else @ling-recalled
     # would false-match the recall (Q&A) route. Fires a spaced-review reinforce.
