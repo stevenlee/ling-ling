@@ -55,6 +55,17 @@ _SYNTHESIZE_SYSTEM = (
     "claim in the provided text; say so when the material is thin. No preamble."
 )
 
+# No-links variant: asking for a "what the links add" section when nothing was
+# followed produced a filler paragraph ("無法評估增量") on the first real dig.
+_SYNTHESIZE_SYSTEM_NO_LINKS = (
+    "You are Scout, writing a deep-dive intelligence note in {language} from "
+    "ONE page's full text. Structure the note as `##` sections (localized "
+    "headings): (1) what this is, in two sentences; (2) the key substance — "
+    "concrete points grounded in the text; (3) open questions worth pursuing. "
+    "Ground every claim in the provided text; say so when the material is "
+    "thin. No preamble."
+)
+
 
 @dataclass
 class DigSource:
@@ -186,8 +197,9 @@ def _synthesize(
     for source in followed:
         if source.content:
             parts.append(f"# Followed link: {source.label}\nURL: {source.url}\n\n{source.content}")
+    system = _SYNTHESIZE_SYSTEM if len(parts) > 1 else _SYNTHESIZE_SYSTEM_NO_LINKS
     raw = llm.complete(
-        _SYNTHESIZE_SYSTEM.format(language=language),
+        system.format(language=language),
         "\n\n---\n\n".join(parts),
         stage="dig_synthesize",
     )

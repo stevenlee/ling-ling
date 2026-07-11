@@ -63,7 +63,7 @@ class DigAgent(BaseAgent):
 
     def _related_notes(self, result) -> list[str]:
         # Same conservative gate as the digest's bridging (P2.3).
-        from services.scout.digest import BRIDGE_MAX_DISTANCE
+        from services.scout.digest import BRIDGE_MAX_DISTANCE, is_own_report
 
         if self.rag is None:
             return []
@@ -76,7 +76,7 @@ class DigAgent(BaseAgent):
         for hit in hits or []:
             title = str((hit.get("metadata") or {}).get("title") or "").strip()
             distance = hit.get("distance")
-            if not title or title in titles or title.startswith(("Scout-", "Dig-")):
+            if not title or title in titles or is_own_report(title):
                 continue
             if isinstance(distance, (int, float)) and distance > BRIDGE_MAX_DISTANCE:
                 continue

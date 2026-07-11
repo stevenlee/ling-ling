@@ -224,6 +224,12 @@ def _summarize_item(llm, result: TargetResult, item: CrawledItem, language: str)
 # ── RAG bridging (P2.3) ────────────────────────────────────────────────
 
 
+def is_own_report(title: str) -> bool:
+    """Scout/Dig 自家產出（含鏡射檔的 ✅ 前綴）不得成為『相關筆記』——
+    首次實跑 [[✅Scout-2026-07-11]] 連回了當天日報自己。"""
+    return title.lstrip("✅").strip().startswith(("Scout-", "Dig-"))
+
+
 def _find_related_notes(rag, item: CrawledItem, summary: str) -> list[str]:
     """Vault-note titles genuinely related to this item (deterministic, no
     LLM). Conservative distance gate; own mirrored Scout reports excluded so
@@ -239,7 +245,7 @@ def _find_related_notes(rag, item: CrawledItem, summary: str) -> list[str]:
         meta = hit.get("metadata") or {}
         title = str(meta.get("title") or "").strip()
         distance = hit.get("distance")
-        if not title or title in titles or title.startswith("Scout-"):
+        if not title or title in titles or is_own_report(title):
             continue
         if isinstance(distance, (int, float)) and distance > BRIDGE_MAX_DISTANCE:
             continue

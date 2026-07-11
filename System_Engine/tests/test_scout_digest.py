@@ -207,14 +207,18 @@ def test_bridging_links_related_vault_notes(tmp_path):
         hits=[
             {"metadata": {"title": "我的量子筆記"}, "distance": 0.30},
             {"metadata": {"title": "太遠的筆記"}, "distance": 0.90},
-            {"metadata": {"title": "Scout-2026-07-10"}, "distance": 0.10},
+            # Mirrored reports carry the ✅ prefix in their RAG title — the
+            # first live dig linked [[✅Scout-2026-07-11]] back to itself.
+            {"metadata": {"title": "✅Scout-2026-07-10"}, "distance": 0.10},
+            {"metadata": {"title": "✅Dig-Something"}, "distance": 0.10},
         ]
     )
     result = _run(tmp_path, rag=rag)
     content = result.report_path.read_text(encoding="utf-8")
     assert "相關筆記: [[我的量子筆記]]" in content
     assert "太遠的筆記" not in content  # over the distance gate
-    assert "[[Scout-2026-07-10]]" not in content  # own mirrored reports excluded
+    assert "Scout-2026-07-10" not in content  # own mirrored reports excluded
+    assert "Dig-Something" not in content
     assert rag.queries  # one query per item
 
 

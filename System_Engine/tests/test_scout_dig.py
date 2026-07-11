@@ -50,6 +50,7 @@ class FakeLLM:
 
     def complete(self, system_prompt, user_msg, *, stage="complete", **kwargs):
         self.calls.append((stage, user_msg))
+        self.systems = getattr(self, "systems", []) + [system_prompt]
         return self.select_reply if stage == "dig_select" else self.synth_reply
 
 
@@ -91,6 +92,9 @@ def test_run_dig_select_none_and_linked_failure():
     llm = FakeLLM(select_reply="NONE")
     result = run_dig(llm, "https://example.com/page", language="English", client=FakeClient())
     assert result.status == "succeeded" and result.followed == []
+    # No followed links → the no-links prompt variant (no "followed links add"
+    # section that the LLM would otherwise fill with boilerplate).
+    assert "ONE page's full text" in llm.systems[-1]
 
     # Candidates (login pre-filtered): 1=docs, 2=arxiv.
     llm = FakeLLM(select_reply="2")  # arxiv link — made unreachable
