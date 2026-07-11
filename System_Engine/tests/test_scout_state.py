@@ -67,6 +67,23 @@ def test_corrupt_state_file_starts_fresh(tmp_path):
     assert ScoutState(path).is_seen("anything")
 
 
+def test_domain_skiplist_three_strikes_then_retry_window(tmp_path):
+    state = ScoutState(tmp_path / "s.json")
+    domain = "paywall.example.com"
+    for _ in range(2):
+        state.record_content_fetch(domain, ok=False, now=NOW)
+    assert not state.domain_blocked(domain, now=NOW)  # 2 strikes → still trying
+    state.record_content_fetch(domain, ok=False, now=NOW)
+    assert state.domain_blocked(domain, now=NOW)  # 3rd strike → skipped
+    # …until the retry window elapses, then it gets another chance.
+    assert not state.domain_blocked(domain, now=NOW + timedelta(days=8))
+    # A success wipes the record entirely.
+    state.record_content_fetch(domain, ok=True, now=NOW)
+    assert not state.domain_blocked(domain, now=NOW)
+    state.save()
+    assert not ScoutState(state.path).domain_blocked(domain, now=NOW)
+
+
 def test_crawl_clock(tmp_path):
     state = ScoutState(tmp_path / "s.json")
     url = "https://github.com/trending"

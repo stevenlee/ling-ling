@@ -49,6 +49,21 @@ def test_fetch_throttles_by_item_domain():
     assert client.calls[0][1] == "blog.example.org"
 
 
+def test_fetch_uses_browser_profile_headers():
+    # News-site WAFs 403 unknown bot UAs — article fetches present a browser
+    # profile (listing/API fetches keep the honest Scout UA).
+    captured = {}
+
+    class Client:
+        def get(self, url, *, source, headers=None, **kwargs):
+            captured["headers"] = headers
+            return types.SimpleNamespace(text="<p>hi</p>", headers={"Content-Type": "text/html"})
+
+    fetch_item_content(Client(), _item())
+    assert "Mozilla/5.0" in captured["headers"]["User-Agent"]
+    assert "Accept-Language" in captured["headers"]
+
+
 def test_prefilled_content_skips_fetch():
     client = FakeClient()
     assert fetch_item_content(client, _item(content="already here")) == "already here"

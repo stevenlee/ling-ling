@@ -197,6 +197,23 @@ frontmatter：`title: Scout-YYYY-MM-DD`、`type: Scout`、`date_created`、
   - 原計劃的 `ScoutAnalysis.md` operation prompt **不做**——綜合分析
     已於 R2 移除，逐條分析 prompt 留在 digest.py（單一使用點，
     無 persona 交叉組合需求）。
+- **R4（2026-07-11，首次實跑回饋）**：內文抓取三修——
+  (1) 文章抓取改**瀏覽器 header**（news 站 WAF 403 掉 bot UA；
+  investors.com/sciencedirect 實測；FPO 先例，PoliteHttpClient caller-headers
+  機制）；榜單/API 抓取維持誠實 Scout UA。(2) **自適應域名跳過**：同域名
+  連續 3 次抓不到內文 → 7 天內直接用摘錄（state `domains` 計數，成功歸零）
+  ——付費牆站不再天天燒 15-30 秒逾時。(3) 內文未取得的項目行尾標註
+  「（未取得內文，僅依標題與摘錄分析）」，讀者知情。
+- **Phase 4a（2026-07-11 完成）— `@ling-dig` 按需深挖（討論選項 D）**：
+  日報維持淺層；人挑目標丟 `@ling-dig <url>` → `services/scout/dig.py`
+  抓主頁全文（16k 上限）→ 抽候選連結（≤25）→ LLM 選 ≤4 條值得跟進
+  （文件/論文/原始碼/討論串，回編號、可回 NONE）→ 抓回（各 5k）→
+  一次綜合成深掘筆記（含跟進連結清單＋vault 相關筆記節）→
+  `✅Dig-標題-時間.md` 寫 fromLingLing ＋ 鏡射 Notes/Scout/。
+  單次成本 ≈ 5-6 次抓取＋2 次 LLM 呼叫。
+  **Phase 4b（backlog）— 自動深掘（選項 C）**：等 @ling-dig 用出手感、
+  知道「哪種條目值得挖」之後，再上確定性選擇器（bridging 距離＋streak＋
+  來源熱度 top-K）的每日自動深掘節。
 
 ## 8. 測試
 

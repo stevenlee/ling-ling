@@ -61,6 +61,9 @@ INTENT_ROUTES = [
     # Scout — run the crawl → daily-digest pass on demand (same path as the
     # scheduler's scout_daily; shared dedupe state). Dispatches ScoutAgent.
     (["scout"], ["scout"], "scout"),
+    # Scout deep-dig — follow ONE url from a digest one level deeper into a
+    # deep-dive note (human picks the target). Dispatches DigAgent.
+    (["dig"], ["dig"], "dig"),
     (["profiles", "profile"], ["profiles", "profile"], "profiles"),
     # "recalled" before "recall": longer trigger first, else @ling-recalled
     # would false-match the recall (Q&A) route. Fires a spaced-review reinforce.

@@ -19,6 +19,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 SEEN_WINDOW_DAYS = 30
+# Adaptive content-fetch skip: after this many CONSECUTIVE failed content
+# fetches, a domain is skipped (snippet-only analysis) until the retry window
+# elapses — paywalled/bot-hostile sites (sciencedirect …) otherwise burn
+# 15-30s of timeout per item every single day. A success resets the counter.
+DOMAIN_SKIP_AFTER_FAILS = 3
+DOMAIN_RETRY_DAYS = 7
 
 
 def _hash_key(dedupe_key: str) -> str:
@@ -37,18 +43,23 @@ class ScoutState:
         self.path = path
         self._data = self._load()
 
+    @staticmethod
+    def _fresh() -> dict:
+        return {"targets": {}, "seen": {}, "domains": {}}
+
     def _load(self) -> dict:
         if not self.path.exists():
-            return {"targets": {}, "seen": {}}
+            return self._fresh()
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except Exception as e:
             logging.warning(f"Scout: failed to load state ({e}); starting fresh.")
-            return {"targets": {}, "seen": {}}
+            return self._fresh()
         if not isinstance(data, dict):
-            return {"targets": {}, "seen": {}}
+            return self._fresh()
         data.setdefault("targets", {})
         data.setdefault("seen", {})
+        data.setdefault("domains", {})
         # v1 → v2: bare first-seen iso string becomes an entry dict.
         for key, value in list(data["seen"].items()):
             if isinstance(value, str):
@@ -112,6 +123,27 @@ class ScoutState:
         for key in stale:
             del self._data["seen"][key]
         return len(stale)
+
+    # ── adaptive content-fetch domain skiplist ─────────────────────────
+
+    def domain_blocked(self, domain: str, *, now: datetime | None = None) -> bool:
+        entry = self._data["domains"].get(domain)
+        if not entry or int(entry.get("fails", 0)) < DOMAIN_SKIP_AFTER_FAILS:
+            return False
+        last_fail = _parse_dt(entry.get("last_fail_at"))
+        if last_fail is None:
+            return False
+        now = now or datetime.now()
+        return (now - last_fail) < timedelta(days=DOMAIN_RETRY_DAYS)
+
+    def record_content_fetch(self, domain: str, *, ok: bool, now: datetime | None = None) -> None:
+        if ok:
+            self._data["domains"].pop(domain, None)  # success resets the strike count
+            return
+        now = now or datetime.now()
+        entry = self._data["domains"].setdefault(domain, {"fails": 0})
+        entry["fails"] = int(entry.get("fails", 0)) + 1
+        entry["last_fail_at"] = now.isoformat(timespec="seconds")
 
     # ── per-target crawl clock ─────────────────────────────────────────
 

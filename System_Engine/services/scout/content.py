@@ -18,6 +18,20 @@ from services.scout.models import CrawledItem
 
 MAX_CONTENT_CHARS = 8000
 
+# Article fetches use a browser profile: news-site WAFs 403 unknown bot UAs
+# (investors.com, sciencedirect — observed live 2026-07-11). Same precedent
+# as research_pipeline fetching FPO with a browser UA; listing/API fetches
+# (GH/HN/arXiv) keep the honest Scout UA. PoliteHttpClient lets caller
+# headers win over its default.
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,zh-TW;q=0.8",
+}
+
 _WS_RE = re.compile(r"[ \t]*\n[ \t\n]*")
 _SPACES_RE = re.compile(r"[ \t]{2,}")
 
@@ -33,7 +47,9 @@ def fetch_item_content(client: PoliteHttpClient, item: CrawledItem) -> str:
 
     source = (urlparse(item.url).hostname or "item").lower()
     try:
-        response = client.get(item.url, source=source, timeout=15, retries=1)
+        response = client.get(
+            item.url, source=source, headers=dict(BROWSER_HEADERS), timeout=15, retries=1
+        )
     except requests.exceptions.RequestException as e:
         logging.info(f"Scout: content fetch failed for {item.url}: {e}")
         return ""
@@ -49,7 +65,7 @@ def fetch_item_content(client: PoliteHttpClient, item: CrawledItem) -> str:
         return ""
 
 
-def extract_text(html: str) -> str:
+def extract_text(html: str, *, max_chars: int = MAX_CONTENT_CHARS) -> str:
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(html, "lxml")
@@ -59,4 +75,4 @@ def extract_text(html: str) -> str:
     text = root.get_text(separator="\n")
     text = _SPACES_RE.sub(" ", text)
     text = _WS_RE.sub("\n", text).strip()
-    return text[:MAX_CONTENT_CHARS]
+    return text[:max_chars]

@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -108,13 +109,18 @@ def run_scout_digest(
         per_target: dict[int, str] = {}
         for i, item in enumerate(r.items, start=1):
             if fetch_content and not item.content:
-                item.content = fetch_item_content(client, item)
+                domain = (urlparse(item.url).hostname or "").lower()
+                if domain and not state.domain_blocked(domain, now=now):
+                    item.content = fetch_item_content(client, item)
+                    state.record_content_fetch(domain, ok=bool(item.content), now=now)
+                item.content_missing = not item.content
             summary = _summarize_item(llm, r, item, language)
             if summary:
                 per_target[i] = summary
             if bridging:
                 item.related = _find_related_notes(rag, item, summary)
         summaries[id(r)] = per_target
+    state.save()  # persist the domain strike counts gathered above
 
     body = _render_body(now, results, summaries)
     mirror_to = mirror_dir if getattr(settings, "SCOUT_MIRROR", True) else None
@@ -250,6 +256,8 @@ def _render_item(item: CrawledItem, summary: str | None) -> str:
     text = summary or item.snippet
     if text:
         line += f" — {text}"
+    if item.content_missing:
+        line += "（未取得內文，僅依標題與摘錄分析）"
     if item.related:
         line += "｜相關筆記: " + "、".join(f"[[{title}]]" for title in item.related)
     return line

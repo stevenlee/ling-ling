@@ -16,6 +16,7 @@ from agents.blog_agent import BlogAgent
 from agents.code_review_agent import CodeReviewAgent
 from agents.architect_agent import ArchitectAgent
 from agents.scout_agent import ScoutAgent
+from agents.dig_agent import DigAgent
 
 
 class AgentRegistry:
@@ -42,6 +43,7 @@ class AgentRegistry:
             "review": ReviewAgent,
             "blog": BlogAgent,
             "scout": ScoutAgent,
+            "dig": DigAgent,
         }
 
     def get_agent(self, command_key: str):

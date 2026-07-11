@@ -47,6 +47,9 @@ class CrawledItem:
     content: str = ""
     # P2.3 RAG bridging: titles of related vault notes, rendered as [[links]].
     related: list[str] = field(default_factory=list)
+    # Content fetch was attempted (or domain-skipped) but yielded nothing —
+    # the analysis is snippet-only, and the report line says so.
+    content_missing: bool = False
 
 
 @dataclass

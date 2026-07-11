@@ -145,12 +145,33 @@ def test_item_analysis_is_grounded_in_fetched_content(tmp_path):
 
 def test_dead_item_link_degrades_to_snippet_grounding(tmp_path):
     # Only the ITEM page is broken (the HN listing itself works): the summary
-    # call still happens, grounded on title+snippet instead of content.
+    # call still happens, grounded on title+snippet instead of content, and
+    # the report line says so.
     llm = FakeLLM()
     result = _run(tmp_path, llm=llm, client=FakeClient(broken=("example.com",)))
     assert result.status == "succeeded"
     hn_msgs = [msg for stage, msg in llm.calls if "Show HN" in msg]
     assert hn_msgs and "(unavailable" in hn_msgs[0]
+    report = result.report_path.read_text(encoding="utf-8")
+    assert "（未取得內文，僅依標題與摘錄分析）" in report
+    # The domain strike was persisted for the adaptive skiplist.
+    assert ScoutState(tmp_path / "scout_state.json").is_seen(
+        "https://news.ycombinator.com/item?id=101"
+    )
+
+
+def test_blocked_domain_skips_content_fetch_entirely(tmp_path):
+    state = ScoutState(tmp_path / "scout_state.json")
+    for _ in range(3):
+        state.record_content_fetch("example.com", ok=False, now=NOW - timedelta(days=1))
+    state.save()
+
+    client = FakeClient()
+    result = _run(tmp_path, client=client)
+    # The HN item links to example.com — content fetch must not even be tried.
+    assert not any("example.com/thing" in url for url in client.calls)
+    report = result.report_path.read_text(encoding="utf-8")
+    assert "（未取得內文，僅依標題與摘錄分析）" in report
 
 
 def test_report_is_mirrored_byte_identical(tmp_path):
