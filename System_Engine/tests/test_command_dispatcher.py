@@ -44,6 +44,18 @@ def test_ordering_longer_triggers_win():
     assert detect_intent("x.md", "/recall hilbert") == "recall"
 
 
+def test_trigger_word_boundary_no_prefix_swallow():
+    # `/count` (lens) must NOT swallow `/counterfactual` — before the boundary
+    # fix, @ling-insight /counterfactual routed to lens and the counterfactual
+    # insight strategy was unreachable.
+    assert detect_intent(f"{COMMAND_PREFIX}insight x.md", "/counterfactual") == "insight"
+    assert detect_intent("x.md", "/counterfactual") != "lens"
+    assert detect_intent(f"{COMMAND_PREFIX}counterfactual.md", "") != "lens"
+    # the real /count command still resolves to lens
+    assert detect_intent("x.md", "/count 熵") == "lens"
+    assert detect_intent(f"{COMMAND_PREFIX}count x.md", "") == "lens"
+
+
 def test_brain_ops_are_all_routable():
     routable = {intent for _, _, intent in INTENT_ROUTES}
     assert _BRAIN_OPS <= routable

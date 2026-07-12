@@ -107,14 +107,25 @@ _BRAIN_OPS = {
 _KB_OPS = {"kb_zip", "kb_unzip", "kb_reset"}
 
 
+def _trigger_hit(token: str, text: str) -> bool:
+    """True if `token` appears in `text` as a whole command word, i.e. not as a
+    prefix of a longer alphanumeric word. Without the boundary, the lens trigger
+    `/count` swallows `/counterfactual` (and `@ling-count` swallows
+    `@ling-counterfactual`), so the counterfactual insight strategy could never
+    be invoked — the lens route matched first. A trailing hyphen still counts as
+    a boundary so hyphen-separated names (`@ling-insight-verify`, `/repair-db`)
+    keep matching their trigger."""
+    return re.search(rf"{re.escape(token)}(?![a-z0-9])", text) is not None
+
+
 def detect_intent(lower_name: str, lower_query: str) -> str | None:
     """Walk the INTENT_ROUTES table and return the first matching intent key."""
     for filename_triggers, slash_triggers, intent_key in INTENT_ROUTES:
         for trigger in filename_triggers:
-            if f"{COMMAND_PREFIX}{trigger}" in lower_name:
+            if _trigger_hit(f"{COMMAND_PREFIX}{trigger}", lower_name):
                 return intent_key
         for trigger in slash_triggers:
-            if f"/{trigger}" in lower_query:
+            if _trigger_hit(f"/{trigger}", lower_query):
                 return intent_key
     return None
 
