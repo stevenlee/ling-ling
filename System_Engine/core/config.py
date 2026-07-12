@@ -189,6 +189,10 @@ CORTEX_GROUNDED_INSIGHT_ENABLED = (
 )
 CORTEX_GROUND_MIN_FALSIFIABILITY = float(os.getenv("CORTEX_GROUND_MIN_FALSIFIABILITY", "0.5"))
 CORTEX_GROUND_TOP_K = max(1, int(os.getenv("CORTEX_GROUND_TOP_K", "3")))
+# MMR trade-off when picking priors from the falsifiable pool: 1.0 = pure
+# relevance (the old top-k behavior that concentrated grounding on hub claims),
+# 0.0 = pure diversity. 0.5 balances relevant-but-distinct priors.
+CORTEX_GROUND_MMR_LAMBDA = max(0.0, min(1.0, float(os.getenv("CORTEX_GROUND_MMR_LAMBDA", "0.5"))))
 CORTEX_GROUND_FRACTION = max(0.0, min(1.0, float(os.getenv("CORTEX_GROUND_FRACTION", "0.7"))))
 # Bounds for M4 auto-tuning of the grounding fraction. Never ground every seed
 # (the cold control group must survive for the canary) and never so few that

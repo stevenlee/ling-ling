@@ -225,3 +225,122 @@ def test_execute_small_corpus_feeds_all_claims(tmp_path, monkeypatch):
     # P4: recall pins to OUTPUT_LANGUAGE (banner), not a hardcoded 繁體中文.
     assert captured["kw"].get("pin_language") is True
     assert "繁體中文" not in captured["system_prompt"]
+
+
+# ── MMR diversity (select_diverse) — 2026-07-12 audit: grounding concentration ──
+
+
+def test_select_diverse_breaks_hub_cluster():
+    """Three near-duplicate hub claims + two distinct ones. Pure top-k relevance
+    would return the three hubs; MMR must pull in the distinct claims instead."""
+    from services.cortex_recall import select_diverse
+    from services.cortex_store import CortexPage
+
+    def pg(cid, claim):
+        return CortexPage(
+            claim_id=cid,
+            path=None,
+            claim=claim,
+            status="active",
+            confidence=0.5,
+            falsifiability=0.5,
+            falsifier="",
+            contradictions=[],
+        )
+
+    # hub1/2/3 embed near-identically (same one-hot axis); distinct claims differ.
+    rag = FakeRAG(
+        {
+            "HUB": (1.0, 0.0, 0.0),
+            "ALPHA": (0.0, 1.0, 0.0),
+            "BETA": (0.0, 0.0, 1.0),
+        }
+    )
+    scored = [
+        (0.99, pg("h1", "HUB one")),
+        (0.98, pg("h2", "HUB two")),
+        (0.97, pg("h3", "HUB three")),
+        (0.80, pg("a", "ALPHA distinct")),
+        (0.70, pg("b", "BETA distinct")),
+    ]
+    picked = select_diverse(rag, scored, 3, lambda_=0.5)
+    ids = [p.claim_id for p in picked]
+    # Top relevance still seeds slot 1; but the two hub near-dups must NOT both
+    # follow — diversity pulls in alpha/beta.
+    assert ids[0] == "h1"
+    assert "a" in ids and "b" in ids
+    assert not ("h2" in ids and "h3" in ids)
+
+
+def test_select_diverse_passthrough_when_pool_small():
+    from services.cortex_recall import select_diverse
+    from services.cortex_store import CortexPage
+
+    def pg(cid):
+        return CortexPage(
+            claim_id=cid,
+            path=None,
+            claim=cid,
+            status="active",
+            confidence=0.5,
+            falsifiability=0.5,
+            falsifier="",
+            contradictions=[],
+        )
+
+    scored = [(0.9, pg("x")), (0.8, pg("y"))]
+    # pool <= k → return all, order preserved, no embedding call needed.
+    assert [p.claim_id for p in select_diverse(None, scored, 3)] == ["x", "y"]
+
+
+def test_select_diverse_failopen_to_topk():
+    """Embedding failure must fall back to plain top-k, never raise."""
+    from services.cortex_recall import select_diverse
+    from services.cortex_store import CortexPage
+
+    class BoomRAG:
+        def ef(self, texts):
+            raise RuntimeError("embedding down")
+
+    def pg(cid):
+        return CortexPage(
+            claim_id=cid,
+            path=None,
+            claim=cid,
+            status="active",
+            confidence=0.5,
+            falsifiability=0.5,
+            falsifier="",
+            contradictions=[],
+        )
+
+    scored = [(0.9, pg("x")), (0.8, pg("y")), (0.7, pg("z"))]
+    out = select_diverse(BoomRAG(), scored, 2, lambda_=0.5)
+    assert [p.claim_id for p in out] == ["x", "y"]
+
+
+def test_select_diverse_lambda_one_is_pure_relevance():
+    """lambda_=1.0 reproduces the old top-k behavior (relevance only)."""
+    from services.cortex_recall import select_diverse
+    from services.cortex_store import CortexPage
+
+    def pg(cid, claim):
+        return CortexPage(
+            claim_id=cid,
+            path=None,
+            claim=claim,
+            status="active",
+            confidence=0.5,
+            falsifiability=0.5,
+            falsifier="",
+            contradictions=[],
+        )
+
+    rag = FakeRAG({"HUB": (1.0, 0.0, 0.0), "ALPHA": (0.0, 1.0, 0.0)})
+    scored = [
+        (0.99, pg("h1", "HUB one")),
+        (0.98, pg("h2", "HUB two")),
+        (0.50, pg("a", "ALPHA distinct")),
+    ]
+    ids = [p.claim_id for p in select_diverse(rag, scored, 2, lambda_=1.0)]
+    assert ids == ["h1", "h2"]

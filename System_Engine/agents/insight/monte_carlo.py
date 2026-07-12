@@ -248,10 +248,18 @@ class MonteCarloMixin:
     def _cortex_priors(self, idea: str) -> list:
         """Relevant Cortex claims to use as DIALECTICAL priors. Falsifiability-
         gated (defense 3): unfalsifiable beliefs can't be wrong, so they only
-        self-reinforce — never let them anchor generation. Returns CortexPages."""
+        self-reinforce — never let them anchor generation. Returns CortexPages.
+
+        Selection is MMR-diversified, not pure top-k relevance: the central
+        "從 X 轉向 Y" hub claims win every relevance race, so top-k alone grounds
+        insight after insight on the same handful of claims (2026-07-12 audit:
+        top-4 ids carried 88% of grounding while ~50 falsifiable claims never
+        anchored anything). MMR pulls the 2nd/3rd priors toward distinct claims.
+        """
         from core.config import (
             CORTEX_DIR,
             CORTEX_GROUND_MIN_FALSIFIABILITY,
+            CORTEX_GROUND_MMR_LAMBDA,
             CORTEX_GROUND_TOP_K,
         )
         from services.cortex_store import load_all_pages
@@ -266,15 +274,18 @@ class MonteCarloMixin:
         ]
         if len(falsifiable) <= CORTEX_GROUND_TOP_K:
             return falsifiable
-        # Rank by relevance only when there are more than we'll use.
-        from services.cortex_recall import recall_claims
+        # Rank by relevance, then MMR-diversify. Restrict to the falsifiable set
+        # BEFORE truncating: recall_claims ranks all active/dormant claims (it
+        # doesn't apply the falsifiability gate), so a large top_k + post-filter
+        # keeps defense-3 intact instead of letting unfalsifiable claims through.
+        from services.cortex_recall import recall_claims, select_diverse
 
-        ranked = recall_claims(
-            self.rag, idea, cortex_dir=CORTEX_DIR, top_k=CORTEX_GROUND_TOP_K, min_score=0.0
-        )
-        ranked_pages = [p for _, p in ranked]
-        # Fall back to the unranked falsifiable set if recall returned nothing.
-        return ranked_pages or falsifiable[:CORTEX_GROUND_TOP_K]
+        fids = {p.claim_id for p in falsifiable}
+        ranked = recall_claims(self.rag, idea, cortex_dir=CORTEX_DIR, top_k=10_000, min_score=0.0)
+        pool = [(s, p) for s, p in ranked if p.claim_id in fids]
+        if not pool:
+            return falsifiable[:CORTEX_GROUND_TOP_K]
+        return select_diverse(self.rag, pool, CORTEX_GROUND_TOP_K, lambda_=CORTEX_GROUND_MMR_LAMBDA)
 
     def _grounding_block(self, priors: list) -> str:
         lines = [

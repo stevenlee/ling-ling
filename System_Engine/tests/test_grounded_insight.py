@@ -57,6 +57,69 @@ def test_cortex_priors_falsifiability_gate(tmp_path, monkeypatch):
     assert "unscored aphorism" not in claims
 
 
+class _FakeRAG:
+    """ef → one-hot by keyword substring (deterministic)."""
+
+    def __init__(self, vec_map, default=(0.01, 0.01, 0.01)):
+        self.vec_map = vec_map
+        self.default = list(default)
+
+    def ef(self, texts):
+        out = []
+        for t in texts:
+            v = next((list(vec) for key, vec in self.vec_map.items() if key in t), None)
+            out.append(v if v is not None else list(self.default))
+        return out
+
+
+def test_cortex_priors_falsifiability_gate_holds_through_ranked_path(tmp_path, monkeypatch):
+    """When >TOP_K falsifiable claims exist, selection goes through recall_claims
+    (which ranks ALL active/dormant claims, not just falsifiable ones). The gate
+    must still exclude unfalsifiable claims — previously the ranked path leaked
+    them (2026-07-12 audit fix)."""
+    _page(tmp_path, "HUB falsifiable one", 0.8, falsifier="a")
+    _page(tmp_path, "HUB falsifiable two", 0.8, falsifier="b")
+    _page(tmp_path, "ALPHA falsifiable three", 0.8, falsifier="c")
+    _page(tmp_path, "HUB unfalsifiable value", 0.0)  # high-relevance but must stay out
+    monkeypatch.setattr("core.config.CORTEX_DIR", tmp_path)
+    monkeypatch.setattr("core.config.CORTEX_GROUND_MIN_FALSIFIABILITY", 0.5)
+    monkeypatch.setattr("core.config.CORTEX_GROUND_TOP_K", 2)
+
+    a = InsightAgent.__new__(InsightAgent)
+    a.rag = _FakeRAG({"HUB": (1.0, 0.0, 0.0), "ALPHA": (0.0, 1.0, 0.0)})
+    claims = {p.claim for p in a._cortex_priors("HUB topic")}
+    assert "HUB unfalsifiable value" not in claims  # gate holds through ranked path
+    assert len(claims) == 2
+
+
+def test_cortex_priors_mmr_diversifies_over_hub(tmp_path, monkeypatch):
+    """Two near-duplicate hubs + one distinct claim, TOP_K=2. Pure relevance
+    returns both hubs; MMR must swap the 2nd hub for the distinct claim."""
+    _page(tmp_path, "HUB falsifiable one", 0.8, falsifier="a")
+    _page(tmp_path, "HUB falsifiable two", 0.8, falsifier="b")
+    _page(tmp_path, "ALPHA distinct claim", 0.8, falsifier="c")
+    monkeypatch.setattr("core.config.CORTEX_DIR", tmp_path)
+    monkeypatch.setattr("core.config.CORTEX_GROUND_MIN_FALSIFIABILITY", 0.5)
+    monkeypatch.setattr("core.config.CORTEX_GROUND_TOP_K", 2)
+    monkeypatch.setattr("core.config.CORTEX_GROUND_MMR_LAMBDA", 0.5)
+
+    a = InsightAgent.__new__(InsightAgent)
+    # Query is equally relevant to the hub axis and the alpha axis; the two hubs
+    # are mutually identical, alpha is orthogonal to the hub. Pure top-k would
+    # keep both hubs (equal relevance); MMR must swap the redundant 2nd hub for
+    # alpha, whose similarity to the selected hub is 0.
+    a.rag = _FakeRAG(
+        {
+            "QUERY": (0.7, 0.7, 0.0),
+            "HUB": (1.0, 0.0, 0.0),
+            "ALPHA": (0.0, 1.0, 0.0),
+        }
+    )
+    claims = {p.claim for p in a._cortex_priors("QUERY topic")}
+    assert "ALPHA distinct claim" in claims  # diversity broke the hub cluster
+    assert not ({"HUB falsifiable one", "HUB falsifiable two"} <= claims)
+
+
 def test_grounding_block_is_dialectical(tmp_path):
     p = _page(tmp_path, "X causes Y", 0.8, falsifier="X without Y")
     block = _agent()._grounding_block([p])

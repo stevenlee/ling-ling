@@ -25,6 +25,7 @@ from services.cortex_store import CortexPage, load_all_pages
 
 def _cosine(a, b) -> float:
     import numpy as np
+
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
     denom = float(np.linalg.norm(a) * np.linalg.norm(b))
@@ -87,8 +88,9 @@ def recall_claims(
         return []
 
     if hybrid and len(pages) > 1:
-        bm25 = _bm25_scores(query, pages)            # {claim_id: raw bm25}
+        bm25 = _bm25_scores(query, pages)  # {claim_id: raw bm25}
         max_bm25 = max(bm25.values()) if bm25 else 0.0
+
         # MAGNITUDE-aware fusion, not rank-based RRF. At Cortex scale (~dozens
         # of claims) RRF's k=60 dampening flattens a strong, spiky BM25 signal
         # (a literal-term hit scoring 4x the runner-up) down to a rank-1-barely-
@@ -100,6 +102,7 @@ def recall_claims(
         def fused(cid: str) -> float:
             b = (bm25.get(cid, 0.0) / max_bm25) if max_bm25 > 0 else 0.0
             return _W_VEC * cosine[cid] + _W_BM25 * b
+
         order = sorted(pages, key=lambda p: fused(p.claim_id), reverse=True)
     else:
         order = sorted(pages, key=lambda p: cosine[p.claim_id], reverse=True)
@@ -113,6 +116,59 @@ _W_VEC = 0.5
 _W_BM25 = 0.5
 
 
+def select_diverse(
+    rag,
+    scored_pages: list[tuple[float, CortexPage]],
+    k: int,
+    *,
+    lambda_: float = 0.5,
+) -> list[CortexPage]:
+    """MMR-select k pages balancing query-relevance against mutual diversity.
+
+    Pure top-k relevance repeatedly returns the same few CENTRAL claims — the
+    generic "從 X 轉向 Y" hubs win every relevance race — so, over many runs,
+    insights ground on a dozen claims while dozens more never anchor anything
+    (2026-07-12 audit: top-4 cortex ids carried 88% of all grounding). MMR
+    breaks that: because the hub claims are near-duplicates of one another,
+    picking one makes the rest look redundant, so the second and third slots go
+    to relevant-but-distinct claims. `scored_pages` must be sorted by relevance
+    descending (recall_claims output). Fail-open: on any embedding failure,
+    falls back to the incoming top-k order (the previous behavior).
+    """
+    if k <= 0 or not scored_pages:
+        return []
+    if len(scored_pages) <= k:
+        return [p for _, p in scored_pages]
+    try:
+        import numpy as np
+
+        vecs = rag.ef([p.claim for _, p in scored_pages])
+        if not vecs or len(vecs) != len(scored_pages):
+            raise ValueError("embedding count mismatch")
+        mat = [np.asarray(v, dtype=float) for v in vecs]
+        norms = [float(np.linalg.norm(v)) or 1.0 for v in mat]
+
+        def sim(i: int, j: int) -> float:
+            return float(np.dot(mat[i], mat[j])) / (norms[i] * norms[j])
+
+        rel = [s for s, _ in scored_pages]
+        selected: list[int] = []
+        candidates = list(range(len(scored_pages)))
+        while candidates and len(selected) < k:
+            best_i, best_score = candidates[0], float("-inf")
+            for i in candidates:
+                diversity = max((sim(i, j) for j in selected), default=0.0)
+                score = lambda_ * rel[i] - (1.0 - lambda_) * diversity
+                if score > best_score:
+                    best_score, best_i = score, i
+            selected.append(best_i)
+            candidates.remove(best_i)
+        return [scored_pages[i][1] for i in selected]
+    except Exception as e:
+        logging.warning(f"cortex_recall.select_diverse: MMR failed, using top-k: {e}")
+        return [p for _, p in scored_pages[:k]]
+
+
 def _bm25_scores(query: str, pages: list[CortexPage]) -> dict[str, float]:
     """{claim_id: BM25 score} over claim text (char-level CJK tokens).
 
@@ -121,6 +177,7 @@ def _bm25_scores(query: str, pages: list[CortexPage]) -> dict[str, float]:
     """
     try:
         from rank_bm25 import BM25Okapi
+
         bm25 = BM25Okapi([tokenize(p.claim) for p in pages])
         scores = bm25.get_scores(tokenize(query))
         return {pages[i].claim_id: float(scores[i]) for i in range(len(pages))}
