@@ -791,15 +791,17 @@ class TestOperationLens:
 
 
 class TestCreativeMode:
-    """report_mode: creative — lens-first expand + lean report (fable/dialogue)."""
+    """report_mode: creative|lean — lens-first expand + lean report (fable/
+    dialogue = creative; analogy/counterfactual = lean; montecarlo = neither)."""
 
-    def test_is_creative_flag(self):
+    def test_is_lean_flag(self):
         from agents.insight.monte_carlo import MonteCarloMixin
 
-        assert MonteCarloMixin._is_creative({"report_mode": "creative"}) is True
-        assert MonteCarloMixin._is_creative({"report_mode": "analytical"}) is False
-        assert MonteCarloMixin._is_creative({}) is False
-        assert MonteCarloMixin._is_creative(None) is False
+        assert MonteCarloMixin._is_lean({"report_mode": "creative"}) is True
+        assert MonteCarloMixin._is_lean({"report_mode": "lean"}) is True
+        assert MonteCarloMixin._is_lean({"report_mode": "analytical"}) is False
+        assert MonteCarloMixin._is_lean({}) is False
+        assert MonteCarloMixin._is_lean(None) is False
 
     def _expand_agent(self, capture):
         agent = InsightAgent.__new__(InsightAgent)
@@ -830,6 +832,18 @@ class TestCreativeMode:
         assert "Fabulist" in p  # lens present
         assert "thesis statement" not in p.lower()  # analytical scaffold dropped
         assert "Practical implications" not in p
+
+    def test_lean_expand_drops_analytical_scaffold(self):
+        # analogy/counterfactual use report_mode: lean → same lens-first expand.
+        cap = {}
+        agent = self._expand_agent(cap)
+        agent._expand_seed(
+            {"idea": "x", "source_a": "A", "source_b": "B", "reasoning": "r"},
+            {"report_mode": "lean", "system_prompt": "Act as an Analogist. ## Expansion 映射表"},
+        )
+        p = cap["prompt"]
+        assert "Analogist" in p
+        assert "thesis statement" not in p.lower()
 
     def test_analytical_expand_keeps_scaffold(self):
         cap = {}
@@ -890,12 +904,46 @@ class TestCreativeMode:
                 return "Traditional Chinese"
 
         agent.llm = _LLM()
-        note = agent._creative_closing(
+        note = agent._lean_closing(
             [{"source_a": "A", "source_b": "B"}],
             {"name": "fable", "description": "d", "system_prompt": "Fabulist ## Expansion ..."},
         )
         assert "#" not in note  # all header lines stripped
         assert "第 1 則最成功" in note
+
+    def test_montecarlo_eval_drops_forced_strategy_template(self):
+        # montecarlo keeps its scorecard but its cross-round eval must no longer
+        # force the 戰略建議 action-item list or the insight-rpt skeleton (the
+        # audit's 43% homogenization cluster).
+        cap = {}
+        agent = InsightAgent.__new__(InsightAgent)
+        agent._temp_synthesize = 0.3
+
+        class _LLM:
+            def answer_query(self, query_content, wiki_context="", **kw):
+                cap.update(kw)
+                return "EVAL PROSE"
+
+            def _get_lang_hint(self):
+                return "Traditional Chinese"
+
+        agent.llm = _LLM()
+        out = agent._cross_round_evaluation(
+            "scorecard",
+            [{"round": 1, "idea": "i", "source_a": "A", "source_b": "B"}],
+            1,
+            "",
+            None,
+            {"name": "montecarlo"},
+        )
+        assert out == "EVAL PROSE"
+        # no forced action-item list, no insight-rpt skeleton default
+        assert "concrete action items" not in cap["custom_instruction"]
+        assert cap["default_template"] == "none"
+        # a caller-forced template still wins
+        cap.clear()
+        agent._cross_round_evaluation("sc", [], 1, "", "my-template", {"name": "montecarlo"})
+        assert cap["forced_template"] == "my-template"
 
 
 class TestRotation:

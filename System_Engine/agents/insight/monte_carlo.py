@@ -50,14 +50,19 @@ class MonteCarloMixin:
         return f"\n\n## Operation Lens (strategy-specific)\n{lens}"
 
     @staticmethod
-    def _is_creative(config: dict | None) -> bool:
-        """Skill frontmatter `report_mode: creative` — the operation produces an
-        artifact (fable, dialogue), not an analysis. Two effects: the expand
-        stage follows the lens instead of imposing a thesis/arguments structure,
-        and the report skips the montecarlo scorecard/cross-round scaffolding
-        (which is tonally wrong for a story AND dilutes the novelty signal, since
-        ~80% of a scaffolded report is shared boilerplate)."""
-        return ((config or {}).get("report_mode") or "").strip().lower() == "creative"
+    def _is_lean(config: dict | None) -> bool:
+        """Skill frontmatter `report_mode: creative|lean` — the operation carries
+        its OWN output shape (a fable, a dialogue, a structural mapping table, a
+        counterfactual stress-test), so it should NOT be wrapped in the montecarlo
+        analytical scaffolding. Two effects: the expand stage follows the lens
+        instead of imposing a thesis/arguments structure, and the report skips the
+        scorecard / cross-round / 戰略建議 boilerplate — which is the 43% homogeni-
+        zation cluster the 2026-07-12 audit found (95% of 戰略建議 was template
+        fill) AND dilutes the novelty signal (~80% of a scaffolded report is
+        shared boilerplate). `creative` (fable/dialogue) and `lean` (analogy/
+        counterfactual) behave identically here; the two labels just document
+        whether the output is an artifact or a structured analysis."""
+        return ((config or {}).get("report_mode") or "").strip().lower() in ("creative", "lean")
 
     def _run_montecarlo(
         self, config: dict, user_directive: str, resolved_template: str | None = None
@@ -344,17 +349,19 @@ class MonteCarloMixin:
             f"**Sources**: [[{seed.get('source_a', '')}]] × [[{seed.get('source_b', '')}]]\n\n"
             f"## Supporting Evidence (from semantic search)\n{evidence_context}\n\n"
         )
-        if self._is_creative(config):
-            # Creative mode: the lens's own Expansion phase IS the instruction —
+        if self._is_lean(config):
+            # Lean mode: the lens's own Expansion phase IS the instruction —
             # don't impose the generic thesis/arguments/implications scaffold
             # (that structure was overriding the lens, e.g. dialogue coming out
-            # as an analytical report instead of a staged dialogue).
+            # as an analytical report instead of a staged dialogue, and
+            # counterfactual regressing to a standard analysis in ~40% of seeds).
             instructions = (
                 "## 任務\n"
                 "依下方 **Operation Lens** 的 `Expansion` 指引，把這個種子展開成它要求的"
-                "**創作成品本身**（例如一則寓言、一段對話）。務必忠於來源的實際機制、用"
-                " [[title]] 標註來源；但**絕不要**寫成 thesis／arguments／implications 的"
-                "分析結構，也不要「戰略建議／實務影響」這類段落——那會毀掉這個 operation。\n"
+                "**產出形態本身**（例如一則寓言、一段對話、一張結構映射表、一段反事實推演）。"
+                "務必忠於來源的實際機制、用 [[title]] 標註來源；但**絕不要**寫成"
+                " thesis／arguments／implications 的分析結構，也不要「戰略建議／實務影響」"
+                "這類段落——那會毀掉這個 operation。\n"
             )
         else:
             instructions = (
@@ -401,10 +408,11 @@ class MonteCarloMixin:
         user_directive: str,
         resolved_template: str | None = None,
     ) -> str:
-        # Creative operations skip the scorecard/cross-round scaffolding — it's
-        # tonally wrong for a fable and dilutes the novelty signal.
-        if self._is_creative(config):
-            return self._synthesize_creative(round_results, config, user_directive)
+        # Lean operations skip the scorecard/cross-round/戰略建議 scaffolding —
+        # it's tonally wrong for their output and is the audit's homogenization
+        # cluster. montecarlo (the analytical operation) keeps its scorecard.
+        if self._is_lean(config):
+            return self._synthesize_lean(round_results, config, user_directive)
 
         num_rounds = len(round_results)
         scorecard = self._build_scorecard(round_results)
@@ -428,12 +436,11 @@ class MonteCarloMixin:
             f"## 🔬 Per-Round Details\n\n" + "\n\n---\n\n".join(round_sections)
         )
 
-    def _synthesize_creative(
-        self, round_results: list[dict], config: dict, user_directive: str
-    ) -> str:
-        """Lean report for creative operations: emit the expanded artifacts
-        (fables / dialogues) directly with minimal framing, plus one short
-        editorial closing. No scorecard, no cross-round productivity analysis."""
+    def _synthesize_lean(self, round_results: list[dict], config: dict, user_directive: str) -> str:
+        """Lean report for lean/creative operations: emit the expanded outputs
+        (fables, dialogues, mapping tables, stress-tests) directly with minimal
+        framing, plus one short editorial closing. No scorecard, no cross-round
+        productivity analysis, no 戰略建議 template."""
         pieces = [
             seed
             for r in round_results
@@ -441,21 +448,21 @@ class MonteCarloMixin:
             if (seed.get("expanded") or "").strip()
         ]
         if not pieces:
-            return "（本次未產出可用的創作片段。）"
+            return "（本次未產出可用的片段。）"
 
-        op_name = config.get("name", "creative")
+        op_name = config.get("name", "insight")
         blocks = []
         for seed in pieces:
             src = f"[[{seed.get('source_a', '')}]] × [[{seed.get('source_b', '')}]]"
             blocks.append(f"{seed.get('expanded', '').strip()}\n\n<sub>— {src}</sub>")
         body = "\n\n---\n\n".join(blocks)
 
-        closing = self._creative_closing(pieces, config)
-        header = f"# ✨ {op_name}\n\n> 本次探索產出 {len(pieces)} 則創作片段。\n\n"
+        closing = self._lean_closing(pieces, config)
+        header = f"# ✨ {op_name}\n\n> 本次探索產出 {len(pieces)} 則成品。\n\n"
         tail = f"\n\n---\n\n## 🧵 綜合短評\n\n{closing}" if closing else ""
         return header + body + tail
 
-    def _creative_closing(self, pieces: list[dict], config: dict) -> str:
+    def _lean_closing(self, pieces: list[dict], config: dict) -> str:
         """A 2-3 sentence editorial note — which piece best realized the
         operation. Deliberately NOT the analytical scorecard/strategy block."""
         listing = "\n".join(
@@ -560,19 +567,27 @@ class MonteCarloMixin:
             f"1. Compares the quality and novelty across rounds\n"
             f"2. Identifies the single **global champion** insight and explains why it's the best\n"
             f"3. Notes which rounds were most/least productive and why\n"
-            f"4. Identifies meta-patterns that emerged across rounds\n"
-            f"5. Gives 2-3 concrete action items for the knowledge base owner\n\n"
+            f"4. Identifies meta-patterns that emerged across rounds\n\n"
+            f"Write flowing analytical prose. Do NOT emit a fixed 核心發現／語意關聯分析／"
+            f"戰略建議／視覺化地圖 skeleton, and do NOT append a generic "
+            f"'建立／開發／強化 ... 框架／模板／庫' action-item list — the 2026-07-12 audit "
+            f"found that section was 95% interchangeable template fill across reports. "
+            f"Any recommendation you make must name the specific champion insight it follows "
+            f"from, or omit it.\n\n"
             f"Output language: {self.llm._get_lang_hint()}\n"
             f"User context: {user_directive or '(none)'}"
             f"{self._operation_lens(config)}"
         )
+        # default_template="none": the insight-rpt template imposed the very
+        # 核心發現/語意關聯分析/戰略建議/視覺化地圖 skeleton the audit flagged;
+        # a caller-forced template still wins via resolved_template.
         return self.llm.answer_query(
             query_content="Evaluate the multi-round Monte Carlo exploration.",
             wiki_context="",
             custom_instruction=eval_prompt,
             temperature=self._temp_synthesize,
             forced_template=resolved_template,
-            default_template="insight-rpt",
+            default_template="none",
             persona="none",
             operation="synthesize",
         )

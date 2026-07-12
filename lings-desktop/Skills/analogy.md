@@ -3,6 +3,7 @@ name: analogy
 description: Forced structural transfer — rewrite one source's problem entirely in the other source's machinery, then honestly mark where the analogy breaks.
 pipeline: montecarlo
 refute_mode: lenient
+report_mode: lean
 num_rounds: 2
 num_sparks: 4
 top_k: 2
