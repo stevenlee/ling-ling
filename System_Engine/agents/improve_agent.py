@@ -36,9 +36,9 @@ from services.improvement_store import (
     unified_diff,
 )
 
-_APPROVE_RE = re.compile(r'approve[:\s]+([\w\-.]+)', re.IGNORECASE)
-_REJECT_RE = re.compile(r'reject[:\s]+([\w\-.]+)', re.IGNORECASE)
-_SHOW_RE = re.compile(r'show[:\s]+([\w\-.]+)', re.IGNORECASE)
+_APPROVE_RE = re.compile(r"approve[:\s]+([\w\-.]+)", re.IGNORECASE)
+_REJECT_RE = re.compile(r"reject[:\s]+([\w\-.]+)", re.IGNORECASE)
+_SHOW_RE = re.compile(r"show[:\s]+([\w\-.]+)", re.IGNORECASE)
 _ALLOWED = [TEMPLATES_DIR, PERSONAS_DIR, GUIDELINES_DIR]
 
 
@@ -46,13 +46,13 @@ class ImproveAgent(BaseAgent):
     def execute(self, context: dict) -> str:
         directive = (context.get("user_directive") or "").strip()
 
-        if (m := _APPROVE_RE.search(directive)):
+        if m := _APPROVE_RE.search(directive):
             body, title = self._approve(m.group(1)), f"Improve-approve-{m.group(1)}"
-        elif (m := _REJECT_RE.search(directive)):
+        elif m := _REJECT_RE.search(directive):
             body, title = self._reject(m.group(1)), f"Improve-reject-{m.group(1)}"
-        elif (m := _SHOW_RE.search(directive)):
+        elif m := _SHOW_RE.search(directive):
             body, title = self._show(m.group(1)), f"Improve-show-{m.group(1)}"
-        elif re.search(r'\bgenerate\b', directive, re.IGNORECASE):
+        elif re.search(r"\bgenerate\b", directive, re.IGNORECASE):
             body, title = self._generate(), "Improve-generate"
         else:
             body, title = self._list(), "Improve-總覽"
@@ -65,11 +65,17 @@ class ImproveAgent(BaseAgent):
     def _list(self) -> str:
         props = list_proposals(IMPROVEMENTS_PENDING_DIR)
         if not props:
-            return ("# 🛠️ 自我改善提案\n\n目前沒有待審提案。\n\n"
-                    "用 `@ling-improve generate` 跑一次自評→診斷→產生提案。")
-        lines = ["# 🛠️ 自我改善提案（待審）", "",
-                 "> 提案不會自動套用。檢視 → `@ling-improve approve <id>` 生效（原檔自動備份）"
-                 "／`reject <id>` 退回。", ""]
+            return (
+                "# 🛠️ 自我改善提案\n\n目前沒有待審提案。\n\n"
+                "用 `@ling-improve generate` 跑一次自評→診斷→產生提案。"
+            )
+        lines = [
+            "# 🛠️ 自我改善提案（待審）",
+            "",
+            "> 提案不會自動套用。檢視 → `@ling-improve approve <id>` 生效（原檔自動備份）"
+            "／`reject <id>` 退回。",
+            "",
+        ]
         for p in props:
             lines.append(f"- `{p['id']}` — 軸「{p['axis']}」→ `{p['target_path']}`")
             lines.append(f"  - 根因：{(p.get('rationale') or '').strip()[:120]}")
@@ -104,18 +110,25 @@ class ImproveAgent(BaseAgent):
 
     def _approve(self, pid: str) -> str:
         res = approve_proposal(
-            pid, vault_dir=WIKI_VAULT_DIR, pending_dir=IMPROVEMENTS_PENDING_DIR,
-            applied_dir=IMPROVEMENTS_APPLIED_DIR, allowed_dirs=_ALLOWED,
+            pid,
+            vault_dir=WIKI_VAULT_DIR,
+            pending_dir=IMPROVEMENTS_PENDING_DIR,
+            applied_dir=IMPROVEMENTS_APPLIED_DIR,
+            allowed_dirs=_ALLOWED,
         )
         (ui.success if res["ok"] else ui.error)(f"improve approve {pid}: {res['message']}")
         head = "✅ 已套用" if res["ok"] else "💧 未套用"
-        extra = ("\n\n*原檔已備份到 `Scripture/Improvements/_applied/`,如需回退可從該處還原。*"
-                 if res["ok"] else "")
+        extra = (
+            "\n\n*原檔已備份到 `Scripture/Improvements/_applied/`,如需回退可從該處還原。*"
+            if res["ok"]
+            else ""
+        )
         return f"# {head}：`{pid}`\n\n{res['message']}{extra}"
 
     def _reject(self, pid: str) -> str:
-        res = reject_proposal(pid, pending_dir=IMPROVEMENTS_PENDING_DIR,
-                              rejected_dir=IMPROVEMENTS_REJECTED_DIR)
+        res = reject_proposal(
+            pid, pending_dir=IMPROVEMENTS_PENDING_DIR, rejected_dir=IMPROVEMENTS_REJECTED_DIR
+        )
         return f"# 🗑️ 退回 `{pid}`\n\n{res['message']}"
 
     def _generate(self) -> str:
@@ -139,11 +152,19 @@ class ImproveAgent(BaseAgent):
         if improve.proposals:
             lines += ["## 新提案（待審）", ""]
             for p in improve.proposals:
-                lines.append(f"- `{p['id']}` → `{p['target_path']}` — `@ling-improve show {p['id']}`")
+                lines.append(
+                    f"- `{p['id']}` → `{p['target_path']}` — `@ling-improve show {p['id']}`"
+                )
         else:
             lines.append("本次未產生可提案的修訂。")
         if improve.skipped_axes:
             lines += ["", "## 未提案的軸（需人工/工程,非單一 prompt 可解）", ""]
             lines += [f"- 「{ax}」：{reason}" for ax, reason in improve.skipped_axes]
+        if improve.stale_pending:
+            lines += ["", "## ⚠️ 待審逾期（review 停滯）", ""]
+            lines += [
+                f"- `{pid}` 已 pending {age} 天 — `@ling-improve show {pid}`"
+                for pid, age in improve.stale_pending
+            ]
         lines += ["", "---", "*提案皆需 `@ling-improve approve <id>` 才會生效;原檔會先備份。*"]
         return "\n".join(lines)

@@ -24,9 +24,14 @@ class FakeLLM:
 
 def _vault(tmp_path):
     vault = tmp_path / "vault"
-    f = vault / "Templates" / "Prompts" / "agent_counter.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
+    prompts = vault / "Templates" / "Prompts"
+    prompts.mkdir(parents=True, exist_ok=True)
+    f = prompts / "agent_counter.md"
     f.write_text("You are the lens.\nCheck the claims.\n" * 3, encoding="utf-8")
+    # the insight-generation prompt — 洞察品質 axis's lever
+    (prompts / "agent_insight.md").write_text(
+        "You generate insights.\nSpark novel connections.\n" * 3, encoding="utf-8"
+    )
     return vault, f
 
 
@@ -132,7 +137,10 @@ def test_partial_match_applies_only_valid_edits(tmp_path):
     assert "be exhaustive" in res.proposals[0]["revised_content"]
 
 
-def test_non_report_axis_skipped_with_reason(tmp_path):
+def test_cortex_axis_skipped_with_specific_reason(tmp_path):
+    # Cortex's lever (extract_claims / assess_falsifiability) is hardcoded code,
+    # not a vault prompt — M3 must skip it with a SPECIFIC, actionable reason,
+    # not a generic "needs a human" (the audit's break: it recurred invisibly).
     vault, _ = _vault(tmp_path)
     pending = tmp_path / "_pending"
     dx = DiagnosisResult(
@@ -149,3 +157,68 @@ def test_non_report_axis_skipped_with_reason(tmp_path):
     )
     assert res.proposals == []
     assert res.skipped_axes and res.skipped_axes[0][0] == "Cortex 信念"
+    reason = res.skipped_axes[0][1]
+    assert "hardcoded" in reason or "extract_claims" in reason
+
+
+def test_insight_axis_generates_proposal(tmp_path):
+    # 洞察品質 → agent_insight.md: the audit's clean win. Before the M-arc fix
+    # this axis was blanket-skipped; now its prompt-editable fixes become proposals.
+    vault, _ = _vault(tmp_path)
+    pending = tmp_path / "_pending"
+    dx = DiagnosisResult(
+        diagnoses=[
+            Diagnosis(
+                axis="洞察品質",
+                lamp=YELLOW,
+                root_cause="novelty 低",
+                candidate_fixes=["加入與既有知識的差異化描述欄位"],
+            ),
+        ]
+    )
+    llm = FakeLLM(
+        edits=[
+            {
+                "find": "Spark novel connections.",
+                "replace": "Spark novel connections that differ from prior insights.",
+                "why": "novelty diff",
+            }
+        ]
+    )
+    res = run_self_improve(llm, _assessment(), dx, vault_dir=vault, pending_dir=pending)
+    assert res.status == "succeeded"
+    assert len(res.proposals) == 1
+    assert res.proposals[0]["target_path"] == "Templates/Prompts/agent_insight.md"
+    assert "differ from prior insights" in res.proposals[0]["revised_content"]
+
+
+def test_stale_pending_surfaced(tmp_path, monkeypatch):
+    import maintenance.self_improve as si
+    from services.improvement_store import make_proposal, save_proposal
+
+    monkeypatch.setattr(si, "SELF_IMPROVE_STALE_DAYS", 14)
+    vault, _ = _vault(tmp_path)
+    pending = tmp_path / "_pending"
+    # a proposal created 30 days ago (stamp the created field in the past)
+    old = make_proposal(
+        axis="報告品質",
+        target_path="Templates/Prompts/agent_counter.md",
+        rationale="r",
+        addressed_fixes=["f"],
+        original_content="a",
+        revised_content="b",
+        edits=[],
+    )
+    old["created"] = "2026-06-12T00:00:00"  # >14d before the 2026-07-12 run
+    save_proposal(old, pending)
+    # run with no new diagnoses → still surfaces the stale one
+    res = run_self_improve(
+        FakeLLM(edits=[]),
+        _assessment(),
+        DiagnosisResult(diagnoses=[]),
+        vault_dir=vault,
+        pending_dir=pending,
+    )
+    assert res.stale_pending and res.stale_pending[0][0] == old["id"]
+    assert res.stale_pending[0][1] >= 14
+    assert "待審逾" in res.message

@@ -220,6 +220,10 @@ SELF_ASSESSMENT_HISTORY_MAX = max(2, int(os.getenv("SELF_ASSESSMENT_HISTORY_MAX"
 # command can generate/approve on-demand regardless. Default OFF — the system
 # should propose changes to itself only when asked, until validated.
 SELF_IMPROVE_ENABLED = os.getenv("SELF_IMPROVE_ENABLED", "false").lower() == "true"
+# A proposal sitting in _pending past this many days is a stalled review — M3
+# surfaces it so the human-gate step doesn't silently rot (the 2026-07-12 audit
+# found one proposal pending 28 days, unseen). Read-only nudge, no auto-action.
+SELF_IMPROVE_STALE_DAYS = max(1, int(os.getenv("SELF_IMPROVE_STALE_DAYS", "14")))
 # Metacognition M4 (numeric auto-tune): the only no-human-gate phase, so it is
 # deliberately confined to safe numeric knobs, each bound to an outcome metric,
 # adjusted with damping (±20%/step), a min-sample gate, and AUTO-ROLLBACK on
