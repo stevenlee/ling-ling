@@ -22,8 +22,13 @@ CRITIQUE_HEADER = "## 🔍 Quality Critique"
 # gemma), so allow a short gap after the colon and take the first keyword on
 # the line. A negated revise ("不需修正") counts as keep.
 # Header variants observed live: 總體判定 / 整體判定 / 總體評定 / 總體評價
-# (traditional and simplified), plus the canonical English.
-_VERDICT_HEADER = r"(?:Overall\s+Verdict|[總总整][體体][判評评][定价價])"
+# (traditional and simplified), plus the canonical English. gemma4:26b also
+# reaches for 總體結論 / 總體裁定 (conclusion / ruling) — three of four
+# "unparseable" syntheses in the 2026-07-12 audit window had a perfectly clear
+# verdict under one of those headers, so 結/结/裁 (pos3) and 論/论 (pos4) are in
+# the class. Still anchored to 總體/整體 + a verdict keyword nearby, so a plain
+# 總結 (summary, no 體) section can't false-match as a verdict.
+_VERDICT_HEADER = r"(?:Overall\s+Verdict|[總总整][體体][判評评結结裁][定价價論论])"
 _VERDICT_KEYWORD = r"(keep|revise|reject|保留|修訂|修正|修改|重做|拒絕)"
 _VERDICT_RE = re.compile(
     rf"(?im)^\**\s*{_VERDICT_HEADER}[\s*]*[:：][^\n]{{0,40}}?{_VERDICT_KEYWORD}",

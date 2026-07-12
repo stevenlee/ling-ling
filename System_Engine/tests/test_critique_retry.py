@@ -218,6 +218,42 @@ def test_parse_verdict_zh_heading_mentioned_mid_prose_is_none():
     assert IngestionPipeline._parse_verdict(f"### 總體判定\n\n{filler}建議修正。") is None
 
 
+# ── 2026-07-12 audit: real "unparseable" critique headers gemma emitted ──
+# 3 of 4 unparseable syntheses had a clear verdict under 總體結論 / 總體裁定,
+# which the old header class ([判評评][定价價]) didn't cover → the quality gate
+# silently failed and un-revised syntheses shipped.
+
+
+def test_parse_verdict_zh_bold_ruling_header_revise():
+    # #2 Effective harnesses: "**總體裁定：應修改**" (裁定 = ruling).
+    assert IngestionPipeline._parse_verdict("**總體裁定：應修改**") == "revise"
+
+
+def test_parse_verdict_zh_conclusion_heading_revise():
+    # #3 Knowledge distillation: "## 總體結論\n\n**建議修改 (Revise)**".
+    assert (
+        IngestionPipeline._parse_verdict("## 總體結論\n\n**建議修改 (Revise)**。該候選文本…")
+        == "revise"
+    )
+
+
+def test_parse_verdict_zh_conclusion_heading_keep():
+    # #4 Fine-tuning: "## 總體結論\n\n保留。…".
+    assert IngestionPipeline._parse_verdict("## 總體結論\n\n保留。該候選文本極高品質。") == "keep"
+
+
+def test_parse_verdict_zh_simplified_conclusion_heading():
+    assert IngestionPipeline._parse_verdict("## 总体结论\n\n建议修改。") == "revise"
+
+
+def test_parse_verdict_summary_section_still_none():
+    # #1 Algorithms4Decision: model wrote 總結與建議 (summary), no verdict — the
+    # "保留" in the suggestions is about keeping content, NOT a verdict. 總結 lacks
+    # 體 so the header must NOT match; this stays correctly unparseable.
+    txt = "### 💡 總結與建議\n\n**建議：**\n1. 建議保留部分具體的應用案例以增強說服力。"
+    assert IngestionPipeline._parse_verdict(txt) is None
+
+
 # ── verdict → publication status (_write_synthesis) ──────────────────
 
 
