@@ -2,6 +2,7 @@
 name: counterfactual
 description: Counterfactual stress-test — find a load-bearing assumption in one source and ask what survives when the other source's world negates it.
 pipeline: montecarlo
+refute_mode: lenient
 num_rounds: 2
 num_sparks: 4
 top_k: 2

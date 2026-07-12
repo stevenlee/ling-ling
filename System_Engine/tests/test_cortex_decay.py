@@ -119,7 +119,7 @@ class FakeLLM:
     def recently_retrieved_titles(self, since_days=30):
         return self.hits
 
-    def refute_insight(self, claim, sources):
+    def refute_insight(self, claim, sources, **kwargs):
         self.refute_calls.append(claim)
         return {"verdict": self.verdict, "notes": ""}
 

@@ -895,8 +895,48 @@ class LLMClient:
             logging.error(f"Critique failed: {e}")
             return f"Critique failed: {e}"
 
-    def refute_insight(self, candidate: str, sources: list[str]) -> dict:
-        """Run the refute operation to challenge an insight candidate."""
+    # Guardrail appended to the refute user message when the candidate comes
+    # from a non-literal operation (analogy / fable / dialogue / counterfactual).
+    # These operations DELIBERATELY reason non-literally: an analogy honestly
+    # marks where it breaks ("tear lines"), a counterfactual reasons under a
+    # negated premise, a dialogue stages disagreement, a fable is a story. The
+    # strict prompt's "over-generalizations beyond the sources" criterion reads
+    # those self-declared limits as refutation evidence and kills the insight —
+    # punishing exactly the epistemic honesty the operation was designed to
+    # produce (2026-07-12 audit: analogy 0710, groundedness 0.867, all facts
+    # correct, still refuted). Under lenient mode the reviewer judges only the
+    # transferable claim, not the non-literal vehicle carrying it.
+    _REFUTE_LENIENT_GUARD = (
+        "\n\n## Evaluation Mode: non-literal operation ({kind})\n"
+        "This candidate is a **{kind}** — a deliberately non-literal thinking form, "
+        "NOT a literal factual claim. Its self-declared limitations are a design "
+        "feature, not a flaw. Do NOT treat any of the following as grounds to refute:\n"
+        '- a passage that honestly marks where an analogy/mapping breaks ("tear lines");\n'
+        "- reasoning that follows from a hypothetical or counterfactual premise;\n"
+        "- staged disagreement between voices in a dialogue;\n"
+        "- narrative or figurative framing in a fable.\n"
+        "Refute ONLY if the core **transferable principle** (the moral / verdict / "
+        "final recommendation the piece asks you to carry away) is factually "
+        "contradicted by the sources, or misrepresents a mechanism the sources "
+        "actually describe. If the transferable principle holds and only the "
+        "vehicle is figurative, let it survive.\n"
+    )
+
+    def refute_insight(
+        self,
+        candidate: str,
+        sources: list[str],
+        *,
+        lenient: bool = False,
+        candidate_kind: str | None = None,
+    ) -> dict:
+        """Run the refute operation to challenge an insight candidate.
+
+        `lenient=True` (set for non-literal operations via skill frontmatter
+        `refute_mode: lenient`) appends a guardrail so the reviewer judges the
+        transferable claim rather than the figurative vehicle. `candidate_kind`
+        names the operation (e.g. "analogy") for the guardrail text.
+        """
         try:
             system_prompt, cap_resolution = self._build_system_prompt(
                 "Evaluate the candidate insight against the provided sources and try to refute it.",
@@ -907,6 +947,8 @@ class LLMClient:
             )
             sources_text = "\n\n".join(f"[{i + 1}] {s}" for i, s in enumerate(sources))
             user_msg = f"## Candidate Insight\n{candidate}\n\n## Source Materials\n{sources_text}\n"
+            if lenient:
+                user_msg += self._REFUTE_LENIENT_GUARD.format(kind=candidate_kind or "creative")
 
             raw = self._complete_text(
                 system_prompt,

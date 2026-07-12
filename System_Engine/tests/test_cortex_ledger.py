@@ -46,7 +46,7 @@ class FakeLLM:
         self.verdict = verdict
         self.calls = []
 
-    def refute_insight(self, claim, sources):
+    def refute_insight(self, claim, sources, **kwargs):
         self.calls.append(claim)
         return {"verdict": self.verdict, "notes": ""}
 

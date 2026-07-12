@@ -41,6 +41,8 @@ def compute_signals(
     *,
     run_refute: bool = True,
     update_history: bool = True,
+    refute_lenient: bool = False,
+    refute_kind: str | None = None,
 ) -> InsightSignals:
     if not INSIGHT_SIGNALS_ENABLED:
         return InsightSignals(None, None, None, None, None, None, "")
@@ -213,7 +215,12 @@ def compute_signals(
                 refute_verdict = None
                 refute_notes = "no source content available"
             else:
-                res = llm.refute_insight(candidate_text, source_contents)
+                res = llm.refute_insight(
+                    candidate_text,
+                    source_contents,
+                    lenient=refute_lenient,
+                    candidate_kind=refute_kind,
+                )
                 refute_verdict = res.get("verdict")
                 refute_notes = res.get("notes", "")
     except Exception as e:

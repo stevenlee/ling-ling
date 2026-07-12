@@ -21,7 +21,7 @@ class FakeRAG:
 
 
 class FakeLLM:
-    def refute_insight(self, candidate, sources):
+    def refute_insight(self, candidate, sources, *, lenient=False, candidate_kind=None):
         return {"verdict": "survived", "notes": "n"}
 
 

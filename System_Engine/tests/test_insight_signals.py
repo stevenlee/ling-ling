@@ -33,10 +33,12 @@ class FakeLLM:
         self.called = False
         self.raise_err = False
 
-    def refute_insight(self, candidate, sources):
+    def refute_insight(self, candidate, sources, *, lenient=False, candidate_kind=None):
         if self.raise_err:
             raise Exception("fake llm error")
         self.called = True
+        self.last_lenient = lenient
+        self.last_kind = candidate_kind
         return {"verdict": self.verdict, "notes": "Some notes"}
 
 
@@ -330,3 +332,91 @@ def test_signals_block_in_frontmatter_and_mirror_identity(patch_env, tmp_path, m
     mirrored = list(insights_dir.glob("*.md"))
     assert len(mirrored) == 1
     assert mirrored[0].read_text(encoding="utf-8") == full_markdown
+
+
+# ── Refute leniency for non-literal operations (2026-07-12 audit) ──
+
+
+def test_compute_signals_threads_lenient(patch_env):
+    """compute_signals must forward refute_lenient/refute_kind to the LLM so
+    non-literal operations (analogy, fable, ...) aren't refuted on their
+    self-declared limitations."""
+    import services.insight_signals as mod
+
+    nested = mod.PAGES_DIR / "DocA"
+    nested.mkdir()
+    (nested / "DocA (Synthesis).md").write_text("content")
+
+    rag = FakeRAG([])
+    llm = FakeLLM()
+    compute_signals(
+        "report",
+        ["DocA (Synthesis)"],
+        rag,
+        llm,
+        refute_lenient=True,
+        refute_kind="analogy",
+    )
+    assert llm.last_lenient is True
+    assert llm.last_kind == "analogy"
+
+
+def test_llm_client_refute_lenient_injects_guardrail(monkeypatch):
+    client = LLMClient()
+    captured = {}
+
+    def fake_complete(system, user, **kw):
+        captured["user"] = user
+        return "Verdict: survived"
+
+    monkeypatch.setattr(client, "_complete_text", fake_complete)
+    monkeypatch.setattr(client, "_build_system_prompt", lambda *a, **kw: ("SYS", {}))
+
+    # Strict (default): no guardrail.
+    client.refute_insight("candidate", ["src"])
+    assert "non-literal operation" not in captured["user"]
+
+    # Lenient: guardrail with the operation name + tear-line protection.
+    client.refute_insight("candidate", ["src"], lenient=True, candidate_kind="analogy")
+    assert "non-literal operation (analogy)" in captured["user"]
+    assert "tear lines" in captured["user"]
+    assert "transferable principle" in captured["user"]
+
+
+def test_signals_meta_lenient_from_config(monkeypatch, tmp_path):
+    """_signals_meta reads `refute_mode: lenient` from the skill config and
+    passes it (with the operation name) into compute_signals."""
+    from agents.insight.report_output import ReportOutputMixin
+
+    monkeypatch.setattr("core.config.INSIGHT_SIGNALS_ENABLED", True, raising=False)
+
+    seen = {}
+
+    def fake_compute(content, titles, rag, llm, **kw):
+        seen.update(kw)
+
+        class S:
+            groundedness = novelty = bridging = 0.5
+            refute_verdict = "survived"
+
+        return S()
+
+    monkeypatch.setattr("services.insight_signals.compute_signals", fake_compute)
+
+    obj = ReportOutputMixin()
+    obj.rag = None
+    obj.llm = None
+
+    # lenient op
+    obj._signals_meta("body", [], {"name": "fable", "refute_mode": "lenient"})
+    assert seen["refute_lenient"] is True and seen["refute_kind"] == "fable"
+
+    # literal op (montecarlo) → strict
+    seen.clear()
+    obj._signals_meta("body", [], {"name": "montecarlo"})
+    assert seen["refute_lenient"] is False and seen["refute_kind"] is None
+
+    # full-insight (config=None) → strict
+    seen.clear()
+    obj._signals_meta("body", [], None)
+    assert seen["refute_lenient"] is False

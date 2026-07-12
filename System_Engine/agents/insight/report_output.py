@@ -22,17 +22,31 @@ class ReportOutputMixin:
     insights_dir: Any
     _write_report: Any
 
-    def _signals_meta(self, content: str, target_titles) -> dict:
+    def _signals_meta(self, content: str, target_titles, config: dict | None = None) -> dict:
         """Signals metadata block ({} when disabled). Shared by
         generate_insight and generate_full_insight (audit R7-D — the two were
-        byte-for-byte duplicates)."""
+        byte-for-byte duplicates).
+
+        `config` is the operation's skill frontmatter (None for full-insight,
+        which mixes strategies). `refute_mode: lenient` in it switches the
+        refute check to non-literal mode — see refute_insight for why.
+        """
         from core.config import INSIGHT_SIGNALS_ENABLED
 
         if not INSIGHT_SIGNALS_ENABLED:
             return {}
         from services.insight_signals import compute_signals
 
-        signals = compute_signals(content, target_titles, self.rag, self.llm)
+        lenient = ((config or {}).get("refute_mode") or "").strip().lower() == "lenient"
+        kind = (config or {}).get("name") if lenient else None
+        signals = compute_signals(
+            content,
+            target_titles,
+            self.rag,
+            self.llm,
+            refute_lenient=lenient,
+            refute_kind=kind,
+        )
         return {
             "signals": {
                 "groundedness": round(signals.groundedness, 4)

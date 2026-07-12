@@ -752,7 +752,9 @@ class TestStageTemperatures:
         monkeypatch.setattr(
             InsightAgent, "_run_single", lambda self, c, u, t=None: "## body", raising=False
         )
-        monkeypatch.setattr(InsightAgent, "_signals_meta", lambda self, c, t: {}, raising=False)
+        monkeypatch.setattr(
+            InsightAgent, "_signals_meta", lambda self, c, t, cfg=None: {}, raising=False
+        )
         monkeypatch.setattr(InsightAgent, "_maybe_artifact", lambda self, c: "", raising=False)
         agent.generate_insight("hotop")
         assert agent._temp_spark == 0.95

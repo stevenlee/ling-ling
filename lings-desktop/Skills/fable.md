@@ -3,6 +3,7 @@ name: fable
 description: Conceptual fable — dramatize the tension between the two sources as a short story whose moral names a transferable principle.
 pipeline: montecarlo
 report_mode: creative
+refute_mode: lenient
 num_rounds: 2
 num_sparks: 4
 top_k: 2

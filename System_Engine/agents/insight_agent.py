@@ -141,7 +141,7 @@ class InsightAgent(
             "pipeline": pipeline,
         }
 
-        meta.update(self._signals_meta(report_content, target_titles))
+        meta.update(self._signals_meta(report_content, target_titles, config))
         if self._grounded_on_acc:
             meta["grounded_on"] = sorted(self._grounded_on_acc)
 
