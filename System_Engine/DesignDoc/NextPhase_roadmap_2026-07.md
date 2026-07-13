@@ -84,6 +84,18 @@
 | synthesis 7d verdicts | keep 8 / revise 5 / **unparseable 4** | — | **unparseable → ~0**（parser+B1；4 是修法前存量） |
 | pending 提案 | 1（agent_counter 28d+） | — | 別再累積陳舊；@ling-improve 有人審 |
 
+### N.1 到期執行清單（≥2026-07-20，一週後跑這個）
+時間到時,照這份 checklist 執行——不用重想:
+1. **重跑指標**（純讀，同 t=0 基線的量法）:
+   - novelty by op,**只取 `date_created >= 2026-07-13` 的 NEW insight**（避免存量稀釋）。
+   - 新 insight 的 grounded_on distinct ids / top-4 佔比。
+   - `self_assessment_history.json` 的 語義熵.insight_dim 與 報告品質 rate 時序（觀察窗累積了幾點、方向）。
+   - synthesis quality_verdict 分佈,**只取觀察窗期間 ts** → unparseable 是否 →0（parser+B1 生效）。
+   - `_pending` 提案數與最老 age（陳舊有沒有被消化 / 有沒有新提案）。
+2. **比對** t=0 基線表的「一週後期望」欄,寫一段「干預成效趨勢」小結（有效／無效／過頭）。
+3. **決策 N.2**:趨勢站得住 → 進 Cortex 深化（先 A3 contradictions 診斷 → A1 externalize prompts → A2 證據追溯任務）；若某修法回落 → 先修回落再說。
+4. 若 SE 已累積足夠點且 Cortex 圖穩定,順帶評估 §2.E 本體論 O1-O4 是否啟動。
+
 ### 暫緩
 本體論 O1-O4（§2.E）——等 N.1 的 SE 趨勢與 Cortex 圖狀況明朗再評估是否需要概念層。
 
