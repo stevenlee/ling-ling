@@ -734,6 +734,62 @@ def repair_mermaid_overquoted_node(text: str) -> tuple[str, list[dict]]:
     return "\n".join(out), fixes
 
 
+# `id["(\"Label\")"]` — the LLM wrapped a node label in an extra `(\" ... \")`
+# (a paren plus JSON-escaped quotes). Mermaid reads the `(` after `["` as a
+# shape-start token (PS) and rejects the line. The real label is inside; strip
+# the `(\"` / `\")` wrapper back to `id["Label"]`. Handles [] () {} shapes with
+# matched brackets; the escaped quotes are literal backslash-quote in the source.
+_MERMAID_PAREN_ESCAPED_LABEL_RE = re.compile(r'([\[\(\{])"\(\\"(.+?)\\"\)"([\]\)\}])')
+
+
+def repair_mermaid_paren_escaped_label(text: str) -> tuple[str, list[dict]]:
+    r"""Unwrap a paren+escaped-quote wrapped node label: ``id["(\"X\")"]`` →
+    ``id["X"]``. Observed live (`A["(\"問題集合\")"]`, PNP問題), it breaks the
+    parse because the `(` is taken as a shape opener. Only rewrites when the
+    shape brackets match; idempotent once unwrapped."""
+    if not text or '(\\"' not in text:
+        return text, []
+
+    def _repl(m: re.Match) -> str:
+        opener, closer = m.group(1), m.group(3)
+        if _MERMAID_SHAPE_CLOSERS[opener] != closer:
+            return m.group(0)
+        return f'{opener}"{m.group(2)}"{closer}'
+
+    lines = text.splitlines()
+    out: list[str] = []
+    fixes: list[dict] = []
+    in_mermaid = False
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not in_mermaid and stripped == "```mermaid":
+            in_mermaid = True
+            out.append(line)
+            continue
+        if in_mermaid and stripped == "```":
+            in_mermaid = False
+            out.append(line)
+            continue
+
+        if in_mermaid and '(\\"' in line:
+            new_line = _MERMAID_PAREN_ESCAPED_LABEL_RE.sub(_repl, line)
+            if new_line != line:
+                fixes.append(
+                    _make_fix(
+                        "unwrapped_mermaid_paren_escaped_label",
+                        line=idx + 1,
+                        before=line,
+                        after=new_line,
+                    )
+                )
+            out.append(new_line)
+        else:
+            out.append(line)
+
+    return "\n".join(out), fixes
+
+
 # ─── Mermaid: double-quote repair ─────────────────────────────────────
 
 # `[""label""]` or `(""label"")` — LLM emitted two layers of quotes inside

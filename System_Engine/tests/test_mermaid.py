@@ -889,6 +889,50 @@ class TestOverquotedNode:
         assert any(f["type"] == "stripped_mermaid_overquoted_node" for f in fixes)
 
 
+class TestMermaidParenEscapedLabel:
+    r"""`id["(\"Label\")"]` — a label wrapped in an extra `(\" ... \")`; the `(`
+    is read as a shape opener (PS token) and breaks the parse. Observed live in
+    PNP問題 (`A["(\"問題集合\")"]`). Unwrap to `id["Label"]`."""
+
+    def _q(self, body):
+        from core.parser import repair_mermaid_paren_escaped_label
+
+        return repair_mermaid_paren_escaped_label(f"```mermaid\n{body}\n```")
+
+    def test_unwraps_bracket_label(self):
+        result, fixes = self._q(r"graph TD" + "\n" + r'    A["(\"問題集合\")"] --> B')
+        assert 'A["問題集合"] --> B' in result
+        assert r"(\"" not in result
+        assert any(f["type"] == "unwrapped_mermaid_paren_escaped_label" for f in fixes)
+
+    def test_label_with_inner_parens_kept(self):
+        result, _ = self._q(r"graph TD" + "\n" + r'    A["(\"初始狀態 (Boy)\")"] --> B')
+        assert 'A["初始狀態 (Boy)"]' in result
+
+    def test_round_and_brace_shapes(self):
+        r1, _ = self._q(r"graph TD" + "\n" + r'    A --> B("(\"圓角\")")')
+        assert 'B("圓角")' in r1
+        r2, _ = self._q(r"graph TD" + "\n" + r'    A --> C{"(\"菱形\")"}')
+        assert 'C{"菱形"}' in r2
+
+    def test_mismatched_brackets_left_alone(self):
+        result, fixes = self._q(r"graph TD" + "\n" + r'    A["(\"x\")"}')
+        assert fixes == []
+
+    def test_well_formed_untouched(self):
+        body = 'graph TD\n    A["問題集合"] --> B["P 類 (容易求解)"]'
+        result, fixes = self._q(body)
+        assert result == f"```mermaid\n{body}\n```"
+        assert fixes == []
+
+    def test_idempotent(self):
+        from core.parser import repair_mermaid_paren_escaped_label
+
+        once, _ = self._q(r"graph TD" + "\n" + r'    A["(\"問題集合\")"] --> B')
+        twice, fixes = repair_mermaid_paren_escaped_label(once)
+        assert once == twice and fixes == []
+
+
 # ── Mindmap bracket neutralization ─────────────────────────────────
 
 
