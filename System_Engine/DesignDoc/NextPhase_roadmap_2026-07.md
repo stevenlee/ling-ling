@@ -41,7 +41,7 @@
 
 ### D. 房務（可平行、隨時）
 - DocQuality deferred：mermaid statement 黏連 / meta-text 洩漏 / flowchart 家族（見 `DocQuality_CloudAct_implementation_plan.md`）。
-- wikilink 25% 斷鏈（長標題截斷家族）。
+- ~~wikilink 25% 斷鏈~~：**部分完成（`c64fd22`）**。精算後其實 6.6%：dangling_absent 2411（指向未 ingest 文件的截斷/亂碼標題，歷史 AI 報告的裝飾性斷鏈、改連結救不了）＋ truncation 237（逐案）＋ control_char ~39（唯一系統性 bug）。已修 control_char：新增 `repair_wikilink_newlines` 品質檢查 pass（收合 `[[...]]` 內換行），write-time 生效。dangling 為非功能性、不 mass-edit（且 pages/ 有索引，批改會索引漂移）——**視為已處理**。
 - ~~palette prompt 規則~~：**✅ 完成（`795409a`）**。system_base.md Rule 4 補負向禁令（禁 🚨🔴⚠️❌🧠… + 邏輯結構圖標題用 📊/🌿 例），reviewer/coder 補 ⚠️ 三處一致。存量 🧠 檔非功能性可留。
 - 稽核清理候選 7 檔（audit report §④）——待 Steven 裁決。
 
