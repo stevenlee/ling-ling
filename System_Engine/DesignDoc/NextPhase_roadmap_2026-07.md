@@ -32,7 +32,7 @@
 - **A4 資料衛生**：1 主張 embedding NaN（「The vitality of complex systems…」毒輸入佔位）需重算；0.975 近重複主張對（代理式智慧 vs 實踐）人工裁併。
 
 ### B. synthesis 品質閘——收尾
-- **B1 #1 型模型不合規**：critique 根本沒吐判定段（寫成「總結與建議」/畫成 mermaid 流程圖）。parser 救不了,需 critique prompt 硬化（強制判定段）或 fallback verdict（無法解析時預設 revise 觸發重試,而非放行）。
+- ~~**B1 #1 型模型不合規**~~：**✅ 完成（`bb811db`）**。retry 迴圈新增 `_needs_retry`：「verdict None 但有 critique section」（閘跑了卻讀不到判定）也重試（bounded）；讀不到就出貨但記成 unparseable（可見、計入 bad），不再靜默放行。＋critique.md 把總體判定段設為 REQUIRED、禁用「總結」替代。無 section（critique 關閉/失敗）仍不重試。
 
 ### C. 觀察與再稽核——驗證本波的趨勢效果
 - 本波多數修法的 payoff 要**跨夜累積**才看得出（novelty 散開、grounding 去集中化、SE insight_dim 趨勢、M-arc 提案節奏、synthesis unparseable 率）。
@@ -70,7 +70,7 @@
 4. **A4 資料衛生**——順手清 NaN embedding + 裁併 0.975 對。
 
 ### Phase N.3 — 房務（平行，隨時插入）
-§2.B1（synthesis fallback verdict）、§2.D（DocQuality/wikilink/palette/清理候選）。這些彼此獨立,適合當觀察窗期間的填空工作。
+§2.D（DocQuality/wikilink/palette/清理候選）。這些彼此獨立,適合當觀察窗期間的填空工作。（§2.B1 synthesis 品質閘收尾已於 2026-07-13 完成，`bb811db`。）
 
 ### 暫緩
 本體論 O1-O4（§2.E）——等 N.1 的 SE 趨勢與 Cortex 圖狀況明朗再評估是否需要概念層。
