@@ -39,9 +39,9 @@ _SYSTEM = (
     "要求:根因要扣著數據講,不要空泛;候選改善要能落到 prompt/template/設定/維護任務的層級,"
     "每個都一句話講清楚「改什麼、為什麼會有幫助」。若數據不足以判斷,誠實說明還需要什麼資料。\n"
     "注意:你只做診斷與建議,**不要假設改動已被套用**;這些是給人審核的候選方案。\n\n"
-    "回 JSON：{\"root_cause\": \"<一段，根因>\", "
-    "\"candidate_fixes\": [\"<具體改善1>\", \"...\"], "
-    "\"confidence\": <0-1>, \"needs\": \"<若資料不足，還需要什麼；否則空字串>\"}"
+    '回 JSON：{"root_cause": "<一段，根因>", '
+    '"candidate_fixes": ["<具體改善1>", "..."], '
+    '"confidence": <0-1>, "needs": "<若資料不足，還需要什麼；否則空字串>"}'
 )
 
 
@@ -54,33 +54,58 @@ class Diagnosis:
     candidate_fixes: list = field(default_factory=list)
     confidence: float = 0.0
     needs: str = ""
-    context: str = ""          # the data we showed the LLM (for auditability)
+    context: str = ""  # the data we showed the LLM (for auditability)
 
 
 @dataclass
 class DiagnosisResult:
     status: str = "succeeded"  # succeeded | skipped
     message: str = ""
-    diagnoses: list = field(default_factory=list)   # list[Diagnosis]
+    diagnoses: list = field(default_factory=list)  # list[Diagnosis]
     report_path: Path | None = None
 
 
 # ── per-axis context (deterministic; what the LLM reasons over) ───────────
 
+
 def _ctx_report_quality(d: dict) -> str:
     rows = []
-    for t, c in sorted((d.get("by_type") or {}).items(),
-                       key=lambda kv: -(kv[1]["bad"] / kv[1]["total"] if kv[1]["total"] else 0)):
-        rows.append(f"  - 報告型別 `{t}`：{c['total']} 份中 {c['bad']} 份被判 revise/reject")
-    return (f"整體 {d.get('total', 0)} 份有評分,其中 {d.get('bad', 0)} 份 revise/reject"
-            f"（{d.get('rate', 0):.0%}）。各型別:\n" + "\n".join(rows))
+    for t, c in sorted(
+        (d.get("by_type") or {}).items(),
+        key=lambda kv: (
+            -(
+                (kv[1]["bad"] + kv[1].get("unparseable", 0)) / kv[1]["total"]
+                if kv[1]["total"]
+                else 0
+            )
+        ),
+    ):
+        u = c.get("unparseable", 0)
+        extra = (
+            f"、{u} 份 verdict 無法解析（品質閘失效，屬 parser／模型格式問題非 prompt）"
+            if u
+            else ""
+        )
+        rows.append(f"  - 報告型別 `{t}`：{c['total']} 份中 {c['bad']} 份 revise/reject{extra}")
+    # content_bad falls back to `bad` for pre-split history snapshots.
+    content_bad = d.get("content_bad", d.get("bad", 0))
+    up = d.get("unparseable", 0)
+    up_txt = f"、{up} 份 verdict 無法解析（品質閘失效）" if up else ""
+    return (
+        f"整體 {d.get('total', 0)} 份有評分,其中 {content_bad} 份 revise/reject{up_txt}"
+        f"（未通過率 {d.get('rate', 0):.0%}）。各型別:\n" + "\n".join(rows)
+    )
 
 
 def _ctx_llm_health(d: dict) -> str:
-    rows = [f"  - stage `{s}`：{v['total']} 次, 失敗 {v['failed']}, token {v['tokens']:,}"
-            for s, v in sorted((d.get("by_stage") or {}).items(), key=lambda kv: -kv[1]["failed"])]
-    return (f"近期 {d.get('total', 0)} 次 LLM 呼叫, 失敗率 {d.get('error_rate', 0):.0%}, "
-            f"總 token {d.get('total_tokens', 0):,}。各 stage:\n" + "\n".join(rows))
+    rows = [
+        f"  - stage `{s}`：{v['total']} 次, 失敗 {v['failed']}, token {v['tokens']:,}"
+        for s, v in sorted((d.get("by_stage") or {}).items(), key=lambda kv: -kv[1]["failed"])
+    ]
+    return (
+        f"近期 {d.get('total', 0)} 次 LLM 呼叫, 失敗率 {d.get('error_rate', 0):.0%}, "
+        f"總 token {d.get('total_tokens', 0):,}。各 stage:\n" + "\n".join(rows)
+    )
 
 
 def _ctx_retrieval(d: dict) -> str:
@@ -88,17 +113,22 @@ def _ctx_retrieval(d: dict) -> str:
     trend = f"，前次 {prev:.0%}" if isinstance(prev, (int, float)) else ""
     lift = d.get("facet_lift")
     lift_s = f"；facet 索引帶來的 lift = {lift}" if lift is not None else ""
-    return (f"檢索 bench 最新 pass_rate {d.get('pass_rate', 0):.0%}{trend}{lift_s}。"
-            "（bench 衡量「查詢 → 正確文件排在前面」的命中率。低分可能來自:embedder 同語言天花板、"
-            "新文件未索引、bench 案例過時、或 chunk/檢索設定。）")
+    return (
+        f"檢索 bench 最新 pass_rate {d.get('pass_rate', 0):.0%}{trend}{lift_s}。"
+        "（bench 衡量「查詢 → 正確文件排在前面」的命中率。低分可能來自:embedder 同語言天花板、"
+        "新文件未索引、bench 案例過時、或 chunk/檢索設定。）"
+    )
 
 
 def _ctx_cortex(d: dict, cortex_dir: Path) -> str:
-    lines = [f"Cortex 共 {d.get('total_pages', 0)} 條主張：矛盾 {d.get('contradictions', 0)}、"
-             f"教條 {d.get('dogmatic', 0)}（高信心+低可證偽）、薄證據 {d.get('thin_evidence', 0)}（≤1 來源）、"
-             f"已證偽 {d.get('falsified', 0)}。"]
+    lines = [
+        f"Cortex 共 {d.get('total_pages', 0)} 條主張：矛盾 {d.get('contradictions', 0)}、"
+        f"教條 {d.get('dogmatic', 0)}（高信心+低可證偽）、薄證據 {d.get('thin_evidence', 0)}（≤1 來源）、"
+        f"已證偽 {d.get('falsified', 0)}。"
+    ]
     try:
         from services.cortex_tensions import scan_tensions
+
         rep = scan_tensions(cortex_dir)
         if rep.dogmatic:
             lines.append("教條主張範例:")
@@ -114,9 +144,11 @@ def _ctx_cortex(d: dict, cortex_dir: Path) -> str:
 def _ctx_insight(d: dict) -> str:
     mn = d.get("mean_novelty")
     nov = f"平均 novelty {mn:.2f}" if isinstance(mn, (int, float)) else "novelty 未知"
-    return (f"近期 {d.get('n', 0)} 篇洞察,{nov},"
-            f"refute 被推翻 {d.get('refuted', 0)}/{d.get('refute_checked', 0)},"
-            f"grounded {d.get('grounded_n', 0)} / cold {d.get('cold_n', 0)}。")
+    return (
+        f"近期 {d.get('n', 0)} 篇洞察,{nov},"
+        f"refute 被推翻 {d.get('refuted', 0)}/{d.get('refute_checked', 0)},"
+        f"grounded {d.get('grounded_n', 0)} / cold {d.get('cold_n', 0)}。"
+    )
 
 
 def _gather_context(axis_name: str, detail: dict, cortex_dir: Path) -> str:
@@ -171,7 +203,11 @@ def run_self_diagnosis(
             if isinstance(parsed, dict):
                 dx.root_cause = str(parsed.get("root_cause") or "").strip()
                 fixes = parsed.get("candidate_fixes")
-                dx.candidate_fixes = [str(x).strip() for x in fixes if str(x).strip()] if isinstance(fixes, list) else []
+                dx.candidate_fixes = (
+                    [str(x).strip() for x in fixes if str(x).strip()]
+                    if isinstance(fixes, list)
+                    else []
+                )
                 dx.confidence = float(parsed.get("confidence") or 0.0)
                 dx.needs = str(parsed.get("needs") or "").strip()
         except Exception as e:
@@ -229,7 +265,15 @@ def _write_report(report_dir: Path, result: DiagnosisResult) -> Path | None:
                 lines.append("")
             if d.needs:
                 lines += [f"> ⓘ 資料不足：{d.needs}", ""]
-            lines += ["<details><summary>診斷所依據的數據</summary>", "", "```", d.context, "```", "</details>", ""]
+            lines += [
+                "<details><summary>診斷所依據的數據</summary>",
+                "",
+                "```",
+                d.context,
+                "```",
+                "</details>",
+                "",
+            ]
         lines += [
             "---",
             "*由 MaintenanceScheduler 的 self_assessment 任務在 SELF_DIAGNOSIS_ENABLED 開啟時產生。"

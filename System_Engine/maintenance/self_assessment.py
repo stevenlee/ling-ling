@@ -190,30 +190,57 @@ def _axis_report_quality(trace_store, window_days: int, obs: list) -> Axis:
         )
         return ax
     total = len(verdicts)
-    bad = sum(1 for _, v in verdicts if v in ("revise", "reject"))
+    content_bad = sum(1 for _, v in verdicts if v in ("revise", "reject"))
+    # "unparseable" = the quality gate couldn't read its own verdict, so the
+    # report shipped WITHOUT an effective check. That is a failure, not a pass —
+    # excluding it under-reported trouble (2026-07-12 audit: synthesis real
+    # failure was 9/15, not the 5/15 the axis showed). Count it toward the rate,
+    # but keep it distinguishable from content revise/reject so the diagnosis
+    # aims at the critique parser, not the generating prompt.
+    unparseable = sum(1 for _, v in verdicts if v == "unparseable")
+    bad = content_bad + unparseable
     rate = bad / total
-    # Per-type breakdown for the observation seed (which template/op is worst).
-    by_type = defaultdict(lambda: [0, 0])  # type → [bad, total]
+    # Per-type breakdown. `bad` here stays CONTENT-only (revise/reject) because
+    # M3's worst-type → prompt-rewrite lever must target a prompt-fixable type;
+    # `unparseable` (a parser/gate issue) is tracked in its own field.
+    by_type = defaultdict(lambda: [0, 0, 0])  # type → [content_bad, total, unparseable]
     for t, v in verdicts:
         by_type[t][1] += 1
         if v in ("revise", "reject"):
             by_type[t][0] += 1
+        elif v == "unparseable":
+            by_type[t][2] += 1
     ax.detail = {
         "total": total,
-        "bad": bad,
+        "bad": bad,  # total failures (content + unparseable) — drives rate/lamp
+        "content_bad": content_bad,
+        "unparseable": unparseable,
         "rate": rate,
-        "by_type": {t: {"bad": b, "total": n} for t, (b, n) in by_type.items()},
+        "by_type": {
+            t: {"bad": b, "total": n, "unparseable": u} for t, (b, n, u) in by_type.items()
+        },
     }
     ax.lamp = (
         RED if rate >= _VERDICT_REVISE_RED else YELLOW if rate >= _VERDICT_REVISE_YELLOW else GREEN
     )
-    ax.summary = f"{total} 份有評分；revise/reject {bad}（{rate:.0%}）。"
+    parts = [f"{total} 份有評分；revise/reject {content_bad}"]
+    if unparseable:
+        parts.append(f"unparseable {unparseable}（品質閘未落地）")
+    ax.summary = "；".join(parts) + f"（未通過 {rate:.0%}）。"
     if ax.lamp != GREEN:
-        worst = sorted(by_type.items(), key=lambda kv: -(kv[1][0] / kv[1][1] if kv[1][1] else 0))
-        for t, (b, n) in worst:
-            if b and n and b / n >= _VERDICT_REVISE_YELLOW:
+        worst = sorted(
+            by_type.items(),
+            key=lambda kv: -((kv[1][0] + kv[1][2]) / kv[1][1] if kv[1][1] else 0),
+        )
+        for t, (b, n, u) in worst:
+            if n and b and b / n >= _VERDICT_REVISE_YELLOW:
                 obs.append(
                     f"報告型別 `{t}`：{n} 份中 {b} 份被判 revise/reject — 檢視其 prompt/template。"
+                )
+            if n and u and u / n >= _VERDICT_REVISE_YELLOW:
+                obs.append(
+                    f"報告型別 `{t}`：{n} 份中 {u} 份 verdict 無法解析（品質閘失效）"
+                    f"— 檢查 critique parser／模型輸出格式，非 prompt。"
                 )
     return ax
 

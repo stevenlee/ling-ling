@@ -109,6 +109,37 @@ def test_report_quality_green_when_no_verdicts(tmp_path):
     assert ax.lamp == GREEN
 
 
+def test_report_quality_counts_unparseable_as_bad(tmp_path):
+    # 2026-07-12 audit: "unparseable" = the gate couldn't read its verdict, so the
+    # report shipped ungated. It must count toward the failure rate (was excluded).
+    arts = [
+        {"artifact_type": "synthesis", "quality_verdict": v}
+        for v in ("keep", "keep", "unparseable", "unparseable")
+    ]
+    r = run_self_assessment(FakeTrace(artifacts=arts), **_paths(tmp_path))
+    ax = _axis(r, "報告品質")
+    # 2 unparseable / 4 = 50% → red, even with zero revise/reject
+    assert ax.lamp == RED
+    assert ax.detail["bad"] == 2 and ax.detail["unparseable"] == 2
+    assert ax.detail["content_bad"] == 0
+    assert ax.detail["rate"] == 0.5
+    # unparseable is surfaced as a parser/gate issue, not a prompt one
+    assert any("無法解析" in o for o in r.observations)
+
+
+def test_report_quality_by_type_bad_stays_content_only(tmp_path):
+    # M3 targets by_type["bad"] for a prompt rewrite, so it must stay revise/reject
+    # (prompt-fixable), NOT include unparseable (a parser issue).
+    arts = [
+        {"artifact_type": "synthesis", "quality_verdict": v}
+        for v in ("revise", "unparseable", "unparseable", "keep")
+    ]
+    ax = _axis(run_self_assessment(FakeTrace(artifacts=arts), **_paths(tmp_path)), "報告品質")
+    bt = ax.detail["by_type"]["synthesis"]
+    assert bt["bad"] == 1 and bt["unparseable"] == 2 and bt["total"] == 4
+    assert ax.detail["bad"] == 3  # 1 revise + 2 unparseable count toward the rate
+
+
 # ── llm-health axis ───────────────────────────────────────────────────────
 
 
