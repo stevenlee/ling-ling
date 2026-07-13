@@ -39,11 +39,11 @@
 - SE trend 本波才清檔重建,需數晚。
 - 建議跑 ~1 週後重跑 audit 的 G 軸指標,用**趨勢**（非單點）確認,再決定加碼或回退。
 
-### D. 房務（可平行、隨時）
-- DocQuality deferred：mermaid statement 黏連 / meta-text 洩漏 / flowchart 家族（見 `DocQuality_CloudAct_implementation_plan.md`）。
+### D. 房務（可平行、隨時）— ✅ 全數處理
+- ~~DocQuality deferred（mermaid）~~：**✅ 完成（`bb0a61c`）**。全庫驗證 15594 blocks / 1245 fail（8%，graph 佔 1082）。逐一驗證後：**主流失敗族（`got STR`＝引號含空格 node id `"X"["label"]`，佔 graph 68%）寫時已被 `repair_mermaid_quoted_endpoint_labels` 修掉**（實測真檔 raw fail、跑現行品質閘後 pass）——1245 是修法前存量，非 live gap。MATH 也已被 `normalized_mermaid_math` 處理。唯一仍漏的 write-time gap＝PS 族（`A["(\"X\")"]`，70 例）→ 新增 `repair_mermaid_paren_escaped_label`。存量 cosmetic、pages/ 有索引，不 mass-backfill（resynthesize 自動修）。剩零星 long-tail（HTML tag ×2）不逐一設 pass。
 - ~~wikilink 25% 斷鏈~~：**部分完成（`c64fd22`）**。精算後其實 6.6%：dangling_absent 2411（指向未 ingest 文件的截斷/亂碼標題，歷史 AI 報告的裝飾性斷鏈、改連結救不了）＋ truncation 237（逐案）＋ control_char ~39（唯一系統性 bug）。已修 control_char：新增 `repair_wikilink_newlines` 品質檢查 pass（收合 `[[...]]` 內換行），write-time 生效。dangling 為非功能性、不 mass-edit（且 pages/ 有索引，批改會索引漂移）——**視為已處理**。
 - ~~palette prompt 規則~~：**✅ 完成（`795409a`）**。system_base.md Rule 4 補負向禁令（禁 🚨🔴⚠️❌🧠… + 邏輯結構圖標題用 📊/🌿 例），reviewer/coder 補 ⚠️ 三處一致。存量 🧠 檔非功能性可留。
-- 稽核清理候選 7 檔（audit report §④）——待 Steven 裁決。
+- ~~稽核清理候選 7 檔~~：**✅ 完成（quarantine）**。7 檔（4 Insights + 3 fromLingLing，皆非索引目錄）移到 `Backups/audit-cleanup-20260713/`——可逆、非硬刪、無索引漂移。要永久刪或還原任一由 Steven 決定。（JEPA research 那份若想保留可 `@ling-resynthesize` 重簽。）
 
 ### E. 本體論 O1-O4（暫緩）
 - 概念層。計劃書（`Ontology_SemanticEntropy_implementation_plan.md`）明訂等 O0+SE 結果評估;SE trend 剛重置,**尚未到評估點**。
