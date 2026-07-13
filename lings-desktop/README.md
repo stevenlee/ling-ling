@@ -170,7 +170,8 @@ Confidence: medium
 | `@ling-consolidate` | 立刻把未鞏固的 insight 蒸餾進 Cortex（消化積壓）。 |
 | `@ling-decay` | 跑一次 Cortex 衰減 / 強化。 |
 | `@ling-ledger` | 跑一次 Cortex falsification 帳本。 |
-| `@ling-assess` | 自我體檢——彙整品質訊號成健康記分卡（唯讀，無副作用）。 |
+| `@ling-assess` | 自我體檢（Metacognition M1）——彙整七軸品質訊號成健康記分卡（唯讀，無副作用）。 |
+| `@ling-improve` | 自我改善提案佇列（M3）。`generate` 跑 M1→M2→M3 產出修訂提案，`list`／`show <id>` 檢視，`approve <id>`／`reject <id>` 人工核可。只提案不自動套用；核可才寫檔且原檔先備份。 |
 | `@ling-resynthesize [[標題]]` | 把既有文件的原始檔重新投入 `Consolidate/`，重跑 synthesis（sidecar 圖片一併還原）。 |
 
 ### 發布track（書評／報導 → kafu 數位花園）
@@ -238,6 +239,8 @@ lings-desktop/
 
 | 里程碑 | 時間 | 摘要 |
 |---|---|---|
+| 產出品質稽核 + 反同質化／自省接通 | 2026-07 | 七軸稽核（[audit report](../System_Engine/DesignDoc/LingLing_Output_Audit_report_20260712.md)）→ 一連串硬化：refute 對創意型 operation 改 lenient（不再誤殺）、grounding 用 MMR 去集中化、montecarlo 殼改造去戰略建議模板（novelty ~翻倍）、M-arc 接通（M3 泛化到洞察品質軸 + 陳舊 pending 提醒）、synthesis 品質閘 verdict parser 補中文 header + 計量把 unparseable 算進 bad。全部 gated／default-off／行為保守，均經 live 驗證。 |
+| Metacognition 自我改善弧線（M1–M4） | 2026-06 | 自動評估→自動改善的四階閉環，全數 flag-gated default-off：M1 七軸自評記分卡（`@ling-assess`，唯讀零 LLM）→ M2 診斷（每紅/黃軸一次 lean LLM 給根因+候選改善）→ M3 提案（`@ling-improve`，把診斷變 gated `_pending` 修訂提案，人工核可才寫檔）→ M4 數值自調（唯一無人工閘，限安全旋鈕 + damping + 自動回滾）。反漂移硬規則：評估/改善分離、改善走閘、多訊號交叉防 Goodhart。 |
 | Parts 蒸餾翻修 | 2026-06 | 結構感知切分（ThoughtfulSplitter + `source_prep` 前處理）讓 Parts 沿章節邊界切；B1 resume 把 `pending_concepts`/digest 持久化進 frontmatter，長文中斷後可續跑。（曾試「每 Part 合併成一次 LLM call」的加速法，A/B 實測只有 1.03×——生成是 token-bound 不是 call-bound——已移除。） |
 | 書評／報導發布track | 2026-06 | `@ling-review` 把 Synthesis 寫成助學習的書評／報導（book/explainer/paper/patent 四種 genre + `identifier_guard` 校正），`@ling-blog` 把核可稿轉成 Quartz 內容送進 kafu 數位花園（build/push 留在 kafu 端）。 |
 | Daydream 白日夢補做 | 2026-06 | 夜間做夢窗口被忙碌跳過的工作改由白天閒置時段低優先補做（consolidation 積壓 → 漏掉的每日洞察 → 自發反思），複用 facet-backfill 的「一次一小口、可被插隊、衍生不追蹤、每日額度」讓步契約。 |

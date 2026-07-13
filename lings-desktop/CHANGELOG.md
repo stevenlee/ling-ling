@@ -2,6 +2,22 @@
 
 Ling-Ling 的逐項變更紀錄（新到舊）。架構層面的概覽見 [README.md](README.md) 的「架構演進」一節。
 
+### 2026-07-12/13 產出品質稽核 → 反同質化 + 自省弧線硬化
+
+七軸稽核（`DesignDoc/LingLing_Output_Audit_report_20260712.md`）後的一連串修復。四句話結論：訊號可信、內容同質化嚴重（病灶在 montecarlo 殼）、M-arc 斷在 M1→M2、干預多數有效。逐項：
+
+- **refute operation-aware（`1e67ae0`）**：稽核發現 refute 閘門懲罰認識論誠實——analogy/counterfactual/dialogue/fable 刻意非literal推理，strict refute 把「撕裂線」等自我申報限制當證偽證據（analogy 0710 groundedness 0.867、事實全對仍被判 refuted，而 refuted 不進 Cortex＝白燒 token）。新增 skill frontmatter `refute_mode: lenient`，lenient 時只評「可轉移原則」不因 figurative vehicle 扣分。實測同一候選 strict→refuted / lenient→survived。
+- **grounding 去集中化（`79f7a33`）**：insight 接地集中在 12 個 cortex 主張、top-4 佔 88%。真根因是 `_cortex_priors` 用純相關性 top-3（中心 hub 每次都贏），非斷邊。改用 MMR 多樣化（`select_diverse`，λ=0.5 走 `CORTEX_GROUND_MMR_LAMBDA`）＋修潛伏 bug（ranked path 曾繞過 falsifiability gate）。真 Cortex 實測 top-k 15 distinct/最多 4× → MMR 23 distinct/最多 3×。
+- **殼改造（`6445088`）**：戰略建議節 43% 同質化聚類（95% 是「動詞＋術語＋框架/模板/庫」填空），根源＝`_cross_round_evaluation` 強制套 insight-rpt 四段模板。`_is_creative`→`_is_lean`（接受 `report_mode: creative|lean`），analogy/counterfactual 走輕量殼（跳 scorecard/戰略建議、expand 依 lens）；montecarlo 保留 scorecard 但去掉強制 action-items + 四段模板。實測 novelty analogy 0.135→0.289、counterfactual 0.148→0.258（去殼稀釋）。
+- **意圖 trigger 詞界（`28d7fa6`）**：`/counterfactual` 含 `/count`（lens trigger、排在 insight 前）→ counterfactual 洞察策略永遠被路由到 lens。`detect_intent` 改詞界感知（連字號仍算邊界）。
+- **M-arc 接通（`a6aa6d1`）**：M2 每週產精準 Cortex/洞察診斷但 M3 硬閘 `axis != 報告品質` 全丟棄→慢性觀察零輸出。M3 泛化（`_resolve_target`）：新增 洞察品質→`agent_insight.md`；code-lever 軸給具體 skip 理由。＋陳舊 pending 提醒（逾 `SELF_IMPROVE_STALE_DAYS`=14 天，實測抓到 agent_counter 28 天）。
+- **agent_insight 反同質化三改（`3217e89`）**：M3 對洞察品質軸產出的提案，人工審後精修落地——加資訊增量指令（保留 non-obvious structural parallels）、Devil's Advocate→Stress Test、grounding 檢查升級為「來源需支撐邏輯推導」。
+- **synthesis 品質閘修復（`bffd6c9`）**：追 synthesis 33% revise 時發現視窗內 4 篇 unparseable。挖 critique trace：3/4 其實有清楚判定，只是 header 用了 gemma 常寫的「總體結論」「總體裁定」，`parse_verdict` 的 header class 沒涵蓋→回 None→`critique_loop` 不重試→該 revise 的 synthesis 沒修訂就出貨。header class 補 結结裁/論论。實測 4 篇 trace #2/#3→revise、#4→keep 回收、#1 正確維持 None（模型真沒吐判定）。
+- **報告品質軸計量修正（`c949f6a`）**：該軸原只把 revise/reject 算 bad、排除 unparseable→低報。改：top-level `bad`=content+unparseable（驅動 rate/lamp）、`by_type["bad"]` 維持 content-only（M3 lever 要指 prompt 可修型別）。實測 audit 視窗 synthesis 31.2%→56.2%（正確跨 RED）。
+- **測試污染修復（`6ef2c51`）**：`test_self_assessment` 的 `_paths()` 漏導 `history_file`→每跑一次測試就往正式 trend 檔塞 fixture，HISTORY_MAX=180 被填滿→真實夜間 trend 全滅。已修＋清檔。
+
+> 全部 default-off/gated 或行為保守；live 驗證見稽核報告。剩餘 backlog 見 README「架構演進」下的待辦與 audit report §⑤。
+
 ### 2026-06-15 Embedding 換 bge-m3 + 修頭部截斷 bug：golden bench 0.867 → 1.000
 
 firsthand 追因發現**真正的瓶頸**:`OllamaEmbeddingFunction` 把每段輸入硬砍到 `[:1200]` 字才嵌入(為了避開 nomic 的短 context)。在 `CHUNK_SIZE=5000` 下,每個向量只代表 chunk 的**前 ~24%**,其餘 76% 對向量檢索是隱形的——這才是檢索弱、要靠 reranker 硬撐的根因(不是模型選錯、也非空間 mismatch;實測短 chunk 與 nomic cosine=1.0,索引本來就是 nomic)。
