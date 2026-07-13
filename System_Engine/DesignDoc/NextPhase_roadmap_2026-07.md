@@ -72,6 +72,18 @@
 ### Phase N.3 — 房務（平行，隨時插入）
 §2.D（DocQuality/wikilink/palette/清理候選）。這些彼此獨立,適合當觀察窗期間的填空工作。（§2.B1 synthesis 品質閘收尾已於 2026-07-13 完成，`bb811db`。）
 
+### 觀察窗基線（t=0，2026-07-13，全庫 aggregate；一週後比 NEW-only）
+> 觀察窗自此開跑（daemon 跑最新 code，prompt 熱載入）。~1 週後重跑同指標,
+> 重點看**觀察窗期間新產出**的值(非全庫平均——全庫含修法前存量會稀釋訊號)。
+
+| 指標 | t=0 | 稽核前(pre-fix) | 一週後期望 |
+|---|---|---|---|
+| novelty by op | analogy 0.212 / counterfactual 0.203 / dialogue 0.229 / fable 0.314 / montecarlo 0.126 | analogy 0.135 / counterfactual 0.148 / montecarlo 0.126 | 創意型維持高、不回落 |
+| grounding distinct ids / top-4 share | 39 / 0.662 | 12 / 0.878 | distinct 續升、top-4 share 續降 |
+| SE insight_dim | 13.9（cortex 40.6） | 11.2（37.6） | trend 累積數點、續升或持平 |
+| synthesis 7d verdicts | keep 8 / revise 5 / **unparseable 4** | — | **unparseable → ~0**（parser+B1；4 是修法前存量） |
+| pending 提案 | 1（agent_counter 28d+） | — | 別再累積陳舊；@ling-improve 有人審 |
+
 ### 暫緩
 本體論 O1-O4（§2.E）——等 N.1 的 SE 趨勢與 Cortex 圖狀況明朗再評估是否需要概念層。
 
