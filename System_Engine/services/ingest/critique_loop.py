@@ -61,6 +61,22 @@ _VERDICT_NORMALISE = {
 _VERDICT_RANK = {"keep": 2, "revise": 1, "reject": 0, None: -1}
 
 
+def _needs_retry(result: dict) -> bool:
+    """Whether a synthesis attempt should be regenerated.
+
+    Retry on revise/reject (the critic wants changes) OR when the critic RAN but
+    its verdict was unparseable — verdict None WITH a non-empty critique section.
+    That last case is the 2026-07-12 audit hole: the gate produced findings but
+    no readable verdict (gemma sometimes writes 總結與建議 instead of a verdict
+    line), so the synthesis would otherwise ship UNGATED. Retrying gives the gate
+    another chance at a readable verdict; if it never parses, the synthesis still
+    ships but is recorded/counted as unparseable (visible), never silently
+    "passed". A None verdict with NO section means critique is off/failed —
+    nothing to gate against, so don't retry."""
+    v = result.get("verdict")
+    return v in ("revise", "reject") or (v is None and bool(result.get("section")))
+
+
 def parse_verdict(critique: str) -> str | None:
     m = _VERDICT_RE.search(critique) or _VERDICT_SECTION_RE.search(critique)
     if not m:
@@ -122,7 +138,7 @@ class SynthesisCritiqueLoop:
         history = [current["verdict"]]
 
         retries_left = max_retries
-        while current["verdict"] in ("revise", "reject") and retries_left > 0:
+        while _needs_retry(current) and retries_left > 0:
             retries_left -= 1
             feedback = current["section"].removeprefix(CRITIQUE_HEADER).strip()
             retry = attempt(feedback)

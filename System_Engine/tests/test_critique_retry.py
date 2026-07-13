@@ -117,10 +117,48 @@ def test_zero_retries_matches_status_quo(monkeypatch):
     assert len(llm.synthesis_calls) == 1
 
 
-def test_unparseable_verdict_never_retries(monkeypatch):
+def test_unparseable_with_section_retries_then_adopts_parseable(monkeypatch):
+    # 2026-07-12 audit: a critique that RAN but carried no parseable verdict used
+    # to ship ungated (no retry). Now it retries — and adopts a parseable verdict
+    # from the retry rather than silently passing the unparseable original.
     monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
     monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_MAX_RETRIES", 1)
-    llm = _RetryStubLLM(["text v1"], ["* [minor] something, but no verdict line"])
+    llm = _RetryStubLLM(
+        ["text v1", "text v2"],
+        ["* [minor] something, but no verdict line", _verdict("keep")],
+    )
+    out = _run(_make_pipe(llm))
+
+    assert out["text"] == "text v2"
+    assert out["verdict"] == "keep"
+    assert out["attempts"] == 2
+    assert out["verdict_history"] == [None, "keep"]
+    assert len(llm.synthesis_calls) == 2
+
+
+def test_unparseable_persists_ships_but_stays_visible(monkeypatch):
+    # If the retry ALSO can't parse a verdict, the synthesis still ships, but the
+    # final verdict stays None (→ recorded/counted as unparseable, never a silent
+    # "keep"). Bounded by max_retries.
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_MAX_RETRIES", 1)
+    llm = _RetryStubLLM(
+        ["text v1", "text v2"],
+        ["* [minor] no verdict", "* [minor] still no verdict"],
+    )
+    out = _run(_make_pipe(llm))
+
+    assert out["verdict"] is None
+    assert out["attempts"] == 2  # it DID retry (bounded), unlike the old behavior
+    assert out["verdict_history"] == [None, None]
+
+
+def test_no_verdict_no_section_does_not_retry(monkeypatch):
+    # Critique that produced NO section (disabled / empty / failed) = nothing to
+    # gate against → verdict None but NO retry (distinct from ran-but-unparseable).
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_MAX_RETRIES", 1)
+    llm = _RetryStubLLM(["text v1"], [""])  # empty critique → section "", verdict None
     out = _run(_make_pipe(llm))
 
     assert out["verdict"] is None
