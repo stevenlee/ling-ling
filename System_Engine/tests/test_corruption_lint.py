@@ -5,10 +5,46 @@ published cloud_act output."""
 from core.parsing.markdown_quality import (
     check_translation_number_fidelity,
     flag_foreign_scripts,
+    repair_wikilink_newlines,
     run_markdown_quality_checks,
     strip_zero_width_chars,
 )
 from services.ingestion_pipeline import IngestionPipeline
+
+
+class TestWikilinkNewline:
+    def test_joins_line_wrapped_wikilink(self):
+        # Observed live: a long link title wrapped mid-way in prose.
+        text = "基礎 [[How Claude\nCode works... (Synthesis)]]。下一段"
+        cleaned, fixes = repair_wikilink_newlines(text)
+        assert "[[How Claude Code works... (Synthesis)]]" in cleaned
+        assert "\n" not in cleaned[cleaned.index("[[") : cleaned.index("]]")]
+        assert fixes and fixes[0]["type"] == "wikilink_newline"
+
+    def test_collapses_indentation_around_wrap(self):
+        cleaned, _ = repair_wikilink_newlines("[[Governed Shared Memory\n   for Multi-Agent]]")
+        assert cleaned == "[[Governed Shared Memory for Multi-Agent]]"
+
+    def test_clean_wikilink_untouched(self):
+        text = "see [[A Normal Title (Synthesis)]] here"
+        cleaned, fixes = repair_wikilink_newlines(text)
+        assert cleaned == text and fixes == []
+
+    def test_blank_line_not_treated_as_link(self):
+        # `[[` and `]]` across a paragraph break is not a wrapped link — leave it.
+        text = "[[start\n\nend]]"
+        cleaned, fixes = repair_wikilink_newlines(text)
+        assert cleaned == text and fixes == []
+
+    def test_runs_inside_default_pipeline(self):
+        cleaned, fixes = run_markdown_quality_checks("[[How Claude\nCode works (Synthesis)]]")
+        assert "[[How Claude Code works (Synthesis)]]" in cleaned
+        assert any(f["type"] == "wikilink_newline" for f in fixes)
+
+    def test_idempotent(self):
+        once, _ = repair_wikilink_newlines("[[A\nB (Part 3)]]")
+        twice, fixes = repair_wikilink_newlines(once)
+        assert twice == once and fixes == []
 
 
 class TestZeroWidthStrip:

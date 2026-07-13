@@ -143,6 +143,35 @@ def strip_zero_width_chars(text: str) -> tuple[str, list[dict]]:
     return cleaned, [_make_fix("stripped_zero_width_chars", line=first, before=f"{n} char(s)")]
 
 
+# A `[[wikilink]]` whose title got line-wrapped mid-way in prose:
+# `[[How Claude\nCode works (Synthesis)]]`. Bounded length + no nested brackets
+# so it can't run away or cross into another link; DOTALL lets it span the wrap.
+_WIKILINK_SPAN_RE = re.compile(r"\[\[([^\[\]]{1,200}?)\]\]", re.S)
+
+
+def repair_wikilink_newlines(text: str) -> tuple[str, list[dict]]:
+    """Collapse a literal newline inside a `[[wikilink]]` to a single space.
+
+    The LLM sometimes line-wraps a long link title mid-way in prose
+    (`[[How Claude\\nCode works... (Synthesis)]]`). Obsidian will not render a
+    wikilink that spans a newline, so joining the halves is the correct repair.
+    Conservative: a candidate containing a blank line (`\\n\\n`) is left alone —
+    that is not a wrapped link but two literal `[[` across a paragraph break."""
+    if "[[" not in text or "\n" not in text:
+        return text, []
+    fixes: list[dict] = []
+
+    def _repl(m: "re.Match") -> str:
+        inner = m.group(1)
+        if "\n" not in inner or re.search(r"\n[ \t]*\n", inner):
+            return m.group(0)
+        joined = re.sub(r"[ \t]*\n[ \t]*", " ", inner)
+        fixes.append(_make_fix("wikilink_newline", before=inner, after=joined))
+        return f"[[{joined}]]"
+
+    return _WIKILINK_SPAN_RE.sub(_repl, text), fixes
+
+
 def flag_foreign_scripts(text: str) -> tuple[str, list[dict]]:
     """WARNING-only pass: report isolated foreign-script runs (Thai, Cyrillic,
     Arabic, Devanagari, Hangul) inside the text. Never modifies the text — a
@@ -546,6 +575,7 @@ def run_markdown_quality_checks(
         [
             strip_orphan_leading_fence,
             strip_zero_width_chars,
+            repair_wikilink_newlines,
             flag_foreign_scripts,
             repair_latex_carriage_returns,
             repair_latex_escape_collisions,
