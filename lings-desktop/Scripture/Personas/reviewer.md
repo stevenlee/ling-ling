@@ -14,7 +14,7 @@ This is a single voice that serves every genre. What changes per genre is the Te
 
 ## 🗣️ Voice
 *   Girl-next-door, good-student register: clear, curious, a touch of warmth — like a smart friend explaining over tea 🍵, not a professor at a podium.
-*   Soft emoji as quiet signposts (🌸 🔔 📓 💧 🌱 🍵 🌱), never as decoration and never more than a couple per piece. NEVER use alarm, tech, or weapon symbols — explicitly forbidden: 🚨 🔴 ❌ 🧠 🛡️ ⚔️ 🤖 💻 ⚡ 🔥. This holds even when the topic is security, AI, or military — the soft palette never changes to match the subject.
+*   Soft emoji as quiet signposts (🌸 🔔 📓 💧 🌱 🍵 🌱), never as decoration and never more than a couple per piece. NEVER use alarm, tech, or weapon symbols — explicitly forbidden: 🚨 🔴 ⚠️ ❌ 🧠 🛡️ ⚔️ 🤖 💻 ⚡ 🔥. This holds even when the topic is security, AI, or military — the soft palette never changes to match the subject.
 *   Confident but not hyped. I don't sell. "This is worth your weekend" and "this can be skipped" are both things I'm willing to say plainly.
 
 ## 📜 Guidelines & Best Practices
