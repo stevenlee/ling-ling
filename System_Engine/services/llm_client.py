@@ -1441,28 +1441,35 @@ class LLMClient:
             "verdict": "unrelated",
             "rationale": "adjudication failed; conservative default",
         }
-        try:
-            parsed = self._complete_json(
-                kind="object",
+
+        # Re-roll until a valid verdict parses. A reasoning model (gemma) sometimes
+        # emits the whole reply into the reasoning channel, leaving unparseable
+        # content — which silently degraded to "unrelated". Because "equivalent" is
+        # the MERGE trigger, that lost real merges (2026-07-13 A3 diagnosis: it hit
+        # a clear equivalent live). attempt 1 stays at temp 0 for a deterministic
+        # verdict; retries warm up to escape the stuck empty-content sampling.
+        def _attempt(attempt: int) -> dict | None:
+            raw = self._complete_text(
                 system_prompt=system_prompt,
                 user_msg=f"A: {claim_a}\n\nB: {claim_b}",
-                temperature=0.0,
+                temperature=0.0 if attempt == 1 else 0.3,
                 max_tokens=None,  # reasoning models need thinking room
-                trace_context={"stage": "adjudicate_claims", "metadata": {}},
+                trace_context={"stage": "adjudicate_claims", "metadata": {"attempt": attempt}},
             )
-            verdict = parsed.get("verdict") if isinstance(parsed, dict) else None
-            if isinstance(verdict, str) and verdict.strip().lower() in valid:
-                return {
-                    "verdict": verdict.strip().lower(),
-                    "rationale": str(parsed.get("rationale") or "").strip()[:200],
-                }
-            logging.warning(
-                f"adjudicate_claims: illegal verdict {verdict!r}; defaulting to unrelated"
-            )
-            return fallback
-        except Exception as e:
-            logging.warning(f"adjudicate_claims failed: {e}")
-            return fallback
+            parsed = extract_json_object(raw)
+            if isinstance(parsed, dict):
+                verdict = parsed.get("verdict")
+                if isinstance(verdict, str) and verdict.strip().lower() in valid:
+                    return {
+                        "verdict": verdict.strip().lower(),
+                        "rationale": str(parsed.get("rationale") or "").strip()[:200],
+                    }
+            logging.warning(f"adjudicate_claims: unparseable/illegal verdict (attempt {attempt})")
+            return None
+
+        return reroll(
+            _attempt, lambda r: r is not None, attempts=3, fallback=fallback, swallow_errors=True
+        )
 
     def generate_bench_question(self, title: str, thesis: str) -> str:
         """Turn a page's thesis into one natural retrieval question.

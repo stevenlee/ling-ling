@@ -456,6 +456,22 @@ class TestLLMDefenses:
         garbage = self._client(monkeypatch, "no json at all")
         assert garbage.adjudicate_claims("a", "b")["verdict"] == "unrelated"
 
+    def test_adjudicate_rerolls_past_parse_miss(self, monkeypatch):
+        # 2026-07-13 A3: a reasoning-channel parse miss on the first attempt must
+        # RE-ROLL, not silently degrade to "unrelated" — that lost real merges
+        # (equivalent is the merge trigger). Empty first, valid verdict on retry.
+        from services.llm_client import LLMClient
+
+        client = LLMClient()
+        responses = iter(["", '{"verdict": "equivalent", "rationale": "r"}'])
+        monkeypatch.setattr(client, "_complete_text", lambda *a, **k: next(responses))
+        assert client.adjudicate_claims("a", "b")["verdict"] == "equivalent"
+
+    def test_adjudicate_gives_up_after_attempts(self, monkeypatch):
+        # Persistent unparseable → conservative "unrelated" after the re-rolls.
+        client = self._client(monkeypatch, "never valid json")
+        assert client.adjudicate_claims("a", "b")["verdict"] == "unrelated"
+
 
 # ── Phase 2.5: falsifiability wiring, anchoring, penetration ──────────
 
