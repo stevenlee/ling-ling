@@ -26,8 +26,8 @@
 ## 2. 殘留工作（backlog，依 impact 排序）
 
 ### A. Cortex 軸——最深的結構性缺口（M-arc 的另一半）
-- **A1 externalize Cortex prompts**：`extract_claims` / `assess_falsifiability` 是 hardcoded Python（`llm_client.py`），M3 因此**碰不到 Cortex 軸**（只能誠實 skip）。外部化成 vault 模板後，M3 才能對 Cortex 診斷產出 prompt 提案，真正接通 M-arc 的 Cortex 半邊。
-- **A2 thin-evidence 累積機制**：52/53 主張薄證據（≤1 來源）。MMR grounding（本波）改善了**分佈**，但主張要**變厚**需要 consolidation 更會跨 insight 合併/連結，或 M2 診斷 #2 的「證據追溯維護任務」（定期掃薄證據→找第二來源或降級為假設）。
+- ~~**A1 externalize Cortex prompts**~~：**✅ 完成（2026-07-13，`a16694a`）**。`extract_claims`/`assess_falsifiability` 兩 prompt 外部化到 `Templates/Prompts/cortex_extract_claims.md` / `cortex_falsifiability.md`（`_vault_prompt` 熱載入 + 缺檔 fallback，vault 與 fallback byte-identical、行為不變）。M3 `_resolve_target`：Cortex 信念 → cortex_falsifiability.md（M2 對 Cortex 唯一 prompt 可套的建議＝降教條化/反向壓力測試）。**M-arc 的 Cortex 半邊接通。**
+- ~~**A2 thin-evidence 累積機制**~~：**評估後不另建任務（redundant）**。thin-evidence 要「變厚」的三個 lever 現已全數在線：①MMR grounding（本波，insight 接到更多元主張）②A3 merge parse-miss 修復（equivalent 不再靜默掉→該併的併、accrue evidence）③既有 decay pass（未強化主張的 S 自然衰減＝M2 建議 #2 的「降級」動作已由 decay 涵蓋）。專門的「證據追溯任務」會與這三者重疊、且無法憑空製造證據。**決策：不建冗餘任務,改在 N.1 觀察窗量 thin-evidence 趨勢**——若三 lever 到期仍未見改善,再建針對性任務。
 - ~~**A3 contradictions 恆 0**~~：**✅ 診斷完成（2026-07-13，`3945e3f`）**。結論——**不是裁決過鬆**：實測真 adjudicator 對兩組明確矛盾 2/2 判 contradicts、complementary 對照也對，判準準確。0 contradicts 是 claim 母體（跨域橋接主張）本就少對立命題，非 bug。「過鬆」疑慮排除、contradicts 不需改。診斷過程揪到真 bug 並修掉：adjudicate_claims 走 `_complete_json`，reasoning model 偶爾空 content → 靜默 fallback 成 unrelated（掉了 equivalent＝丟 merge，佔快取 ~3%）→ 改 reroll 重試至解析成功。**此 merge 修復直接餵 A2**（該併的主張現在會併）。
 - **A4 資料衛生**：1 主張 embedding NaN（「The vitality of complex systems…」毒輸入佔位）需重算；0.975 近重複主張對（代理式智慧 vs 實踐）人工裁併。
 
@@ -83,6 +83,7 @@
 | SE insight_dim | 13.9（cortex 40.6） | 11.2（37.6） | trend 累積數點、續升或持平 |
 | synthesis 7d verdicts | keep 8 / revise 5 / **unparseable 4** | — | **unparseable → ~0**（parser+B1；4 是修法前存量） |
 | pending 提案 | 1（agent_counter 28d+） | — | 別再累積陳舊；@ling-improve 有人審 |
+| Cortex thin-evidence / dogmatic / merges | 薄證據 ~52/53、教條 2、contradictions 0 | 薄證據 52 | 薄證據**佔比**下降（A2 三 lever：MMR grounding + merge 修復 + decay）；merge 事件 >0 |
 
 ### N.1 到期執行清單（≥2026-07-20，一週後跑這個）
 時間到時,照這份 checklist 執行——不用重想:
@@ -90,6 +91,7 @@
    - novelty by op,**只取 `date_created >= 2026-07-13` 的 NEW insight**（避免存量稀釋）。
    - 新 insight 的 grounded_on distinct ids / top-4 佔比。
    - `self_assessment_history.json` 的 語義熵.insight_dim 與 報告品質 rate 時序（觀察窗累積了幾點、方向）。
+   - **Cortex thin-evidence 佔比**（`@ling-cortex` 或掃 Cortex/*.md 的 ≤1 來源比例）＋ maintenance.log 的 merge 事件數（A2 三 lever 有沒有讓薄證據下降）。若仍未降→建針對性證據追溯任務。
    - synthesis quality_verdict 分佈,**只取觀察窗期間 ts** → unparseable 是否 →0（parser+B1 生效）。
    - `_pending` 提案數與最老 age（陳舊有沒有被消化 / 有沒有新提案）。
 2. **比對** t=0 基線表的「一週後期望」欄,寫一段「干預成效趨勢」小結（有效／無效／過頭）。
