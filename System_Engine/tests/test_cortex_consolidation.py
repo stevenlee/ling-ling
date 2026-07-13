@@ -422,6 +422,20 @@ class TestLLMDefenses:
         monkeypatch.setattr(client, "_complete_text", lambda *a, **k: response)
         return client
 
+    def test_vault_prompt_prefers_file_over_fallback(self, monkeypatch, tmp_path):
+        # A1 (2026-07-13): Cortex prompts are externalized. _vault_prompt reads
+        # the vault file when present, else the built-in fallback.
+        import core.config as cfg
+
+        pdir = tmp_path / "Prompts"
+        pdir.mkdir()
+        (pdir / "cortex_falsifiability.md").write_text("VAULT VERSION", encoding="utf-8")
+        monkeypatch.setattr(cfg, "PROMPTS_DIR", pdir)
+        client = LLMClient()
+        assert client._vault_prompt("cortex_falsifiability.md", "FALLBACK") == "VAULT VERSION"
+        # missing file → fallback (never breaks the nightly pipeline)
+        assert client._vault_prompt("does_not_exist.md", "FALLBACK") == "FALLBACK"
+
     def test_extract_claims_parses_and_caps(self, monkeypatch):
         response = json.dumps(
             [

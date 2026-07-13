@@ -54,19 +54,18 @@ _TARGET_MAP = {
 # Axes whose lever is a SINGLE governing prompt file (no per-report-type split).
 # 洞察品質's candidate fixes (novelty-differentiation field, adversarial step)
 # are exactly edits to the insight-generation prompt — the audit's clean win.
+# Cortex 信念 → the falsifiability-assessment prompt (externalized 2026-07-13,
+# A1): M2's applicable Cortex fix is the "reverse pressure test / reduce
+# dogmatism" angle, which is an edit to how claims are scored for falsifiability.
 _AXIS_DIRECT_TARGET = {
     "洞察品質": "Templates/Prompts/agent_insight.md",
+    "Cortex 信念": "Templates/Prompts/cortex_falsifiability.md",
 }
 
 # Axes whose real lever is code/config, not a vault prompt. M3 cannot (and must
 # not) edit those; it records a specific, honest reason so the recurring
 # observation names its actual blocker instead of a generic "needs a human".
 _NON_PROMPT_AXIS_REASON = {
-    "Cortex 信念": (
-        "主張建立與可證偽性評估的 prompt 是 hardcoded（llm_client.extract_claims / "
-        "assess_falsifiability），非 vault 模板;M3 不改 code。需先外部化這些 prompt,"
-        "或建「證據追溯維護任務」(見 M2 診斷候選改善 #2)。"
-    ),
     "檢索品質": "檢索由索引/embedding/reranker 的 config 與 code 決定,非單一 prompt 可解。",
     "LLM 健康": "LLM 健康屬 provider/連線層,非 prompt 可解。",
     "記憶衰減": "衰減校準是 config(半衰期/門檻),非 prompt 可解。",

@@ -58,6 +58,35 @@ _LABELS_BY_SUFFIX = {
 }
 _DEFAULT_LABELS = {"file": "Filename", "content": "Content"}
 
+# Cortex claim-building prompts. The live source is Templates/Prompts/
+# cortex_extract_claims.md / cortex_falsifiability.md (vault-editable + M3-
+# reachable); these constants are the fallback used if the vault file is missing
+# so the nightly consolidation never breaks. Keep the two in sync.
+_CORTEX_EXTRACT_CLAIMS_PROMPT = (
+    "You distill an insight report into atomic claims for a long-term memory store.\n"
+    "Extract AT MOST 3 claims. Each claim must be:\n"
+    "- ONE declarative sentence that can be judged true or false on its own\n"
+    "  (NOT a topic label like 'memory and learning').\n"
+    "- In the same language as the report.\n"
+    "- Self-contained: no dangling pronouns or 'this/it' references.\n"
+    "- 'Atomic' does not mean unconditional. Condition-based claims (e.g. 'Under X, A causes B') are better than vague absolutes.\n\n"
+    "Return ONLY a JSON array:\n"
+    '[{"claim": "<one sentence>", "summary": "<one-line gist>", "applies_when": "<specific context/condition this applies to>"}]\n'
+    "No prose outside the JSON. Return [] if the report contains no real claim."
+)
+_CORTEX_FALSIFIABILITY_PROMPT = (
+    "You are assessing the falsifiability (empirical content) of a claim.\n"
+    "A claim has empirical content if and only if you can describe a concrete observation that would prove it false.\n\n"
+    "First, try to write a 'falsifier' — a concrete, observable scenario that would refute the claim.\n"
+    "Then, score the claim from 0.0 to 1.0 based on how falsifiable it is:\n"
+    "- 1.0: The falsifier is a concrete, observable, specific scenario.\n"
+    "- 0.5: A falsifier exists but requires further operationalization to be tested.\n"
+    "- 0.0: The claim is unfalsifiable (e.g., vague absolute, tautology, value statement, or the falsifier is just 'when it is not true').\n\n"
+    "Return ONLY a JSON object:\n"
+    '{"score": <float 0.0, 0.5, or 1.0>, "falsifier": "<specific observation that refutes it, <=200 chars>", '
+    '"falsifier_zh": "<the same falsifier translated into Traditional Chinese (繁體中文), <=200 chars>"}'
+)
+
 # Version-locked quality/splitter prompts now live in services/llm/task_prompts.py
 # (P2b). Old underscore names kept as aliases for in-module callers.
 from services.llm.task_prompts import (  # noqa: E402
@@ -243,6 +272,25 @@ class LLMClient:
 
     def _load_project_identity(self) -> str:
         return self.composer.load_project_identity()
+
+    def _vault_prompt(self, filename: str, fallback: str) -> str:
+        """A system prompt sourced from `Templates/Prompts/<filename>` so it is
+        vault-editable and hot-reloaded (mtime cache) like every other prompt —
+        and reachable by the self-improvement arc (M3). Falls back to the
+        built-in text if the file is absent/unreadable, so a missing vault file
+        never breaks the nightly pipeline."""
+        from core.config import PROMPTS_DIR
+
+        path = PROMPTS_DIR / filename
+        try:
+            cache = getattr(self, "_file_cache", None)
+            if cache is not None:
+                text = cache.read(path)
+            else:
+                text = path.read_text(encoding="utf-8") if path.exists() else ""
+        except Exception:
+            text = ""
+        return text.strip() if text.strip() else fallback
 
     def _build_system_prompt(
         self,
@@ -1262,17 +1310,8 @@ class LLMClient:
         (not a topic label). Returns [{"claim": ..., "summary": ..., "applies_when": ...}];
         empty list on any failure (fail-open — the insight just waits).
         """
-        system_prompt = (
-            "You distill an insight report into atomic claims for a long-term memory store.\n"
-            "Extract AT MOST 3 claims. Each claim must be:\n"
-            "- ONE declarative sentence that can be judged true or false on its own\n"
-            "  (NOT a topic label like 'memory and learning').\n"
-            "- In the same language as the report.\n"
-            "- Self-contained: no dangling pronouns or 'this/it' references.\n"
-            "- 'Atomic' does not mean unconditional. Condition-based claims (e.g. 'Under X, A causes B') are better than vague absolutes.\n\n"
-            "Return ONLY a JSON array:\n"
-            '[{"claim": "<one sentence>", "summary": "<one-line gist>", "applies_when": "<specific context/condition this applies to>"}]\n'
-            "No prose outside the JSON. Return [] if the report contains no real claim."
+        system_prompt = self._vault_prompt(
+            "cortex_extract_claims.md", _CORTEX_EXTRACT_CLAIMS_PROMPT
         )
         try:
             parsed = self._complete_json(
@@ -1321,17 +1360,8 @@ class LLMClient:
             return {}
 
     def _assess_falsifiability_once(self, claim: str) -> dict:
-        system_prompt = (
-            "You are assessing the falsifiability (empirical content) of a claim.\n"
-            "A claim has empirical content if and only if you can describe a concrete observation that would prove it false.\n\n"
-            "First, try to write a 'falsifier' — a concrete, observable scenario that would refute the claim.\n"
-            "Then, score the claim from 0.0 to 1.0 based on how falsifiable it is:\n"
-            "- 1.0: The falsifier is a concrete, observable, specific scenario.\n"
-            "- 0.5: A falsifier exists but requires further operationalization to be tested.\n"
-            "- 0.0: The claim is unfalsifiable (e.g., vague absolute, tautology, value statement, or the falsifier is just 'when it is not true').\n\n"
-            "Return ONLY a JSON object:\n"
-            '{"score": <float 0.0, 0.5, or 1.0>, "falsifier": "<specific observation that refutes it, <=200 chars>", '
-            '"falsifier_zh": "<the same falsifier translated into Traditional Chinese (繁體中文), <=200 chars>"}'
+        system_prompt = self._vault_prompt(
+            "cortex_falsifiability.md", _CORTEX_FALSIFIABILITY_PROMPT
         )
 
         # Transport retries live in _complete_text; this re-roll covers a

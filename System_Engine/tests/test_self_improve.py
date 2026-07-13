@@ -32,6 +32,10 @@ def _vault(tmp_path):
     (prompts / "agent_insight.md").write_text(
         "You generate insights.\nSpark novel connections.\n" * 3, encoding="utf-8"
     )
+    # the falsifiability prompt — Cortex 信念 axis's lever (A1 externalized)
+    (prompts / "cortex_falsifiability.md").write_text(
+        "You assess falsifiability.\nScore the claim.\n" * 3, encoding="utf-8"
+    )
     return vault, f
 
 
@@ -137,15 +141,44 @@ def test_partial_match_applies_only_valid_edits(tmp_path):
     assert "be exhaustive" in res.proposals[0]["revised_content"]
 
 
-def test_cortex_axis_skipped_with_specific_reason(tmp_path):
-    # Cortex's lever (extract_claims / assess_falsifiability) is hardcoded code,
-    # not a vault prompt — M3 must skip it with a SPECIFIC, actionable reason,
-    # not a generic "needs a human" (the audit's break: it recurred invisibly).
+def test_cortex_axis_generates_proposal(tmp_path):
+    # A1 (2026-07-13): the Cortex prompts are externalized to vault, so M3 now
+    # reaches the Cortex axis via cortex_falsifiability.md (was a code-lever skip).
     vault, _ = _vault(tmp_path)
     pending = tmp_path / "_pending"
     dx = DiagnosisResult(
         diagnoses=[
-            Diagnosis(axis="Cortex 信念", lamp=YELLOW, root_cause="rc", candidate_fixes=["fix"]),
+            Diagnosis(
+                axis="Cortex 信念",
+                lamp=YELLOW,
+                root_cause="教條化",
+                candidate_fixes=["加入反向壓力測試步驟以降低教條化"],
+            ),
+        ]
+    )
+    llm = FakeLLM(
+        edits=[
+            {
+                "find": "Score the claim.",
+                "replace": "Score the claim; require a concrete falsifier before high confidence.",
+                "why": "reverse pressure test",
+            }
+        ]
+    )
+    res = run_self_improve(llm, _assessment(), dx, vault_dir=vault, pending_dir=pending)
+    assert res.status == "succeeded"
+    assert len(res.proposals) == 1
+    assert res.proposals[0]["target_path"] == "Templates/Prompts/cortex_falsifiability.md"
+
+
+def test_code_lever_axis_skipped_with_specific_reason(tmp_path):
+    # 檢索品質's lever is index/reranker config — M3 must skip it with a SPECIFIC
+    # reason, not a generic "needs a human" (the audit's break: recurred invisibly).
+    vault, _ = _vault(tmp_path)
+    pending = tmp_path / "_pending"
+    dx = DiagnosisResult(
+        diagnoses=[
+            Diagnosis(axis="檢索品質", lamp=YELLOW, root_cause="rc", candidate_fixes=["fix"]),
         ]
     )
     res = run_self_improve(
@@ -156,9 +189,8 @@ def test_cortex_axis_skipped_with_specific_reason(tmp_path):
         pending_dir=pending,
     )
     assert res.proposals == []
-    assert res.skipped_axes and res.skipped_axes[0][0] == "Cortex 信念"
-    reason = res.skipped_axes[0][1]
-    assert "hardcoded" in reason or "extract_claims" in reason
+    assert res.skipped_axes and res.skipped_axes[0][0] == "檢索品質"
+    assert "reranker" in res.skipped_axes[0][1] or "config" in res.skipped_axes[0][1]
 
 
 def test_insight_axis_generates_proposal(tmp_path):
