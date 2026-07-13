@@ -28,7 +28,7 @@
 ### A. Cortex 軸——最深的結構性缺口（M-arc 的另一半）
 - **A1 externalize Cortex prompts**：`extract_claims` / `assess_falsifiability` 是 hardcoded Python（`llm_client.py`），M3 因此**碰不到 Cortex 軸**（只能誠實 skip）。外部化成 vault 模板後，M3 才能對 Cortex 診斷產出 prompt 提案，真正接通 M-arc 的 Cortex 半邊。
 - **A2 thin-evidence 累積機制**：52/53 主張薄證據（≤1 來源）。MMR grounding（本波）改善了**分佈**，但主張要**變厚**需要 consolidation 更會跨 insight 合併/連結，或 M2 診斷 #2 的「證據追溯維護任務」（定期掃薄證據→找第二來源或降級為假設）。
-- **A3 contradictions 恆 0**：71 主張零矛盾邊，裁決從未判過 contradicts——**過鬆疑慮成立**。查 `_adjudicate` 的 contradicts 判準/門檻是否形同虛設。
+- ~~**A3 contradictions 恆 0**~~：**✅ 診斷完成（2026-07-13，`3945e3f`）**。結論——**不是裁決過鬆**：實測真 adjudicator 對兩組明確矛盾 2/2 判 contradicts、complementary 對照也對，判準準確。0 contradicts 是 claim 母體（跨域橋接主張）本就少對立命題，非 bug。「過鬆」疑慮排除、contradicts 不需改。診斷過程揪到真 bug 並修掉：adjudicate_claims 走 `_complete_json`，reasoning model 偶爾空 content → 靜默 fallback 成 unrelated（掉了 equivalent＝丟 merge，佔快取 ~3%）→ 改 reroll 重試至解析成功。**此 merge 修復直接餵 A2**（該併的主張現在會併）。
 - **A4 資料衛生**：1 主張 embedding NaN（「The vitality of complex systems…」毒輸入佔位）需重算；0.975 近重複主張對（代理式智慧 vs 實踐）人工裁併。
 
 ### B. synthesis 品質閘——收尾
