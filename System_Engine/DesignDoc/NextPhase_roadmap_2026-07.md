@@ -42,7 +42,7 @@
 ### D. 房務（可平行、隨時）
 - DocQuality deferred：mermaid statement 黏連 / meta-text 洩漏 / flowchart 家族（見 `DocQuality_CloudAct_implementation_plan.md`）。
 - wikilink 25% 斷鏈（長標題截斷家族）。
-- palette prompt 規則：83 檔含 🧠 等非 palette emoji——一條 prompt 規則可防後續（存量非功能性可留）。
+- ~~palette prompt 規則~~：**✅ 完成（`795409a`）**。system_base.md Rule 4 補負向禁令（禁 🚨🔴⚠️❌🧠… + 邏輯結構圖標題用 📊/🌿 例），reviewer/coder 補 ⚠️ 三處一致。存量 🧠 檔非功能性可留。
 - 稽核清理候選 7 檔（audit report §④）——待 Steven 裁決。
 
 ### E. 本體論 O1-O4（暫緩）
