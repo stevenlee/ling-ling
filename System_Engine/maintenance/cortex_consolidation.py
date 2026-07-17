@@ -22,7 +22,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +30,7 @@ import numpy as np
 from core.config import (
     CORTEX_ADJUDICATION_CACHE,
     CORTEX_CONSOLIDATION_MAX_ATTEMPTS,
+    CORTEX_CONSOLIDATION_QUARANTINE_HOURS,
     CORTEX_CONSOLIDATION_ENABLED,
     CORTEX_DIR,
     CORTEX_MAX_ADJUDICATIONS_PER_NIGHT,
@@ -711,10 +712,35 @@ def _failure_attempts(entry: object, content_hash: str) -> int:
         return 0
 
 
-def _is_quarantined(entry: object, content_hash: str, max_attempts: int) -> bool:
+def _is_quarantined(
+    entry: object,
+    content_hash: str,
+    max_attempts: int,
+    quarantine_hours: int,
+) -> bool:
     if not isinstance(entry, dict) or entry.get("content_hash") != content_hash:
         return False
-    return bool(entry.get("quarantined")) or _failure_attempts(entry, content_hash) >= max_attempts
+    if not (
+        bool(entry.get("quarantined")) or _failure_attempts(entry, content_hash) >= max_attempts
+    ):
+        return False
+
+    # Half-open quarantine: unchanged poison gets at most one probe per TTL,
+    # while healthy input caught during a provider outage can recover without
+    # an artificial file edit. Pre-TTL entries derive a lazy deadline.
+    deadline = entry.get("quarantined_until")
+    if not deadline:
+        try:
+            attempted_at = datetime.fromisoformat(str(entry.get("last_attempt_at") or ""))
+        except ValueError:
+            return False  # damaged/undated quarantine recovers by retrying
+        deadline = (attempted_at + timedelta(hours=quarantine_hours)).isoformat(timespec="seconds")
+    try:
+        deadline_at = datetime.fromisoformat(str(deadline))
+        now = datetime.now(deadline_at.tzinfo) if deadline_at.tzinfo else datetime.now()
+        return now < deadline_at
+    except ValueError:
+        return False
 
 
 def _record_failure(
@@ -725,6 +751,7 @@ def _record_failure(
     stage: str,
     error: str,
     max_attempts: int,
+    quarantine_hours: int,
 ) -> bool:
     """Persist a bounded retry attempt; return whether it is quarantined."""
     failures = state.setdefault("failures", {})
@@ -738,6 +765,10 @@ def _record_failure(
         "last_attempt_at": _now(),
         "quarantined": quarantined,
     }
+    if quarantined:
+        failures[insight_name]["quarantined_until"] = (
+            datetime.now() + timedelta(hours=quarantine_hours)
+        ).isoformat(timespec="seconds")
     return quarantined
 
 
@@ -746,6 +777,7 @@ def _iter_owed_insights(
     processed: dict,
     failures: dict | None = None,
     max_attempts: int = CORTEX_CONSOLIDATION_MAX_ATTEMPTS,
+    quarantine_hours: int = CORTEX_CONSOLIDATION_QUARANTINE_HOURS,
 ):
     """Yield the Path of each insight owed consolidation.
 
@@ -753,8 +785,9 @@ def _iter_owed_insights(
     run_consolidation: passes the signals gate AND is either absent from the
     processed ledger or recorded under a content_hash that no longer matches
     the file — a same-name insight whose content changed is re-digested. A
-    content hash quarantined after bounded failures is not actionable owed;
-    changing the content hash automatically gives it a fresh retry budget.
+    content hash quarantined after bounded failures is not actionable owed
+    until its half-open probe TTL; changing the content hash automatically
+    gives it a fresh retry budget.
     A corrupt (non-dict) ledger entry counts as absent: recovery = reprocess.
 
     Scan results are advisory only: the file can change again after this
@@ -774,6 +807,7 @@ def _iter_owed_insights(
     processed = _processed_ledger(processed)
     failures = _failure_ledger(failures)
     max_attempts = max(1, max_attempts)
+    quarantine_hours = max(1, quarantine_hours)
     if not insights_dir.exists():
         return
     for path in sorted(insights_dir.glob("*.md")):
@@ -782,7 +816,7 @@ def _iter_owed_insights(
         except Exception:
             continue
         content_hash = _insight_hash(text)
-        if _is_quarantined(failures.get(path.name), content_hash, max_attempts):
+        if _is_quarantined(failures.get(path.name), content_hash, max_attempts, quarantine_hours):
             continue
         entry = processed.get(path.name)
         if isinstance(entry, dict):
@@ -856,6 +890,7 @@ def run_consolidation(
     log_path: Path = None,
     max_insights: int = None,
     max_attempts: int = None,
+    quarantine_hours: int = None,
     max_adjudications: int = None,
     top_k: int = None,
     sim_threshold: float = None,  # deprecated alias for link_threshold
@@ -873,6 +908,11 @@ def run_consolidation(
     max_insights = max_insights if max_insights is not None else CORTEX_MAX_INSIGHTS_PER_NIGHT
     max_attempts = (
         max(1, max_attempts) if max_attempts is not None else CORTEX_CONSOLIDATION_MAX_ATTEMPTS
+    )
+    quarantine_hours = (
+        max(1, quarantine_hours)
+        if quarantine_hours is not None
+        else CORTEX_CONSOLIDATION_QUARANTINE_HOURS
     )
     max_adjudications = (
         max_adjudications if max_adjudications is not None else CORTEX_MAX_ADJUDICATIONS_PER_NIGHT
@@ -911,6 +951,7 @@ def run_consolidation(
             state["processed"],
             state["failures"],
             max_attempts,
+            quarantine_hours,
         )
     )
     if _legacy_entries() != legacy_before:  # lazy hash migration happened
@@ -985,6 +1026,7 @@ def run_consolidation(
                     stage="extraction",
                     error="invalid or failed claim extraction",
                     max_attempts=max_attempts,
+                    quarantine_hours=quarantine_hours,
                 ):
                     insights_quarantined += 1
                 _save_json(state_file, state)
@@ -1020,6 +1062,7 @@ def run_consolidation(
                 stage="claim_processing",
                 error=str(e) or type(e).__name__,
                 max_attempts=max_attempts,
+                quarantine_hours=quarantine_hours,
             ):
                 insights_quarantined += 1
             _save_json(state_file, state)

@@ -71,7 +71,9 @@
   gate/meta/hash 一律取自
   **處理當下同一次 raw snapshot**；commit point = 全部 claim 處理與 revision
   reconciliation 成功。失敗另以 content hash 記錄 attempts/stage/error，達上限
-  quarantine；同 hash 不再算 actionable owed，內容改變則取得全新 retry budget。
+  quarantine；隔離期間同 hash 不算 actionable owed，TTL 到期只做一次 half-open
+  probe（outage 恢復可自癒，poison input 仍受頻率限制），內容改變則立即取得全新
+  retry budget。
   舊格式 entry lazy 補 hash、損壞
   container/entry 以重處理恢復（範例：
   `cortex_consolidation._iter_owed_insights` / `reconcile_insight_revision`）。

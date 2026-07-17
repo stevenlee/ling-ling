@@ -515,6 +515,7 @@ class TestRevisionSemantics:
         assert failure["attempts"] == 3
         assert failure["stage"] == "claim_processing"
         assert failure["quarantined"] is True
+        assert failure["quarantined_until"] > failure["last_attempt_at"]
         assert results[-1].insights_quarantined == 1
 
         # Fourth run and daytime predicate both see no actionable debt.
@@ -522,6 +523,83 @@ class TestRevisionSemantics:
         assert fourth.status == "skipped"
         assert len(llm.extract_calls) == 3
         assert consolidation.has_pending_insights(env["insights_dir"], env["state_file"]) is False
+
+        # After TTL, poison gets one half-open probe—not a fresh burst of N
+        # attempts—and is immediately quarantined again.
+        state["failures"]["ok.md"]["quarantined_until"] = "2000-01-01T00:00:00"
+        env["state_file"].write_text(json.dumps(state), encoding="utf-8")
+        probe = run_consolidation(llm, FakeRAG(), **env)
+        after_probe = run_consolidation(llm, FakeRAG(), **env)
+        assert probe.insights_quarantined == 1
+        assert after_probe.status == "skipped"
+        assert len(llm.extract_calls) == 4
+
+    def test_quarantine_ttl_half_open_probe_recovers_unchanged_content(self, tmp_path, monkeypatch):
+        """A healthy unchanged insight caught in an outage gets one probe
+        after TTL instead of remaining permanently quarantined."""
+        import maintenance.cortex_consolidation as consolidation
+
+        env = _env(tmp_path)
+        env["max_attempts"] = 1
+        env["quarantine_hours"] = 24
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = FakeLLM(
+            claims_map={"MARKER-OK": [{"claim": "ALPHA recoverable claim.", "summary": "s"}]}
+        )
+        original = consolidation._Consolidator.process_claim
+        outage = True
+
+        def fail_during_outage(self, *args, **kwargs):
+            if outage:
+                raise RuntimeError("provider unavailable")
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(consolidation._Consolidator, "process_claim", fail_during_outage)
+        run_consolidation(llm, FakeRAG(), **env)
+        assert consolidation.has_pending_insights(env["insights_dir"], env["state_file"]) is False
+
+        # Simulate TTL expiry without changing the insight content. The next
+        # predicate becomes actionable and exactly one half-open probe runs.
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        state["failures"]["ok.md"]["quarantined_until"] = "2000-01-01T00:00:00"
+        env["state_file"].write_text(json.dumps(state), encoding="utf-8")
+        assert consolidation.has_pending_insights(env["insights_dir"], env["state_file"]) is True
+
+        outage = False
+        result = run_consolidation(llm, FakeRAG(), **env)
+
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert result.insights_processed == 1
+        assert len(llm.extract_calls) == 2
+        assert "ok.md" not in state["failures"]
+
+    def test_pre_ttl_quarantine_lazily_expires_from_last_attempt(self, tmp_path):
+        """Entries written by 7d90b2f have no quarantined_until; they must not
+        stay permanently stuck after upgrading to the TTL schema."""
+        from maintenance.cortex_consolidation import _insight_hash, has_pending_insights
+
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        raw = (env["insights_dir"] / "ok.md").read_text(encoding="utf-8")
+        env["state_file"].parent.mkdir(parents=True, exist_ok=True)
+        env["state_file"].write_text(
+            json.dumps(
+                {
+                    "processed": {},
+                    "failures": {
+                        "ok.md": {
+                            "content_hash": _insight_hash(raw),
+                            "attempts": 3,
+                            "last_attempt_at": "2000-01-01T00:00:00",
+                            "quarantined": True,
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert has_pending_insights(env["insights_dir"], env["state_file"]) is True
 
     def test_content_change_resets_quarantine_budget(self, tmp_path, monkeypatch):
         import maintenance.cortex_consolidation as consolidation
