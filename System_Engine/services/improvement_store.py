@@ -21,6 +21,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -29,9 +31,31 @@ def _sha(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Durably write text beside its target, then atomically replace it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.replace(path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def make_proposal(
-    *, axis: str, target_path: str, rationale: str, addressed_fixes: list,
-    original_content: str, revised_content: str, edits: list | None = None,
+    *,
+    axis: str,
+    target_path: str,
+    rationale: str,
+    addressed_fixes: list,
+    original_content: str,
+    revised_content: str,
+    edits: list | None = None,
     stamp: str | None = None,
 ) -> dict:
     """Build a proposal dict. `target_path` is relative to the vault root.
@@ -97,8 +121,12 @@ def _under_allowlist(target: Path, allowed_dirs: list[Path]) -> bool:
 
 
 def approve_proposal(
-    proposal_id: str, *, vault_dir: Path, pending_dir: Path,
-    applied_dir: Path, allowed_dirs: list[Path],
+    proposal_id: str,
+    *,
+    vault_dir: Path,
+    pending_dir: Path,
+    applied_dir: Path,
+    allowed_dirs: list[Path],
 ) -> dict:
     """Apply a pending proposal. Returns {ok, message, target?}.
 
@@ -113,33 +141,65 @@ def approve_proposal(
 
     target = vault_dir / prop["target_path"]
     if not _under_allowlist(target, allowed_dirs):
-        return {"ok": False, "message": f"目標 `{prop['target_path']}` 不在允許修改的資產目錄內,拒絕套用。"}
+        return {
+            "ok": False,
+            "message": f"目標 `{prop['target_path']}` 不在允許修改的資產目錄內,拒絕套用。",
+        }
     if not target.exists():
         return {"ok": False, "message": f"目標檔不存在：`{prop['target_path']}`。"}
 
     current = target.read_text(encoding="utf-8")
     if _sha(current) != prop.get("original_sha"):
-        return {"ok": False, "message": (
-            f"目標 `{prop['target_path']}` 自提案產生後已被改動,拒絕覆蓋（避免蓋掉你的編輯）。"
-            f"請重新產生提案。")}
+        return {
+            "ok": False,
+            "message": (
+                f"目標 `{prop['target_path']}` 自提案產生後已被改動,拒絕覆蓋（避免蓋掉你的編輯）。"
+                f"請重新產生提案。"
+            ),
+        }
 
     revised = prop.get("revised_content") or ""
     if not revised.strip():
         return {"ok": False, "message": "提案的修訂內容是空的,拒絕套用。"}
 
+    # Everything before the target replace is preparation: any failure here
+    # leaves the live prompt untouched.
     try:
         applied_dir.mkdir(parents=True, exist_ok=True)
-        # Back up the original so approval is one rollback away.
-        (applied_dir / f"{proposal_id}.original.md").write_text(current, encoding="utf-8")
-        target.write_text(revised, encoding="utf-8")
-        (applied_dir / f"{proposal_id}.json").write_text(
-            json.dumps({**prop, "applied_at": datetime.now().isoformat(timespec="seconds")},
-                       ensure_ascii=False, indent=2), encoding="utf-8")
-        (pending_dir / f"{proposal_id}.json").unlink(missing_ok=True)
+        _atomic_write_text(applied_dir / f"{proposal_id}.original.md", current)
+        _atomic_write_text(target, revised)
     except Exception as e:
         return {"ok": False, "message": f"套用時發生錯誤：{e}"}
-    return {"ok": True, "message": f"已套用提案 `{proposal_id}` → `{prop['target_path']}`（原檔已備份）。",
-            "target": prop["target_path"]}
+
+    # The atomic target replace above is the commit point. Failures from here
+    # onward must not claim the proposal was unapplied: the live prompt already
+    # changed and its original is recoverable from the backup.
+    cleanup_errors = []
+    try:
+        _atomic_write_text(
+            applied_dir / f"{proposal_id}.json",
+            json.dumps(
+                {**prop, "applied_at": datetime.now().isoformat(timespec="seconds")},
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+    except Exception as e:
+        cleanup_errors.append(f"稽核紀錄未寫入：{e}")
+    try:
+        (pending_dir / f"{proposal_id}.json").unlink(missing_ok=True)
+    except Exception as e:
+        cleanup_errors.append(f"pending 未清除：{e}")
+
+    message = f"已套用提案 `{proposal_id}` → `{prop['target_path']}`（原檔已備份）。"
+    if cleanup_errors:
+        message += " ⚠️ 已生效，但需清理：" + "；".join(cleanup_errors)
+    return {
+        "ok": True,
+        "message": message,
+        "target": prop["target_path"],
+        "cleanup_required": bool(cleanup_errors),
+    }
 
 
 def reject_proposal(proposal_id: str, *, pending_dir: Path, rejected_dir: Path) -> dict:
@@ -149,8 +209,13 @@ def reject_proposal(proposal_id: str, *, pending_dir: Path, rejected_dir: Path) 
     try:
         rejected_dir.mkdir(parents=True, exist_ok=True)
         (rejected_dir / f"{proposal_id}.json").write_text(
-            json.dumps({**prop, "rejected_at": datetime.now().isoformat(timespec="seconds")},
-                       ensure_ascii=False, indent=2), encoding="utf-8")
+            json.dumps(
+                {**prop, "rejected_at": datetime.now().isoformat(timespec="seconds")},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         (pending_dir / f"{proposal_id}.json").unlink(missing_ok=True)
     except Exception as e:
         return {"ok": False, "message": f"退回時發生錯誤：{e}"}
@@ -160,6 +225,7 @@ def reject_proposal(proposal_id: str, *, pending_dir: Path, rejected_dir: Path) 
 def unified_diff(proposal: dict, context: int = 3) -> str:
     """A compact unified diff (original → revised) for human review."""
     import difflib
+
     orig = (proposal.get("original_content") or "").splitlines()
     new = (proposal.get("revised_content") or "").splitlines()
     diff = difflib.unified_diff(orig, new, fromfile="目前", tofile="提案", n=context, lineterm="")

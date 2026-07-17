@@ -236,7 +236,12 @@ class MonteCarloMixin:
         """Deterministically pick GROUND_FRACTION of seeds to ground — the rest
         stay cold so the echo-chamber canary has a control group. Hash-based, so
         it's reproducible and testable (not random)."""
-        from core.config import CORTEX_GROUNDED_INSIGHT_ENABLED, CORTEX_GROUND_FRACTION
+        from core.config import (
+            CORTEX_GROUNDED_INSIGHT_ENABLED,
+            CORTEX_GROUND_FRACTION,
+            CORTEX_GROUND_MAX_FRACTION,
+            CORTEX_GROUND_MIN_FRACTION,
+        )
 
         if not CORTEX_GROUNDED_INSIGHT_ENABLED:
             return False
@@ -244,7 +249,12 @@ class MonteCarloMixin:
         # returns the config default unless AUTOTUNE_ENABLED has nudged it.
         from services.autotune_store import get_tuned
 
-        fraction = get_tuned("CORTEX_GROUND_FRACTION", CORTEX_GROUND_FRACTION)
+        fraction = get_tuned(
+            "CORTEX_GROUND_FRACTION",
+            CORTEX_GROUND_FRACTION,
+            min_value=CORTEX_GROUND_MIN_FRACTION,
+            max_value=CORTEX_GROUND_MAX_FRACTION,
+        )
         import hashlib
 
         bucket = int(hashlib.sha256(idea.encode("utf-8")).hexdigest(), 16) % 100

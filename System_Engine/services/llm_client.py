@@ -1470,6 +1470,9 @@ class LLMClient:
         fallback = {
             "verdict": "unrelated",
             "rationale": "adjudication failed; conservative default",
+            # Callers must not persist this synthetic verdict as if the model
+            # had actually judged the pair.
+            "valid": False,
         }
 
         # Re-roll until a valid verdict parses. A reasoning model (gemma) sometimes
@@ -1493,6 +1496,7 @@ class LLMClient:
                     return {
                         "verdict": verdict.strip().lower(),
                         "rationale": str(parsed.get("rationale") or "").strip()[:200],
+                        "valid": True,
                     }
             logging.warning(f"adjudicate_claims: unparseable/illegal verdict (attempt {attempt})")
             return None

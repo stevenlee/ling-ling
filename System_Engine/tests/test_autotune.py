@@ -140,3 +140,11 @@ def test_get_tuned_preserves_type(tmp_path, monkeypatch):
     monkeypatch.setattr("core.config.AUTOTUNE_ENABLED", True)
     v = get_tuned("N", 3, state_file=sf)  # default is int → return int
     assert v == 8 and isinstance(v, int)
+
+
+def test_get_tuned_clamps_stale_persisted_value_to_consumer_bounds(tmp_path, monkeypatch):
+    sf = tmp_path / "autotune.json"
+    save_state({"params": {"K": 1.25}, "changes": {}, "last_tune": {}}, sf)
+    monkeypatch.setattr("core.config.AUTOTUNE_ENABLED", True)
+
+    assert get_tuned("K", 0.7, state_file=sf, min_value=0.3, max_value=0.85) == 0.85

@@ -9,10 +9,21 @@ import os
 
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
+import pytest
 from unittest.mock import MagicMock
 
 from agents.insight_agent import InsightAgent
 from services.cortex_store import CortexPage, make_claim_id, save_cortex_page
+
+
+@pytest.fixture(autouse=True)
+def _isolate_live_autotune(monkeypatch):
+    """Grounding tests control the configured fraction directly.
+
+    Never let a developer's real autotune_state.json override those values and
+    make the suite depend on local runtime history.
+    """
+    monkeypatch.setattr("core.config.AUTOTUNE_ENABLED", False)
 
 
 def _agent():

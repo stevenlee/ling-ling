@@ -345,6 +345,32 @@ class TestQuotasAndCache:
         cache = json.loads(env["cache_file"].read_text())
         assert any(v.get("verdict") == "complementary" for v in cache.values())
 
+    def test_failed_adjudication_is_pending_not_permanently_cached(self, tmp_path):
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "n1.md", body="MARKER-A")
+        seed = FakeLLM(claims_map={"MARKER-A": [{"claim": "ALPHA base claim.", "summary": "s"}]})
+        run_consolidation(seed, FakeRAG(), **env)
+
+        class FailingAdjudicator(FakeLLM):
+            def adjudicate_claims(self, claim_a, claim_b):
+                self.adjudicate_calls.append((claim_a, claim_b))
+                return {
+                    "verdict": "unrelated",
+                    "rationale": "adjudication failed; conservative default",
+                    "valid": False,
+                }
+
+        _write_insight(env["insights_dir"], "n2.md", body="MARKER-B")
+        failed = FailingAdjudicator(
+            claims_map={"MARKER-B": [{"claim": "NEARALPHA close claim.", "summary": "s"}]}
+        )
+        run_consolidation(failed, FakeRAG(), **env)
+
+        cache = json.loads(env["cache_file"].read_text())
+        state = json.loads(env["state_file"].read_text())
+        assert cache == {}  # synthetic unrelated must never become permanent
+        assert state["pending_edges"]  # pair is owed and will be retried next run
+
     def test_manual_claim_edit_invalidates_embedding_cache(self, tmp_path):
         """An external editor can change the Core Claim without bumping
         frontmatter `updated`; the embedding cache must catch that via
@@ -462,13 +488,16 @@ class TestLLMDefenses:
 
     def test_adjudicate_valid_and_illegal(self, monkeypatch):
         ok = self._client(monkeypatch, '{"verdict": "Equivalent", "rationale": "r"}')
-        assert ok.adjudicate_claims("a", "b")["verdict"] == "equivalent"
+        result = ok.adjudicate_claims("a", "b")
+        assert result["verdict"] == "equivalent" and result["valid"] is True
 
         bad = self._client(monkeypatch, '{"verdict": "kinda-similar"}')
-        assert bad.adjudicate_claims("a", "b")["verdict"] == "unrelated"
+        result = bad.adjudicate_claims("a", "b")
+        assert result["verdict"] == "unrelated" and result["valid"] is False
 
         garbage = self._client(monkeypatch, "no json at all")
-        assert garbage.adjudicate_claims("a", "b")["verdict"] == "unrelated"
+        result = garbage.adjudicate_claims("a", "b")
+        assert result["verdict"] == "unrelated" and result["valid"] is False
 
     def test_adjudicate_rerolls_past_parse_miss(self, monkeypatch):
         # 2026-07-13 A3: a reasoning-channel parse miss on the first attempt must
@@ -484,7 +513,8 @@ class TestLLMDefenses:
     def test_adjudicate_gives_up_after_attempts(self, monkeypatch):
         # Persistent unparseable → conservative "unrelated" after the re-rolls.
         client = self._client(monkeypatch, "never valid json")
-        assert client.adjudicate_claims("a", "b")["verdict"] == "unrelated"
+        result = client.adjudicate_claims("a", "b")
+        assert result["verdict"] == "unrelated" and result["valid"] is False
 
 
 # ── Phase 2.5: falsifiability wiring, anchoring, penetration ──────────

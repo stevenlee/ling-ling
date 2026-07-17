@@ -1,6 +1,7 @@
 """Metacognition M3: improvement proposal store (queue + guarded approve)."""
 
 import os
+from pathlib import Path
 
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
@@ -126,6 +127,61 @@ def test_approve_refuses_empty_revision(tmp_path):
         allowed_dirs=[vault / "Templates"],
     )
     assert not res["ok"]
+
+
+def test_approve_target_replace_failure_leaves_live_prompt_unchanged(tmp_path, monkeypatch):
+    vault, target = _vault(tmp_path)
+    d = _dirs(tmp_path)
+    p = _prop(target)
+    save_proposal(p, d["pending_dir"])
+    original = target.read_text(encoding="utf-8")
+
+    real_replace = Path.replace
+
+    def fail_target_replace(self, destination):
+        if Path(destination) == target:
+            raise OSError("simulated target replace failure")
+        return real_replace(self, destination)
+
+    monkeypatch.setattr(Path, "replace", fail_target_replace)
+    res = approve_proposal(
+        p["id"],
+        vault_dir=vault,
+        pending_dir=d["pending_dir"],
+        applied_dir=d["applied_dir"],
+        allowed_dirs=[vault / "Templates"],
+    )
+
+    assert not res["ok"]
+    assert target.read_text(encoding="utf-8") == original
+    assert get_proposal(p["id"], d["pending_dir"]) is not None
+
+
+def test_approve_cleanup_failure_reports_applied_state(tmp_path, monkeypatch):
+    vault, target = _vault(tmp_path)
+    d = _dirs(tmp_path)
+    p = _prop(target)
+    pending_path = save_proposal(p, d["pending_dir"])
+
+    real_unlink = Path.unlink
+
+    def fail_pending_unlink(self, *args, **kwargs):
+        if self == pending_path:
+            raise OSError("simulated queue cleanup failure")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_pending_unlink)
+    res = approve_proposal(
+        p["id"],
+        vault_dir=vault,
+        pending_dir=d["pending_dir"],
+        applied_dir=d["applied_dir"],
+        allowed_dirs=[vault / "Templates"],
+    )
+
+    assert res["ok"] and res["cleanup_required"]
+    assert "ADDED" in target.read_text(encoding="utf-8")
+    assert "已生效" in res["message"]
 
 
 def test_reject_moves_out_of_queue(tmp_path):

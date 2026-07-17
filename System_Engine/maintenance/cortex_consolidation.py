@@ -231,6 +231,13 @@ class _Consolidator:
             return None
         self.adjudications_used += 1
         result = self.llm.adjudicate_claims(claim_a, claim_b)
+        # A parse/transport failure is not evidence that the claims are
+        # unrelated. Do not poison the content-addressed, no-TTL cache with a
+        # synthetic fallback; None makes the existing pending-edge machinery
+        # retry this pair on a later run. Clients without the marker remain
+        # backward-compatible and count as valid.
+        if not isinstance(result, dict) or result.get("valid") is False:
+            return None
         verdict = result.get("verdict", "unrelated") if isinstance(result, dict) else "unrelated"
         self.cache[key] = {
             "verdict": verdict,
