@@ -492,6 +492,93 @@ class TestRevisionSemantics:
         assert len(alpha.evidence) == 1
         assert alpha.confidence == 0.5 and alpha.S == 1
 
+    def test_poison_claim_is_quarantined_after_bounded_attempts(self, tmp_path, monkeypatch):
+        """A deterministic claim-processing failure must stop re-billing and
+        stop presenting itself to DaydreamPump after the per-hash budget."""
+        import maintenance.cortex_consolidation as consolidation
+
+        env = _env(tmp_path)
+        env["max_attempts"] = 3
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = FakeLLM(claims_map={"MARKER-OK": [{"claim": "ALPHA poison claim.", "summary": "s"}]})
+
+        def always_fail(*args, **kwargs):
+            raise RuntimeError("deterministic poison")
+
+        monkeypatch.setattr(consolidation._Consolidator, "process_claim", always_fail)
+        results = [run_consolidation(llm, FakeRAG(), **env) for _ in range(3)]
+
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        failure = state["failures"]["ok.md"]
+        assert len(llm.extract_calls) == 3
+        assert "ok.md" not in state["processed"]
+        assert failure["attempts"] == 3
+        assert failure["stage"] == "claim_processing"
+        assert failure["quarantined"] is True
+        assert results[-1].insights_quarantined == 1
+
+        # Fourth run and daytime predicate both see no actionable debt.
+        fourth = run_consolidation(llm, FakeRAG(), **env)
+        assert fourth.status == "skipped"
+        assert len(llm.extract_calls) == 3
+        assert consolidation.has_pending_insights(env["insights_dir"], env["state_file"]) is False
+
+    def test_content_change_resets_quarantine_budget(self, tmp_path, monkeypatch):
+        import maintenance.cortex_consolidation as consolidation
+
+        env = _env(tmp_path)
+        env["max_attempts"] = 2
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = FakeLLM(
+            claims_map={
+                "MARKER-OK": [{"claim": "ALPHA poison claim.", "summary": "s"}],
+                "MARKER-NEW": [{"claim": "BETA healthy claim.", "summary": "s"}],
+            }
+        )
+        original = consolidation._Consolidator.process_claim
+
+        def fail_only_old(self, claim, *args, **kwargs):
+            if claim.startswith("ALPHA"):
+                raise RuntimeError("old content is poison")
+            return original(self, claim, *args, **kwargs)
+
+        monkeypatch.setattr(consolidation._Consolidator, "process_claim", fail_only_old)
+        run_consolidation(llm, FakeRAG(), **env)
+        run_consolidation(llm, FakeRAG(), **env)
+        assert consolidation.has_pending_insights(env["insights_dir"], env["state_file"]) is False
+
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-NEW")
+        assert consolidation.has_pending_insights(env["insights_dir"], env["state_file"]) is True
+        result = run_consolidation(llm, FakeRAG(), **env)
+
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert result.insights_processed == 1
+        assert "ok.md" not in state["failures"]
+        assert load_all_pages(env["cortex_dir"])[0].claim == "BETA healthy claim."
+
+    def test_corrupt_failure_container_recovers_and_predicate_is_readonly(self, tmp_path):
+        from maintenance.cortex_consolidation import has_pending_insights
+
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        env["state_file"].parent.mkdir(parents=True, exist_ok=True)
+        corrupt = '{"processed": {}, "failures": []}'
+        env["state_file"].write_text(corrupt, encoding="utf-8")
+
+        assert has_pending_insights(env["insights_dir"], env["state_file"]) is True
+        assert env["state_file"].read_text(encoding="utf-8") == corrupt
+
+        result = run_consolidation(
+            FakeLLM(
+                claims_map={"MARKER-OK": [{"claim": "ALPHA recovered claim.", "summary": "s"}]}
+            ),
+            FakeRAG(),
+            **env,
+        )
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert result.insights_processed == 1
+        assert state["failures"] == {}
+
     def test_same_night_duplicate_claim_in_one_insight_not_double_counted(self, tmp_path):
         """extract_claims returning the same claim twice from ONE insight is a
         single assertion, not two rediscoveries."""

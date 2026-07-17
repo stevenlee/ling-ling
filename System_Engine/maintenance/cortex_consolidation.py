@@ -29,6 +29,7 @@ import numpy as np
 
 from core.config import (
     CORTEX_ADJUDICATION_CACHE,
+    CORTEX_CONSOLIDATION_MAX_ATTEMPTS,
     CORTEX_CONSOLIDATION_ENABLED,
     CORTEX_DIR,
     CORTEX_MAX_ADJUDICATIONS_PER_NIGHT,
@@ -75,6 +76,7 @@ class ConsolidationResult:
     related_links: int = 0
     pending_resolved: int = 0
     insights_processed: int = 0
+    insights_quarantined: int = 0
     adjudications_used: int = 0
     report_path: Path | None = None
 
@@ -695,13 +697,64 @@ def _processed_ledger(container) -> dict:
     return container if isinstance(container, dict) else {}
 
 
-def _iter_owed_insights(insights_dir: Path, processed: dict):
+def _failure_ledger(container) -> dict:
+    """Normalize corrupt failure state to an empty, recoverable ledger."""
+    return container if isinstance(container, dict) else {}
+
+
+def _failure_attempts(entry: object, content_hash: str) -> int:
+    if not isinstance(entry, dict) or entry.get("content_hash") != content_hash:
+        return 0
+    try:
+        return max(0, int(entry.get("attempts", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_quarantined(entry: object, content_hash: str, max_attempts: int) -> bool:
+    if not isinstance(entry, dict) or entry.get("content_hash") != content_hash:
+        return False
+    return bool(entry.get("quarantined")) or _failure_attempts(entry, content_hash) >= max_attempts
+
+
+def _record_failure(
+    state: dict,
+    insight_name: str,
+    content_hash: str,
+    *,
+    stage: str,
+    error: str,
+    max_attempts: int,
+) -> bool:
+    """Persist a bounded retry attempt; return whether it is quarantined."""
+    failures = state.setdefault("failures", {})
+    attempts = _failure_attempts(failures.get(insight_name), content_hash) + 1
+    quarantined = attempts >= max_attempts
+    failures[insight_name] = {
+        "content_hash": content_hash,
+        "attempts": attempts,
+        "stage": stage,
+        "last_error": error[:500],
+        "last_attempt_at": _now(),
+        "quarantined": quarantined,
+    }
+    return quarantined
+
+
+def _iter_owed_insights(
+    insights_dir: Path,
+    processed: dict,
+    failures: dict | None = None,
+    max_attempts: int = CORTEX_CONSOLIDATION_MAX_ATTEMPTS,
+):
     """Yield the Path of each insight owed consolidation.
 
     THE single definition of "owed", shared by has_pending_insights and
     run_consolidation: passes the signals gate AND is either absent from the
     processed ledger or recorded under a content_hash that no longer matches
-    the file — a same-name insight whose content changed is re-digested.
+    the file — a same-name insight whose content changed is re-digested. A
+    content hash quarantined after bounded failures is not actionable owed;
+    changing the content hash automatically gives it a fresh retry budget.
     A corrupt (non-dict) ledger entry counts as absent: recovery = reprocess.
 
     Scan results are advisory only: the file can change again after this
@@ -719,6 +772,8 @@ def _iter_owed_insights(insights_dir: Path, processed: dict):
     the ledger must save it (has_pending_insights is read-only and discards).
     """
     processed = _processed_ledger(processed)
+    failures = _failure_ledger(failures)
+    max_attempts = max(1, max_attempts)
     if not insights_dir.exists():
         return
     for path in sorted(insights_dir.glob("*.md")):
@@ -727,6 +782,8 @@ def _iter_owed_insights(insights_dir: Path, processed: dict):
         except Exception:
             continue
         content_hash = _insight_hash(text)
+        if _is_quarantined(failures.get(path.name), content_hash, max_attempts):
+            continue
         entry = processed.get(path.name)
         if isinstance(entry, dict):
             stored = entry.get("content_hash")
@@ -752,7 +809,8 @@ def has_pending_insights(insights_dir: Path = None, state_file: Path = None) -> 
     state_file = state_file or CORTEX_STATE_FILE
     state = _load_json(state_file, {})
     processed = state.get("processed", {}) if isinstance(state, dict) else {}
-    return next(_iter_owed_insights(insights_dir, processed), None) is not None
+    failures = state.get("failures", {}) if isinstance(state, dict) else {}
+    return next(_iter_owed_insights(insights_dir, processed, failures), None) is not None
 
 
 def _insight_sources(meta: dict, body: str, pages_dir: Path, notes_dir: Path) -> list[str]:
@@ -797,6 +855,7 @@ def run_consolidation(
     report_dir: Path = None,
     log_path: Path = None,
     max_insights: int = None,
+    max_attempts: int = None,
     max_adjudications: int = None,
     top_k: int = None,
     sim_threshold: float = None,  # deprecated alias for link_threshold
@@ -812,6 +871,9 @@ def run_consolidation(
     report_dir = report_dir or FROM_LLM_DIR
     log_path = log_path or MAINTENANCE_LOG_FILE
     max_insights = max_insights if max_insights is not None else CORTEX_MAX_INSIGHTS_PER_NIGHT
+    max_attempts = (
+        max(1, max_attempts) if max_attempts is not None else CORTEX_CONSOLIDATION_MAX_ATTEMPTS
+    )
     max_adjudications = (
         max_adjudications if max_adjudications is not None else CORTEX_MAX_ADJUDICATIONS_PER_NIGHT
     )
@@ -831,6 +893,7 @@ def run_consolidation(
 
     state = _load_json(state_file, {})
     state["processed"] = _processed_ledger(state.get("processed"))
+    state["failures"] = _failure_ledger(state.get("failures"))
     state.setdefault("claim_embeddings", {})
     cache = _load_json(cache_file, {})
 
@@ -842,7 +905,14 @@ def run_consolidation(
         )
 
     legacy_before = _legacy_entries()
-    candidates = list(_iter_owed_insights(insights_dir, state["processed"]))
+    candidates = list(
+        _iter_owed_insights(
+            insights_dir,
+            state["processed"],
+            state["failures"],
+            max_attempts,
+        )
+    )
     if _legacy_entries() != legacy_before:  # lazy hash migration happened
         _save_json(state_file, state)
 
@@ -878,6 +948,7 @@ def run_consolidation(
         _save_json(state_file, state)
 
     insights_processed = 0
+    insights_quarantined = 0
     for path in candidates[:max_insights]:
         # Everything about this insight — signals gate, meta, sources,
         # grounded_on, hash — must come from ONE processing-time snapshot: the
@@ -904,7 +975,19 @@ def run_consolidation(
             extraction_valid, claims = _extract_claims_result(llm, body[:_INSIGHT_TEXT_CAP])
             if not extraction_valid:
                 # Failure is not a semantic verdict. Do not retract evidence
-                # or advance the ledger; the same revision remains owed.
+                # or advance the processed ledger. Persist the bounded retry
+                # attempt so a poison input cannot consume the nightly budget
+                # forever.
+                if _record_failure(
+                    state,
+                    path.name,
+                    content_hash,
+                    stage="extraction",
+                    error="invalid or failed claim extraction",
+                    max_attempts=max_attempts,
+                ):
+                    insights_quarantined += 1
+                _save_json(state_file, state)
                 continue
             sources = _insight_sources(meta, body, PAGES_DIR, NOTES_DIR)
             # Provenance for the firewall: which Cortex claims this insight was
@@ -928,8 +1011,18 @@ def run_consolidation(
             # A valid empty result is a real retraction. Operational failures
             # were separated above and never reach this semantic commit point.
             worker.reconcile_insight_revision(path.name, content_hash)
-        except Exception:
+        except Exception as e:
             logging.exception(f"Cortex: consolidation failed for {path.name}")
+            if _record_failure(
+                state,
+                path.name,
+                content_hash,
+                stage="claim_processing",
+                error=str(e) or type(e).__name__,
+                max_attempts=max_attempts,
+            ):
+                insights_quarantined += 1
+            _save_json(state_file, state)
             continue
 
         # Commit only after every claim and revision reconciliation succeeds.
@@ -940,6 +1033,7 @@ def run_consolidation(
             "claims": claim_count,
             "content_hash": content_hash,
         }
+        state["failures"].pop(path.name, None)
         insights_processed += 1
         _save_json(state_file, state)
 
@@ -955,7 +1049,8 @@ def run_consolidation(
             f"Cortex: {insights_processed} insight(s) → {worker.created} new claim(s), "
             f"{worker.merged} merged, {worker.related_links} related link(s), "
             f"{worker.contradiction_links} contradiction link(s){pending_note}{revision_note}, "
-            f"{worker.adjudications_used}/{max_adjudications} adjudications."
+            f"{worker.adjudications_used}/{max_adjudications} adjudications, "
+            f"{insights_quarantined} quarantined."
         ),
         created=worker.created,
         merged=worker.merged,
@@ -964,6 +1059,7 @@ def run_consolidation(
         related_links=worker.related_links,
         pending_resolved=pending_resolved,
         insights_processed=insights_processed,
+        insights_quarantined=insights_quarantined,
         adjudications_used=worker.adjudications_used,
     )
 
@@ -992,6 +1088,7 @@ def _write_report(report_dir: Path, result: ConsolidationResult) -> Path | None:
             "# 📓 Cortex 鞏固報告",
             "",
             f"- 處理 insights：**{result.insights_processed}**",
+            f"- 本輪隔離 insights：**{result.insights_quarantined}**",
             f"- 新增主張頁：**{result.created}**",
             f"- 合併（reconsolidation）：**{result.merged}**",
             f"- 矛盾連結：**{result.contradiction_links}**",

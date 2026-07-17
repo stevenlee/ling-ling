@@ -84,6 +84,32 @@ def test_card_hides_claim_behind_fold_and_lists_ids(tmp_path):
     assert p.claim_id in card  # id for @ling-recalled
 
 
+def test_card_renders_sources_from_live_evidence_only(tmp_path):
+    page = _make_page(tmp_path, "有來源的主張", days_ago=90)
+    page.evidence = [
+        {
+            "insight": "old.md",
+            "sources": ["Withdrawn Doc"],
+            "date": "2026-01-01",
+            "summary": "old",
+            "superseded_by": "new-revision",
+        },
+        {
+            "insight": "current.md",
+            "sources": ["Doc A", "Doc B"],
+            "date": "2026-06-01",
+            "summary": "current",
+        },
+    ]
+    save_cortex_page(page)
+
+    due = spaced_review.select_due_claims(tmp_path, limit=5, now=NOW, params=PARAMS)
+    card = spaced_review.render_review_card(due, now=NOW)
+
+    assert "**證據來源**：Doc A、Doc B" in card
+    assert "Withdrawn Doc" not in card
+
+
 def test_recalled_reinforces_and_persists(tmp_path):
     _make_page(tmp_path, "熵總是增加", days_ago=90)
     before = load_all_pages(tmp_path)[0]

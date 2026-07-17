@@ -168,9 +168,9 @@ def render_review_card(
         ]
         live_evidence = active_evidence(page)
         if live_evidence:
-            src = live_evidence[0].get("source")
-            if src:
-                lines += [f"**證據**：{str(src).strip()}", ""]
+            sources = live_evidence[0].get("sources") or []
+            if sources:
+                lines += [f"**證據來源**：{'、'.join(str(src).strip() for src in sources)}", ""]
         if page.counterpoints:
             lines += [f"**別忘了反面**：{page.counterpoints[0].strip()}", ""]
         lines += [

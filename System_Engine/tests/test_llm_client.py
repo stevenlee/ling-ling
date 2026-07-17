@@ -571,6 +571,11 @@ class TestExtractClaimsAppliesWhen:
         assert valid == {"valid": True, "claims": []}
         assert failed == {"valid": False, "claims": []}
 
+    def test_nonempty_payload_fully_rejected_is_not_an_empty_verdict(self, monkeypatch):
+        result = self._client(monkeypatch, '[{"claim": "tiny"}]').extract_claims_result("text")
+
+        assert result == {"valid": False, "claims": []}
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

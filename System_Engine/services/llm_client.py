@@ -1345,6 +1345,11 @@ class LLMClient:
                             "applies_when": str(item.get("applies_when") or "").strip(),
                         }
                     )
+            # Only a literal [] is a trustworthy empty verdict. A non-empty
+            # payload whose entries all fail schema/quality validation is a
+            # malformed extraction, not an instruction to retract old claims.
+            if parsed and not out:
+                return {"valid": False, "claims": []}
             return {"valid": True, "claims": out[:3]}
         except Exception as e:
             logging.warning(f"extract_claims failed: {e}")

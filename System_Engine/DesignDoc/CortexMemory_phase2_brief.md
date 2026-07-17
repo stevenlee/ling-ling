@@ -32,6 +32,7 @@ CORTEX_STATE_FILE = DATABASE_DIR / "cortex_state.json"
 CORTEX_ADJUDICATION_CACHE = DATABASE_DIR / "cortex_adjudications.json"
 CORTEX_CONSOLIDATION_ENABLED   default true
 CORTEX_MAX_INSIGHTS_PER_NIGHT  default 10      # claim 抽取配額
+CORTEX_CONSOLIDATION_MAX_ATTEMPTS default 3    # 同內容失敗後隔離
 CORTEX_MAX_ADJUDICATIONS_PER_NIGHT default 20  # 蘊涵裁決配額
 CORTEX_NEIGHBOR_TOP_K          default 3
 CORTEX_NEIGHBOR_SIM_THRESHOLD  default 0.80
@@ -146,8 +147,9 @@ signals = meta.get("signals") or {}
 ```
 
 2. **抽取主張**：每份 insight 一次 `extract_claims` call（配額
-   `CORTEX_MAX_INSIGHTS_PER_NIGHT`）。不論成敗，insight 檔名記入
-   `processed`（含 `{"date", "claims": n}`）。
+   `CORTEX_MAX_INSIGHTS_PER_NIGHT`）。完整成功才以 content hash 記入
+   `processed`；失敗按 content hash 持久化 attempts/stage/error，達
+   `CORTEX_CONSOLIDATION_MAX_ATTEMPTS` 後 quarantine。內容改變即重設 retry budget。
 3. **找鄰居**：新 claim 用 `rag.ef([claim])[0]` 算 embedding，與
    （a）所有既有 Cortex 頁的 claim、（b）本晚其他新 claim 比對
    cosine；取 ≥ `SIM_THRESHOLD` 的前 `TOP_K` 個。Cortex 頁的 claim
