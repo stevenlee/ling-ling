@@ -63,9 +63,13 @@
   `processed` ledger 已內容定址（entry 含 `content_hash`）：同名 insight
   內容改變即重新消化，且採 **revision 語義**——同一 insight 的再主張
   就地更新 evidence、不重複 reinforce，撤回的 claim 標 `superseded_by`
-  （消費端如 ledger independence 計數須排除）。gate/meta/hash 一律取自
-  **處理當下同一次 raw snapshot**；commit point = 讀檔成功且過 gate，
-  前置 I/O 失敗不落帳、保持 owed。舊格式 entry lazy 補 hash、損壞
+  （所有語義消費端須透過 `active_evidence` 排除；頁面本文僅保留為明確標示的
+  audit history）。有效空 extraction 表示撤回全部舊 claim；LLM/解析失敗不等於
+  空 verdict，且只有整個 revision 處理及 reconciliation 成功後才能提交 ledger。
+  gate/meta/hash 一律取自
+  **處理當下同一次 raw snapshot**；commit point = 全部 claim 處理與 revision
+  reconciliation 成功，任何前置或中途失敗都不落帳、保持 owed。舊格式 entry lazy
+  補 hash、損壞
   container/entry 以重處理恢復（範例：
   `cortex_consolidation._iter_owed_insights` / `reconcile_insight_revision`）。
 - ID 用**內容定址**（hash of content）確保重跑冪等；寫入前先刪同

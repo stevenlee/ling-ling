@@ -71,6 +71,18 @@ def test_thin_evidence_bucket(tmp_path):
     assert "well-sourced claim" not in thin
 
 
+def test_superseded_evidence_does_not_count_as_live_support(tmp_path):
+    old = _ev("old.md")
+    old["superseded_by"] = "new-revision"
+    _page(
+        tmp_path, "historically sourced but currently unsupported", evidence=[old, _ev("live.md")]
+    )
+
+    thin = {page.claim for page in scan_tensions(tmp_path).thin_evidence}
+
+    assert "historically sourced but currently unsupported" in thin
+
+
 def test_falsified_separated_not_double_counted(tmp_path):
     # A falsified claim is dead — it must NOT also appear in dogmatic/thin.
     _page(

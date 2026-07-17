@@ -165,7 +165,10 @@ def test_render_appends_only_cited_claims(tmp_path):
                 confidence=0.7,
                 falsifiability=0.8,
                 falsifier="X without Y",
-                evidence=[{"insight": "20260613-insight.md"}],
+                evidence=[
+                    {"insight": "20260613-insight.md"},
+                    {"insight": "withdrawn.md", "superseded_by": "new-revision"},
+                ],
             ),
         ),
     ]
@@ -175,6 +178,7 @@ def test_render_appends_only_cited_claims(tmp_path):
     assert "[#2]" in body and "X causes Y" in body  # cited claim in appendix
     assert "反例：X without Y" in body  # epistemics surfaced
     assert "[[20260613-insight]]" in body  # evidence wikilink
+    assert "withdrawn" not in body  # superseded evidence is audit history only
     assert "irrelevant claim" not in body  # uncited claim NOT appended
 
 

@@ -48,12 +48,12 @@ from services.cortex_decay import (
     reinforce,
     retrievability,
 )
-from services.cortex_store import load_all_pages, save_cortex_page
+from services.cortex_store import active_evidence, load_all_pages, save_cortex_page
 
 _REVALIDATION_COOLDOWN_DAYS = 7
 _CALIBRATION_INTERVAL_DAYS = 30
 _CALIBRATION_MIN_SAMPLES = 20
-_CALIBRATION_STEP = 0.2          # damped: ±20% per adjustment
+_CALIBRATION_STEP = 0.2  # damped: ±20% per adjustment
 _BASE_DAYS_MIN, _BASE_DAYS_MAX = 7.0, 90.0
 _TRANSITIONS_CAP = 500
 _CONFIDENCE_FLOOR = 0.1
@@ -61,7 +61,7 @@ _CONFIDENCE_FLOOR = 0.1
 
 @dataclass
 class DecayPassResult:
-    status: str                  # "succeeded" | "skipped"
+    status: str  # "succeeded" | "skipped"
     message: str
     reinforced: int = 0
     transitions: list = field(default_factory=list)
@@ -77,7 +77,7 @@ def _now_iso() -> str:
 def _load_state(path: Path) -> dict:
     default = {
         "params": {},
-        "observed": {},          # claim_id -> {mtime, updated, retrieval_date, revalidated}
+        "observed": {},  # claim_id -> {mtime, updated, retrieval_date, revalidated}
         "transitions": [],
         "last_calibration": "",
     }
@@ -136,9 +136,7 @@ def run_decay_pass(
     log_path = log_path or MAINTENANCE_LOG_FILE
     pages_dir = pages_dir or PAGES_DIR
     notes_dir = notes_dir or NOTES_DIR
-    revalidations = (
-        revalidations if revalidations is not None else CORTEX_REVALIDATIONS_PER_NIGHT
-    )
+    revalidations = revalidations if revalidations is not None else CORTEX_REVALIDATIONS_PER_NIGHT
     enabled = enabled if enabled is not None else CORTEX_DECAY_ENABLED
     now = now or datetime.now()
 
@@ -198,18 +196,19 @@ def run_decay_pass(
     by_id = {p.claim_id: p for p in pages}
     fading = sorted(
         (
-            p for p in pages
+            p
+            for p in pages
             if p.status == "fading"
             and (observed.get(p.claim_id, {}).get("revalidated", "") or "0000")[:10]
             < (now - timedelta(days=_REVALIDATION_COOLDOWN_DAYS)).strftime("%Y-%m-%d")
         ),
         key=lambda p: -p.S,
     )
-    for page in fading[:max(0, revalidations)]:
+    for page in fading[: max(0, revalidations)]:
         if not hasattr(llm, "refute_insight"):
             break
         sources = []
-        for evidence in page.evidence:
+        for evidence in active_evidence(page):
             sources.extend(evidence.get("sources") or [])
         contents = _load_source_contents(sources, pages_dir, notes_dir)
         if not contents:
@@ -234,8 +233,11 @@ def run_decay_pass(
         if page.status == "falsified":
             continue
         r = retrievability(
-            page.S, page.last_reinforced_at,
-            base_days=params["base_days"], growth=params["growth"], now=now,
+            page.S,
+            page.last_reinforced_at,
+            base_days=params["base_days"],
+            growth=params["growth"],
+            now=now,
         )
         new_status = derive_status(page.status, r)
         if new_status == page.status:
@@ -302,24 +304,23 @@ def _maybe_calibrate(state: dict, params: dict, now: datetime) -> bool:
         return False
     demoted_ids = {t["claim_id"] for t in demotions}
     revivals = {
-        t["claim_id"] for t in state["transitions"]
+        t["claim_id"]
+        for t in state["transitions"]
         if t.get("from") == "dormant" and t["claim_id"] in demoted_ids
     }
     revival_rate = len(revivals) / len(demoted_ids)
 
     base = params["base_days"]
     if revival_rate > CORTEX_REVIVAL_TARGET_HIGH:
-        base *= 1 + _CALIBRATION_STEP          # 太多人被提早埋葬 → 衰減放慢
+        base *= 1 + _CALIBRATION_STEP  # 太多人被提早埋葬 → 衰減放慢
     elif revival_rate < CORTEX_REVIVAL_TARGET_LOW:
-        base *= 1 - _CALIBRATION_STEP          # 沒人懷念 dormant 區 → 可以更果斷
+        base *= 1 - _CALIBRATION_STEP  # 沒人懷念 dormant 區 → 可以更果斷
     else:
         return False
     params["base_days"] = max(_BASE_DAYS_MIN, min(_BASE_DAYS_MAX, round(base, 2)))
     state["params"] = dict(params)
     state["last_calibration"] = _now_iso()
-    logging.info(
-        f"DecayPass: revival rate {revival_rate:.0%} → base_days = {params['base_days']}"
-    )
+    logging.info(f"DecayPass: revival rate {revival_rate:.0%} → base_days = {params['base_days']}")
     return True
 
 

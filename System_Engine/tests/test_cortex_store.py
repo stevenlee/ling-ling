@@ -4,6 +4,7 @@ claims, special characters, and PyYAML's eager timestamp parsing."""
 
 from services.cortex_store import (
     CortexPage,
+    active_evidence,
     claim_filename,
     load_all_pages,
     make_claim_id,
@@ -94,6 +95,36 @@ class TestRoundTrip:
             ],
         )
         assert _roundtrip(page) == page
+
+    def test_superseded_evidence_is_audit_only_and_visibly_marked(self, tmp_path):
+        page = _page(
+            tmp_path,
+            "Only current evidence is semantically active.",
+            evidence=[
+                {
+                    "insight": "current.md",
+                    "sources": [],
+                    "date": "2026-07-17",
+                    "summary": "current",
+                },
+                {
+                    "insight": "old.md",
+                    "sources": [],
+                    "date": "2026-07-01",
+                    "summary": "old",
+                    "superseded_by": "c" * 64,
+                },
+            ],
+        )
+
+        save_cortex_page(page)
+        parsed = parse_cortex_page(page.path)
+        text = page.path.read_text(encoding="utf-8")
+
+        assert parsed is not None
+        assert [entry["insight"] for entry in active_evidence(parsed)] == ["current.md"]
+        assert "（已由新版撤回）[[old.md]]" in text
+        assert "- [[current.md]]" in text
 
     def test_yaml_timestamp_coercion(self, tmp_path):
         """PyYAML parses ISO strings into datetime objects; the parser must

@@ -511,7 +511,9 @@ class LLMClient:
             logging.error(f"LLM Error in complete ({stage}): {e}")
             return ""
 
-    def _complete_json(self, *, kind: str = "object", **complete_kwargs):
+    def _complete_json(
+        self, *, kind: str = "object", raise_on_miss: bool = False, **complete_kwargs
+    ):
         """Complete a JSON-output prompt with one reasoning-channel re-roll.
 
         Transport-level retries already live in `_complete_text`. This guards a
@@ -523,7 +525,9 @@ class LLMClient:
 
         `kind` is "array" or "object". Returns the parsed list/dict, or the
         empty container after a second miss so callers keep their fail-open
-        paths. A genuinely empty answer — the model emitted a literal [] / {} —
+        paths. With ``raise_on_miss=True``, a second miss raises instead so a
+        caller can distinguish operational failure from a semantic empty.
+        A genuinely empty answer — the model emitted a literal [] / {} —
         is returned WITHOUT a re-roll, so a real zero is never mistaken for a
         parse miss (mirrors the LingLens extraction rule). Per-attempt
         exceptions are caught and re-rolled.
@@ -551,6 +555,8 @@ class LLMClient:
             if is_empty_json_literal(raw, kind):
                 return empty  # whole reply IS [] / {} — genuine empty, not a parse miss
             logging.warning(f"_complete_json({kind}) parse miss (attempt {attempt + 1}/2)")
+        if raise_on_miss:
+            raise ValueError(f"No parseable JSON {kind} after 2 attempts")
         return empty
 
     _LANG_NAMES = {
@@ -1303,12 +1309,13 @@ class LLMClient:
             logging.warning(f"select_profile LLM call failed: {e}")
             return "none"
 
-    def extract_claims(self, insight_text: str) -> list[dict]:
+    def extract_claims_result(self, insight_text: str) -> dict:
         """Distill an insight report into at most 3 atomic claims.
 
         Each claim must be an independently truth-evaluable statement
-        (not a topic label). Returns [{"claim": ..., "summary": ..., "applies_when": ...}];
-        empty list on any failure (fail-open — the insight just waits).
+        (not a topic label). ``valid`` distinguishes a successful empty
+        extraction (the insight retracts every prior claim) from an LLM or
+        parse failure (no verdict; the insight remains owed).
         """
         system_prompt = self._vault_prompt(
             "cortex_extract_claims.md", _CORTEX_EXTRACT_CLAIMS_PROMPT
@@ -1316,14 +1323,17 @@ class LLMClient:
         try:
             parsed = self._complete_json(
                 kind="array",
+                raise_on_miss=True,
                 system_prompt=system_prompt,
                 user_msg=insight_text,
                 temperature=0.2,
                 max_tokens=1024,
                 trace_context={"stage": "extract_claims", "metadata": {}},
             )
+            if not isinstance(parsed, list):
+                return {"valid": False, "claims": []}
             out = []
-            for item in parsed if isinstance(parsed, list) else []:
+            for item in parsed:
                 if not isinstance(item, dict):
                     continue
                 claim = item.get("claim")
@@ -1335,10 +1345,16 @@ class LLMClient:
                             "applies_when": str(item.get("applies_when") or "").strip(),
                         }
                     )
-            return out[:3]
+            return {"valid": True, "claims": out[:3]}
         except Exception as e:
             logging.warning(f"extract_claims failed: {e}")
-            return []
+            return {"valid": False, "claims": []}
+
+    def extract_claims(self, insight_text: str) -> list[dict]:
+        """Compatibility wrapper for callers that only consume claims."""
+        result = self.extract_claims_result(insight_text)
+        claims = result.get("claims")
+        return claims if isinstance(claims, list) else []
 
     def generate_structured(self, prompt: str, schema: dict) -> dict:
         import json

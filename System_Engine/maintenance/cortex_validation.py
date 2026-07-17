@@ -34,7 +34,7 @@ from core.config import (
 )
 from core.parser import parse_markdown_metadata
 from maintenance.cortex_consolidation import _is_candidate
-from services.cortex_store import parse_cortex_page
+from services.cortex_store import active_evidence, parse_cortex_page
 
 
 @dataclass
@@ -285,8 +285,9 @@ def _write_report(report_dir: Path, report: ValidationReport, pages) -> Path | N
         recent = sorted(pages, key=lambda p: p.updated, reverse=True)[:30]
         for page in recent:
             marks = []
-            if len(page.evidence) > 1:
-                marks.append(f"合併×{len(page.evidence) - 1}")
+            live_evidence = active_evidence(page)
+            if len(live_evidence) > 1:
+                marks.append(f"合併×{len(live_evidence) - 1}")
             if page.contradictions:
                 marks.append(f"矛盾×{len(page.contradictions)}")
             suffix = f"（{'、'.join(marks)}）" if marks else ""

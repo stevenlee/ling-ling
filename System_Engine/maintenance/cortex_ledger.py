@@ -37,7 +37,7 @@ from core.config import (
     CORTEX_UNMERGE_STRICT_AT,
     MAINTENANCE_LOG_FILE,
 )
-from services.cortex_store import load_all_pages, save_cortex_page
+from services.cortex_store import active_evidence, load_all_pages, save_cortex_page
 
 _CONFIDENCE_FLOOR = 0.1
 _FALSIFY_COOLDOWN_DAYS = 14
@@ -107,13 +107,9 @@ def _independent_insights(pages: list, exclude_grounded_on: str | None = None) -
     """
     insights = set()
     for page in pages:
-        for evidence in page.evidence:
+        for evidence in active_evidence(page):
             name = evidence.get("insight")
             if not name:
-                continue
-            if evidence.get("superseded_by"):
-                # The insight's later revision no longer asserts this claim —
-                # stale support must not keep counting as independent backing.
                 continue
             if exclude_grounded_on and exclude_grounded_on in (evidence.get("grounded_on") or []):
                 continue

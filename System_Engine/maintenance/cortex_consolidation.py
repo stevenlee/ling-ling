@@ -88,6 +88,35 @@ def _insight_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _extract_claims_result(llm, insight_text: str) -> tuple[bool, list[dict]]:
+    """Return extraction validity separately from its possibly-empty claims.
+
+    Older clients and test doubles expose only ``extract_claims``. Their list
+    result remains a valid verdict for compatibility; new clients expose the
+    explicit contract so an operational failure cannot look like a retraction.
+    """
+    result_method = getattr(llm, "extract_claims_result", None)
+    if callable(result_method):
+        try:
+            result = result_method(insight_text)
+        except Exception as e:
+            logging.warning(f"Cortex: claim extraction failed: {e}")
+            return False, []
+        if not isinstance(result, dict) or not isinstance(result.get("valid"), bool):
+            return False, []
+        claims = result.get("claims")
+        if not isinstance(claims, list):
+            return False, []
+        return result["valid"], claims
+
+    try:
+        claims = llm.extract_claims(insight_text)
+    except Exception as e:
+        logging.warning(f"Cortex: claim extraction failed: {e}")
+        return False, []
+    return (True, claims) if isinstance(claims, list) else (False, [])
+
+
 def _pair_key(claim_a: str, claim_b: str) -> str:
     ha, hb = sorted((_claim_hash(claim_a), _claim_hash(claim_b)))
     return hashlib.sha256((ha + hb).encode("utf-8")).hexdigest()
@@ -872,7 +901,11 @@ def run_consolidation(
         claim_count = 0
         try:
             body, _ = strip_body_frontmatter(raw)
-            claims = llm.extract_claims(body[:_INSIGHT_TEXT_CAP])
+            extraction_valid, claims = _extract_claims_result(llm, body[:_INSIGHT_TEXT_CAP])
+            if not extraction_valid:
+                # Failure is not a semantic verdict. Do not retract evidence
+                # or advance the ledger; the same revision remains owed.
+                continue
             sources = _insight_sources(meta, body, PAGES_DIR, NOTES_DIR)
             # Provenance for the firewall: which Cortex claims this insight was
             # generated WITH (F1). Empty for non-grounded insights.
@@ -892,27 +925,23 @@ def run_consolidation(
                     revision=content_hash,
                 )
                 claim_count += 1
-            # Reconcile only when extraction demonstrably produced claims:
-            # extract_claims fails soft to [], and a failed extraction must
-            # not masquerade as "this insight retracted everything"
-            # (failure ≠ verdict).
-            if claim_count:
-                worker.reconcile_insight_revision(path.name, content_hash)
+            # A valid empty result is a real retraction. Operational failures
+            # were separated above and never reach this semantic commit point.
+            worker.reconcile_insight_revision(path.name, content_hash)
         except Exception:
             logging.exception(f"Cortex: consolidation failed for {path.name}")
-        finally:
-            # Commit point: raw was read and the gate passed on it, so the
-            # extraction attempt is committed regardless of outcome — a bad
-            # insight must not be re-extracted (and re-billed) every night.
-            # content_hash makes the entry content-addressed: same name,
-            # changed content → owed again.
-            state["processed"][path.name] = {
-                "date": _now(),
-                "claims": claim_count,
-                "content_hash": content_hash,
-            }
-            insights_processed += 1
-            _save_json(state_file, state)
+            continue
+
+        # Commit only after every claim and revision reconciliation succeeds.
+        # Same-insight refresh is idempotent, so a partial attempt can safely
+        # retry without duplicate evidence or reinforcement.
+        state["processed"][path.name] = {
+            "date": _now(),
+            "claims": claim_count,
+            "content_hash": content_hash,
+        }
+        insights_processed += 1
+        _save_json(state_file, state)
 
     worker.prune_adjudication_cache()
     _save_json(cache_file, cache)

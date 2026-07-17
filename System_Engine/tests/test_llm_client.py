@@ -564,6 +564,13 @@ class TestExtractClaimsAppliesWhen:
         res = self._client(monkeypatch, response).extract_claims("text")
         assert res[0]["applies_when"] == "condition A"
 
+    def test_result_distinguishes_valid_empty_from_failure(self, monkeypatch):
+        valid = self._client(monkeypatch, "[]").extract_claims_result("text")
+        failed = self._client(monkeypatch, "not json").extract_claims_result("text")
+
+        assert valid == {"valid": True, "claims": []}
+        assert failed == {"valid": False, "claims": []}
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

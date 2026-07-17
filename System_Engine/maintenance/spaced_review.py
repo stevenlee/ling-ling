@@ -32,7 +32,7 @@ from pathlib import Path
 
 from core.config import CORTEX_DIR, FROM_LLM_DIR
 from services import cortex_decay
-from services.cortex_store import CortexPage, load_all_pages, save_cortex_page
+from services.cortex_store import CortexPage, active_evidence, load_all_pages, save_cortex_page
 
 # Claims with R at or above this are still fresh — reviewing them is wasted
 # effort (the spacing effect makes a high-R reinforcement worth ~nothing).
@@ -51,8 +51,11 @@ class SpacedReviewResult:
 
 def _page_r(page: CortexPage, params: dict, now: datetime) -> float:
     return cortex_decay.retrievability(
-        page.S, page.last_reinforced_at,
-        base_days=params["base_days"], growth=params["growth"], now=now,
+        page.S,
+        page.last_reinforced_at,
+        base_days=params["base_days"],
+        growth=params["growth"],
+        now=now,
     )
 
 
@@ -91,11 +94,11 @@ def select_due_claims(
     if due:
         return due[:limit]
     if fallback:
-        return ranked[:limit]   # nothing strictly due → least-fresh refresher
+        return ranked[:limit]  # nothing strictly due → least-fresh refresher
     return []
 
 
-_CJK_PARENS_RE = re.compile(r'（([^（）]*[一-鿿][^（）]*)）')
+_CJK_PARENS_RE = re.compile(r"（([^（）]*[一-鿿][^（）]*)）")
 
 
 def _zh_gloss(text: str) -> str:
@@ -138,8 +141,10 @@ def render_review_card(
     # least-fresh claims anyway. The intro softens accordingly.
     all_refresher = all(r >= FRESH_CUTOFF for _, r in due)
     if all_refresher:
-        intro = ("> 今天沒有快忘記的東西 (ゝ∀･)b 挑幾條**還記得、但久沒碰**的溫習一下，"
-                 "先自己回想再翻牌～")
+        intro = (
+            "> 今天沒有快忘記的東西 (ゝ∀･)b 挑幾條**還記得、但久沒碰**的溫習一下，"
+            "先自己回想再翻牌～"
+        )
     else:
         intro = "> 這些是你**快要忘記、但現在還救得回**的想法。先自己回想，再翻牌對答案～"
     lines = [
@@ -161,8 +166,9 @@ def render_review_card(
             f"**主張**：{page.claim.strip()}",
             "",
         ]
-        if page.evidence:
-            src = page.evidence[0].get("source") if isinstance(page.evidence[0], dict) else None
+        live_evidence = active_evidence(page)
+        if live_evidence:
+            src = live_evidence[0].get("source")
             if src:
                 lines += [f"**證據**：{str(src).strip()}", ""]
         if page.counterpoints:
@@ -274,9 +280,7 @@ def run_recalled_report(
         if page is None:
             missing.append(title)
             continue
-        delta = cortex_decay.reinforce(
-            page, cortex_decay.GAIN_RETRIEVAL, params=params, now=now
-        )
+        delta = cortex_decay.reinforce(page, cortex_decay.GAIN_RETRIEVAL, params=params, now=now)
         save_cortex_page(page)
         done.append(f"{page.claim.strip()[:20]}（S+{delta:.2f}）")
 

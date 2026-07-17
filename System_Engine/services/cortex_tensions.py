@@ -23,7 +23,7 @@ from core.config import (
     CORTEX_TENSION_DOGMATIC_CONF,
     CORTEX_TENSION_THIN_EVIDENCE_MAX,
 )
-from services.cortex_store import CortexPage, load_all_pages
+from services.cortex_store import CortexPage, active_evidence, load_all_pages
 
 
 @dataclass
@@ -40,7 +40,7 @@ class TensionReport:
 
 
 def _evidence_count(page: CortexPage) -> int:
-    return sum(1 for e in (page.evidence or []) if isinstance(e, dict) and e.get("insight"))
+    return len(active_evidence(page))
 
 
 def scan_tensions(cortex_dir: Path | None = None) -> TensionReport:

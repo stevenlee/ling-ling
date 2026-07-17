@@ -24,7 +24,7 @@ from core.config import (
 )
 from core.ui import ui
 from services.cortex_recall import recall_claims
-from services.cortex_store import load_all_pages
+from services.cortex_store import active_evidence, load_all_pages
 
 _CMD_TOKEN_RE = re.compile(r"(?:@ling-recall|/recall)\b", re.IGNORECASE)
 _STATUS_BADGE = {"active": "🌸", "dormant": "💤", "falsified": "🍂"}
@@ -155,8 +155,7 @@ class RecallAgent(BaseAgent):
                     lines.append(f"  - 反例：{p.falsifier}")
                 ev = [
                     f"[[{(e.get('insight') or '')[:-3] if (e.get('insight') or '').endswith('.md') else e.get('insight')}]]"
-                    for e in (p.evidence or [])[:3]
-                    if isinstance(e, dict) and e.get("insight")
+                    for e in active_evidence(p)[:3]
                 ]
                 if ev:
                     lines.append(f"  - 證據：{' · '.join(ev)}")

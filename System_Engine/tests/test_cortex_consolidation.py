@@ -409,6 +409,89 @@ class TestRevisionSemantics:
         assert beta.evidence[0]["revision"] == new_hash
         assert "superseded_by" not in beta.evidence[0]
 
+    def test_valid_empty_revision_supersedes_every_old_claim(self, tmp_path):
+        """A successful [] is a semantic retraction, not an LLM failure."""
+        from maintenance.cortex_consolidation import _insight_hash
+
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = FakeLLM(
+            claims_map={
+                "MARKER-OK": [{"claim": "ALPHA claim about memory.", "summary": "v1"}],
+                "MARKER-EMPTY": [],
+            }
+        )
+        run_consolidation(llm, FakeRAG(), **env)
+
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-EMPTY")
+        result = run_consolidation(llm, FakeRAG(), **env)
+
+        revision = _insight_hash((env["insights_dir"] / "ok.md").read_text(encoding="utf-8"))
+        page = load_all_pages(env["cortex_dir"])[0]
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert result.insights_processed == 1
+        assert page.evidence[0]["superseded_by"] == revision
+        assert state["processed"]["ok.md"]["content_hash"] == revision
+
+    def test_extraction_failure_stays_owed_without_retracting(self, tmp_path):
+        class FailingExtractionLLM(FakeLLM):
+            def extract_claims_result(self, insight_text):
+                self.extract_calls.append(insight_text)
+                return {"valid": False, "claims": []}
+
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = FailingExtractionLLM()
+
+        result = run_consolidation(llm, FakeRAG(), **env)
+
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert result.insights_processed == 0
+        assert "ok.md" not in state["processed"]
+        assert not env["cortex_dir"].exists() or load_all_pages(env["cortex_dir"]) == []
+
+    def test_partial_claim_failure_does_not_commit_and_retry_is_idempotent(
+        self, tmp_path, monkeypatch
+    ):
+        """A crash after claim 1 keeps the revision owed; retrying must not
+        duplicate or reinforce the claim that was already persisted."""
+        import maintenance.cortex_consolidation as consolidation
+
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = FakeLLM(
+            claims_map={
+                "MARKER-OK": [
+                    {"claim": "ALPHA stable claim.", "summary": "first"},
+                    {"claim": "BETA stable claim.", "summary": "second"},
+                ]
+            }
+        )
+        original = consolidation._Consolidator.process_claim
+        calls = 0
+
+        def fail_second_claim(self, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("simulated mid-revision failure")
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(consolidation._Consolidator, "process_claim", fail_second_claim)
+        first = run_consolidation(llm, FakeRAG(), **env)
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert first.insights_processed == 0
+        assert "ok.md" not in state["processed"]
+
+        second = run_consolidation(llm, FakeRAG(), **env)
+
+        assert second.insights_processed == 1
+        pages = load_all_pages(env["cortex_dir"])
+        assert {page.claim for page in pages} == {"ALPHA stable claim.", "BETA stable claim."}
+        alpha = next(page for page in pages if page.claim.startswith("ALPHA"))
+        assert len(alpha.evidence) == 1
+        assert alpha.confidence == 0.5 and alpha.S == 1
+
     def test_same_night_duplicate_claim_in_one_insight_not_double_counted(self, tmp_path):
         """extract_claims returning the same claim twice from ONE insight is a
         single assertion, not two rediscoveries."""

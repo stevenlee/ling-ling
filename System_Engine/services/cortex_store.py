@@ -61,6 +61,20 @@ class CortexPage:
     schema_version: int = 1
 
 
+def is_active_evidence(entry: object) -> bool:
+    """Whether an evidence record still represents the insight's verdict."""
+    return (
+        isinstance(entry, dict)
+        and bool(entry.get("insight"))
+        and not bool(entry.get("superseded_by"))
+    )
+
+
+def active_evidence(page: CortexPage) -> list[dict]:
+    """Canonical live-evidence view; superseded records remain audit history."""
+    return [entry for entry in page.evidence if is_active_evidence(entry)]
+
+
 def make_claim_id(claim: str) -> str:
     return "cortex-" + hashlib.sha256(claim.strip().encode("utf-8")).hexdigest()[:16]
 
@@ -138,11 +152,16 @@ def render_cortex_page(page: CortexPage) -> str:
         frontmatter, allow_unicode=True, sort_keys=False, default_flow_style=False
     ).strip()
 
-    evidence_lines = [
-        f"- [[{e['insight']}]]（{e['date']}）：{e['summary']} — 來源："
-        + "、".join(f"[[{s}]]" for s in e["sources"])
-        for e in page.evidence
-    ] or [_EMPTY_PLACEHOLDER]
+    evidence_lines = []
+    for evidence in page.evidence:
+        prefix = "（已由新版撤回）" if evidence.get("superseded_by") else ""
+        evidence_lines.append(
+            f"- {prefix}[[{evidence['insight']}]]（{evidence['date']}）："
+            f"{evidence['summary']} — 來源："
+            + "、".join(f"[[{source}]]" for source in evidence["sources"])
+        )
+    if not evidence_lines:
+        evidence_lines = [_EMPTY_PLACEHOLDER]
     variants_lines = [f"- {v}" for v in page.variants] or [_EMPTY_PLACEHOLDER]
     counterpoints_lines = [f"- {c}" for c in page.counterpoints] or [_EMPTY_PLACEHOLDER]
 

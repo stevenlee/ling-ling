@@ -238,6 +238,32 @@ class TestDecayPass:
         assert result.revalidation_failures == 1
         assert load_all_pages(env["cortex_dir"])[0].confidence == 0.4
 
+    def test_revalidation_does_not_use_superseded_sources(self, tmp_path):
+        env = _env(tmp_path)
+        env["pages_dir"].mkdir(parents=True)
+        (env["pages_dir"] / "Withdrawn.md").write_text("obsolete evidence", encoding="utf-8")
+        _page(
+            env["cortex_dir"],
+            "Fading claim with only withdrawn evidence.",
+            status="fading",
+            reinforced=NOW - timedelta(days=40),
+            evidence=[
+                {
+                    "insight": "i.md",
+                    "sources": ["Withdrawn"],
+                    "date": "2026-06-01",
+                    "summary": "old",
+                    "superseded_by": "new-revision",
+                }
+            ],
+        )
+        llm = FakeLLM()
+
+        result = run_decay_pass(llm, FakeRAG(), **env)
+
+        assert result.revalidated == 0
+        assert llm.refute_calls == []
+
     def test_flag_off_skips(self, tmp_path):
         env = _env(tmp_path)
         env["enabled"] = False
