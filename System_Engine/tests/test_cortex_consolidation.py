@@ -73,6 +73,22 @@ class FakeRAG:
         self.facets.append((title, facets))
 
 
+class MutatingRAG(FakeRAG):
+    """Fires a callback once, on the first embedding call — which lands after
+    the candidate scan but before the processing loop — to simulate an insight
+    file regenerated (or vanishing) mid-run."""
+
+    def __init__(self, mutate):
+        super().__init__()
+        self._mutate = mutate
+
+    def ef(self, texts):
+        if self._mutate is not None:
+            self._mutate, mutate = None, self._mutate
+            mutate()
+        return super().ef(texts)
+
+
 def _write_insight(
     insights_dir,
     name,
@@ -157,6 +173,261 @@ class TestCandidateGating:
         assert result.status == "skipped"
         assert not env["cortex_dir"].exists()
         assert not env["state_file"].exists()
+
+
+# ── Processed ledger: content addressing + legacy migration ──────────
+
+
+class TestProcessedLedgerContentHash:
+    def _llm(self):
+        return FakeLLM(
+            claims_map={
+                "MARKER-OK": [{"claim": "ALPHA claim about memory.", "summary": "s"}],
+                "MARKER-NEW": [{"claim": "BETA claim about sleep.", "summary": "s"}],
+            }
+        )
+
+    def test_same_name_content_change_is_reprocessed(self, tmp_path):
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = self._llm()
+        run_consolidation(llm, FakeRAG(), **env)
+        assert len(llm.extract_calls) == 1
+
+        # Same filename, regenerated content → owed again.
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-NEW")
+        result = run_consolidation(llm, FakeRAG(), **env)
+
+        assert result.status == "succeeded"
+        assert result.insights_processed == 1
+        assert len(llm.extract_calls) == 2
+        assert "MARKER-NEW" in llm.extract_calls[1]
+        # The ledger now holds the new content's hash → next run is a no-op.
+        third = run_consolidation(llm, FakeRAG(), **env)
+        assert third.status == "skipped"
+        assert len(llm.extract_calls) == 2
+
+    def test_legacy_entry_is_stamped_not_reprocessed(self, tmp_path):
+        """Pre-hash {"date", "claims"} entries must not crash, must not be
+        re-billed, and must become content-addressed (lazy migration) so
+        edits made AFTER the stamp are detected."""
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = self._llm()
+        run_consolidation(llm, FakeRAG(), **env)
+
+        # Rewind the ledger entry to the legacy shape.
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        state["processed"]["ok.md"] = {"date": "2026-01-01T00:00:00", "claims": 1}
+        env["state_file"].write_text(json.dumps(state), encoding="utf-8")
+
+        result = run_consolidation(llm, FakeRAG(), **env)
+        assert result.status == "skipped"  # unchanged file: no reprocess
+        assert len(llm.extract_calls) == 1
+        # The stamp was persisted even though the run was a no-op.
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert state["processed"]["ok.md"]["content_hash"]
+        assert state["processed"]["ok.md"]["claims"] == 1  # legacy fields kept
+
+        # From now on a content change is owed again.
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-NEW")
+        result = run_consolidation(llm, FakeRAG(), **env)
+        assert result.insights_processed == 1
+        assert len(llm.extract_calls) == 2
+
+    def test_corrupt_ledger_entry_recovers_by_reprocessing(self, tmp_path):
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = self._llm()
+        run_consolidation(llm, FakeRAG(), **env)
+
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        state["processed"]["ok.md"] = "not-a-dict"
+        env["state_file"].write_text(json.dumps(state), encoding="utf-8")
+
+        result = run_consolidation(llm, FakeRAG(), **env)
+        assert result.status == "succeeded"  # no crash
+        assert len(llm.extract_calls) == 2
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert state["processed"]["ok.md"]["content_hash"]
+
+    def test_has_pending_insights_detects_content_change(self, tmp_path):
+        from maintenance.cortex_consolidation import has_pending_insights
+
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = self._llm()
+        run_consolidation(llm, FakeRAG(), **env)
+        assert has_pending_insights(env["insights_dir"], env["state_file"]) is False
+
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-NEW")
+        assert has_pending_insights(env["insights_dir"], env["state_file"]) is True
+
+    def test_has_pending_insights_legacy_entry_is_readonly_and_covered(self, tmp_path):
+        """The predicate treats a legacy entry as processed (same "owed"
+        definition as run_consolidation) and never writes the state file."""
+        from maintenance.cortex_consolidation import has_pending_insights
+
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        env["state_file"].parent.mkdir(parents=True, exist_ok=True)
+        legacy = json.dumps({"processed": {"ok.md": {"date": "2026-01-01T00:00:00", "claims": 1}}})
+        env["state_file"].write_text(legacy, encoding="utf-8")
+
+        assert has_pending_insights(env["insights_dir"], env["state_file"]) is False
+        assert env["state_file"].read_text(encoding="utf-8") == legacy
+
+    def test_corrupt_processed_container_is_pending_and_readonly(self, tmp_path):
+        """review P2: a non-dict processed container (list/string) must mean
+        "everything owed" for BOTH callers, and the predicate stays read-only."""
+        from maintenance.cortex_consolidation import has_pending_insights
+
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        env["state_file"].parent.mkdir(parents=True, exist_ok=True)
+        for corrupt in ('{"processed": []}', '{"processed": "junk"}'):
+            env["state_file"].write_text(corrupt, encoding="utf-8")
+            assert has_pending_insights(env["insights_dir"], env["state_file"]) is True
+            assert env["state_file"].read_text(encoding="utf-8") == corrupt
+
+    def test_corrupt_processed_container_run_recovers(self, tmp_path):
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        env["state_file"].parent.mkdir(parents=True, exist_ok=True)
+        env["state_file"].write_text('{"processed": []}', encoding="utf-8")
+        llm = self._llm()
+
+        result = run_consolidation(llm, FakeRAG(), **env)
+
+        assert result.insights_processed == 1
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert state["processed"]["ok.md"]["content_hash"]
+
+    def test_regenerated_as_refuted_between_scan_and_processing(self, tmp_path):
+        """review P1 race: gate/meta/hash must come from the processing-time
+        snapshot. A file regenerated as refuted after the scan must be neither
+        consumed nor stamped processed."""
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = self._llm()
+
+        def regenerate_refuted():
+            _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK", refute="refuted")
+
+        result = run_consolidation(llm, MutatingRAG(regenerate_refuted), **env)
+
+        assert llm.extract_calls == []  # not consumed
+        assert result.insights_processed == 0
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert "ok.md" not in state["processed"]  # not stamped either
+
+        # Regenerated back to healthy → owed again and processed normally.
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        result = run_consolidation(llm, FakeRAG(), **env)
+        assert result.insights_processed == 1
+        assert len(llm.extract_calls) == 1
+
+    def test_processing_time_read_failure_stays_owed(self, tmp_path):
+        """review P1: a pre-commit-point I/O failure must not be committed as
+        processed — the unchanged file stays owed and is retried next run."""
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = self._llm()
+        insight_path = env["insights_dir"] / "ok.md"
+
+        result = run_consolidation(llm, MutatingRAG(insight_path.unlink), **env)
+
+        assert llm.extract_calls == []
+        assert result.insights_processed == 0
+        state = json.loads(env["state_file"].read_text(encoding="utf-8"))
+        assert "ok.md" not in state["processed"]  # ledger not committed
+
+        # The same content reappears → still owed, processed next run.
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        result = run_consolidation(llm, FakeRAG(), **env)
+        assert result.insights_processed == 1
+        assert len(llm.extract_calls) == 1
+
+
+# ── Revision semantics: same insight ≠ independent rediscovery ────────
+
+
+class TestRevisionSemantics:
+    def test_revision_with_same_claim_is_not_a_rediscovery(self, tmp_path):
+        """review P1: a regenerated insight re-extracting the SAME claim must
+        refresh its evidence in place — no duplicate evidence, no confidence
+        boost, no spacing reinforcement."""
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = FakeLLM(
+            claims_map={
+                "MARKER-OK": [{"claim": "ALPHA stable claim.", "summary": "v1"}],
+                "MARKER-NEW": [{"claim": "ALPHA stable claim.", "summary": "v2"}],
+            }
+        )
+        run_consolidation(llm, FakeRAG(), **env)
+        page = load_all_pages(env["cortex_dir"])[0]
+        assert len(page.evidence) == 1 and page.confidence == 0.5 and page.S == 1
+
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-NEW")
+        result = run_consolidation(llm, FakeRAG(), **env)
+
+        assert result.insights_processed == 1
+        assert result.merged == 0 and result.revised == 1
+        page = load_all_pages(env["cortex_dir"])[0]
+        assert len(page.evidence) == 1  # refreshed in place, not appended
+        assert page.confidence == 0.5  # no re-boost
+        assert page.S == 1  # no spacing reinforcement
+        assert page.evidence[0]["summary"] == "v2"
+        assert "superseded_by" not in page.evidence[0]  # still asserted
+
+    def test_revision_dropping_a_claim_supersedes_old_evidence(self, tmp_path):
+        """review P1 reconciliation: when the new revision no longer asserts a
+        claim, the stale evidence entry is marked superseded_by the new
+        revision instead of silently lingering as live support."""
+        from maintenance.cortex_consolidation import _insight_hash
+
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = FakeLLM(
+            claims_map={
+                "MARKER-OK": [{"claim": "ALPHA claim about memory.", "summary": "s"}],
+                "MARKER-NEW": [{"claim": "BETA claim about sleep.", "summary": "s"}],
+            }
+        )
+        run_consolidation(llm, FakeRAG(), **env)
+
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-NEW")
+        run_consolidation(llm, FakeRAG(), **env)
+
+        pages = load_all_pages(env["cortex_dir"])
+        assert len(pages) == 2
+        alpha = next(p for p in pages if "ALPHA" in p.claim)
+        beta = next(p for p in pages if "BETA" in p.claim)
+        new_hash = _insight_hash((env["insights_dir"] / "ok.md").read_text(encoding="utf-8"))
+        assert alpha.evidence[0]["superseded_by"] == new_hash  # reconciled
+        assert beta.evidence[0]["revision"] == new_hash
+        assert "superseded_by" not in beta.evidence[0]
+
+    def test_same_night_duplicate_claim_in_one_insight_not_double_counted(self, tmp_path):
+        """extract_claims returning the same claim twice from ONE insight is a
+        single assertion, not two rediscoveries."""
+        env = _env(tmp_path)
+        _write_insight(env["insights_dir"], "ok.md", body="MARKER-OK")
+        llm = FakeLLM(
+            claims_map={
+                "MARKER-OK": [
+                    {"claim": "ALPHA stable claim.", "summary": "first"},
+                    {"claim": "ALPHA stable claim.", "summary": "second"},
+                ]
+            }
+        )
+        result = run_consolidation(llm, FakeRAG(), **env)
+
+        assert result.created == 1 and result.merged == 0 and result.revised == 1
+        page = load_all_pages(env["cortex_dir"])[0]
+        assert len(page.evidence) == 1
+        assert page.confidence == 0.5 and page.S == 1
 
 
 # ── Verdict-driven actions ────────────────────────────────────────────

@@ -97,14 +97,22 @@ def _coerce_evidence(value) -> list[dict]:
     for item in value:
         if not isinstance(item, dict):
             continue
-        out.append(
-            {
-                "insight": _as_str(item.get("insight")),
-                "sources": _as_str_list(item.get("sources")),
-                "date": _as_str(item.get("date")),
-                "summary": _as_str(item.get("summary")),
-            }
-        )
+        entry = {
+            "insight": _as_str(item.get("insight")),
+            "sources": _as_str_list(item.get("sources")),
+            "date": _as_str(item.get("date")),
+            "summary": _as_str(item.get("summary")),
+        }
+        # Optional provenance keys, kept only when set so legacy pages render
+        # unchanged: grounded_on feeds the F1 independence exclusion; revision /
+        # superseded_by carry the source insight's content_hash lifecycle.
+        if item.get("grounded_on"):
+            entry["grounded_on"] = _as_str_list(item.get("grounded_on"))
+        if item.get("revision"):
+            entry["revision"] = _as_str(item.get("revision"))
+        if item.get("superseded_by"):
+            entry["superseded_by"] = _as_str(item.get("superseded_by"))
+        out.append(entry)
     return out
 
 

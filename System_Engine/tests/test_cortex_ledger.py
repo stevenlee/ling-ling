@@ -254,3 +254,20 @@ def test_independent_insights_excludes_grounded_self_dissent():
     # External evidence (or judging a different claim) → both count.
     assert len(_independent_insights([c1, c2])) == 2
     assert len(_independent_insights([c1, c2], exclude_grounded_on="cortex-OTHER")) == 2
+
+
+def test_independent_insights_excludes_superseded_evidence():
+    """Revision reconciliation: an insight whose later revision withdrew a
+    claim must not keep counting as independent support for it."""
+    from maintenance.cortex_ledger import _independent_insights
+
+    c = CortexPage(
+        claim_id="c1",
+        path=Path("c1.md"),
+        claim="not P",
+        evidence=[
+            {"insight": "stale.md", "revision": "old", "superseded_by": "new"},
+            {"insight": "live.md", "revision": "new"},
+        ],
+    )
+    assert _independent_insights([c]) == {"live.md"}

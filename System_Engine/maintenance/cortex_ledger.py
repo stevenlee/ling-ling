@@ -46,7 +46,7 @@ _EVENTS_CAP = 200
 
 @dataclass
 class LedgerPassResult:
-    status: str                   # "succeeded" | "skipped"
+    status: str  # "succeeded" | "skipped"
     message: str
     falsified: list = field(default_factory=list)
     candidates_checked: int = 0
@@ -69,9 +69,9 @@ def is_adjudication_strict(state_file: Path = None) -> bool:
 
 def _load_state(path: Path) -> dict:
     default = {
-        "snapshots": {},          # claim_id -> {evidence, variants}
-        "events": [],             # {kind: merge|unmerge, claim_id, ts}
-        "falsify_checked": {},    # claim_id -> last check date
+        "snapshots": {},  # claim_id -> {evidence, variants}
+        "events": [],  # {kind: merge|unmerge, claim_id, ts}
+        "falsify_checked": {},  # claim_id -> last check date
         "adjudication_strict": False,
     }
     try:
@@ -110,6 +110,10 @@ def _independent_insights(pages: list, exclude_grounded_on: str | None = None) -
         for evidence in page.evidence:
             name = evidence.get("insight")
             if not name:
+                continue
+            if evidence.get("superseded_by"):
+                # The insight's later revision no longer asserts this claim —
+                # stale support must not keep counting as independent backing.
                 continue
             if exclude_grounded_on and exclude_grounded_on in (evidence.get("grounded_on") or []):
                 continue
@@ -154,19 +158,16 @@ def run_ledger_pass(
         current = {"evidence": len(page.evidence), "variants": len(page.variants)}
         if snap is not None:
             grew = current["evidence"] > snap.get("evidence", 0)
-            shrank = (
-                current["evidence"] < snap.get("evidence", 0)
-                or current["variants"] < snap.get("variants", 0)
-            )
+            shrank = current["evidence"] < snap.get("evidence", 0) or current[
+                "variants"
+            ] < snap.get("variants", 0)
             if shrank:
                 state["events"].append(
                     {"kind": "unmerge", "claim_id": page.claim_id, "ts": now_iso}
                 )
                 result.unmerge_events += 1
             elif grew:
-                state["events"].append(
-                    {"kind": "merge", "claim_id": page.claim_id, "ts": now_iso}
-                )
+                state["events"].append({"kind": "merge", "claim_id": page.claim_id, "ts": now_iso})
                 result.merge_events += 1
         snapshots[page.claim_id] = current
     for claim_id in list(snapshots):
@@ -204,14 +205,13 @@ def run_ledger_pass(
             continue  # single-source pile-on / prompted self-dissent — not independent
         candidates.append((page, contradictors))
 
-    for page, contradictors in candidates[:max(0, falsify_quota)]:
+    for page, contradictors in candidates[: max(0, falsify_quota)]:
         if not hasattr(llm, "refute_insight"):
             break
         result.candidates_checked += 1
         state["falsify_checked"][page.claim_id] = now_iso
         sources = [
-            f"Contradicting claim: {c.claim}（confidence {c.confidence}）"
-            for c in contradictors
+            f"Contradicting claim: {c.claim}（confidence {c.confidence}）" for c in contradictors
         ]
         try:
             verdict = llm.refute_insight(page.claim, sources).get("verdict")

@@ -59,9 +59,15 @@
 - 工作**昂貴（LLM）、非確定或需要 crash-resume** 時，可持久化
   progress ledger（合規範例：ingestion 的 B1 part resume），但必須有
   內容 hash 或 schema version、冪等語義、損壞時的恢復策略。失敗
-  ledger（attempts/quarantine/budget）一律持久化。consolidation 現有的
-  `processed` 只有 filename/date/claims，**是待補 input hash 的 legacy
-  debt，不是可照抄的範例**；同名 insight 內容改變後應能重新處理。
+  ledger（attempts/quarantine/budget）一律持久化。consolidation 的
+  `processed` ledger 已內容定址（entry 含 `content_hash`）：同名 insight
+  內容改變即重新消化，且採 **revision 語義**——同一 insight 的再主張
+  就地更新 evidence、不重複 reinforce，撤回的 claim 標 `superseded_by`
+  （消費端如 ledger independence 計數須排除）。gate/meta/hash 一律取自
+  **處理當下同一次 raw snapshot**；commit point = 讀檔成功且過 gate，
+  前置 I/O 失敗不落帳、保持 owed。舊格式 entry lazy 補 hash、損壞
+  container/entry 以重處理恢復（範例：
+  `cortex_consolidation._iter_owed_insights` / `reconcile_insight_revision`）。
 - ID 用**內容定址**（hash of content）確保重跑冪等；寫入前先刪同
   key 舊資料（範例：`add_facets`）。
 - 持久化狀態會活得比寫它的 code 久——邊界檢查放在**消費端接縫**，

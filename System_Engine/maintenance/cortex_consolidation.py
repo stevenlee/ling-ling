@@ -70,6 +70,7 @@ class ConsolidationResult:
     message: str
     created: int = 0
     merged: int = 0
+    revised: int = 0  # same-insight re-assertions refreshed in place
     contradiction_links: int = 0
     related_links: int = 0
     pending_resolved: int = 0
@@ -80,6 +81,11 @@ class ConsolidationResult:
 
 def _claim_hash(claim: str) -> str:
     return hashlib.sha256(claim.strip().encode("utf-8")).hexdigest()
+
+
+def _insight_hash(text: str) -> str:
+    """Content address of a raw insight file for the processed ledger."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _pair_key(claim_a: str, claim_b: str) -> str:
@@ -167,6 +173,7 @@ class _Consolidator:
         self.adjudications_used = 0
         self.created = 0
         self.merged = 0
+        self.revised = 0  # same-insight re-assertions refreshed in place (no reinforce)
         self.firewalled = 0  # F1: reinforcements skipped as grounded self-agreement
         self.contradiction_links = 0
         self.related_links = 0  # O0: symmetric related edges added this run
@@ -271,20 +278,41 @@ class _Consolidator:
         insight echoed a belief that was fed to it. Record the evidence link but
         DO NOT reinforce (no S/confidence boost). Only external evidence raises
         confidence; self-agreement cannot.
+
+        REVISION SEMANTICS: evidence is keyed by the source insight's filename.
+        The same insight re-asserting a claim — a regenerated file (new
+        content_hash) or a duplicate claim within one extraction — is NOT an
+        independent rediscovery: its evidence entry is refreshed in place and
+        S/confidence stay untouched. Only a different insight can reinforce.
         """
         from services.cortex_decay import GAIN_REDISCOVERY, reinforce
 
-        page.evidence.append(evidence)
-        if grounded_on and page.claim_id in grounded_on:
+        prior_idx = next(
+            (
+                i
+                for i, e in enumerate(page.evidence)
+                if isinstance(e, dict) and e.get("insight") == evidence.get("insight")
+            ),
+            None,
+        )
+        if prior_idx is not None:
+            page.evidence[prior_idx] = evidence
+            page.updated = _now()
+            self.revised += 1
+        elif grounded_on and page.claim_id in grounded_on:
+            page.evidence.append(evidence)
             self.firewalled += 1
+            self.merged += 1
             logging.info(
                 "Cortex firewall: %s reinforced by a grounded insight that cited it "
                 "— recording link, skipping reinforcement (no echo chamber).",
                 page.claim_id[:12],
             )
         else:
+            page.evidence.append(evidence)
             reinforce(page, GAIN_REDISCOVERY)
             page.confidence = round(min(_CONFIDENCE_CAP, page.confidence + _CONFIDENCE_STEP), 4)
+            self.merged += 1
         if claim != page.claim and claim not in page.variants:
             page.variants.append(claim)
             if len(page.variants) > self.max_variants:
@@ -292,7 +320,6 @@ class _Consolidator:
         save_cortex_page(page)
         self.state["claim_embeddings"].pop(page.claim_id, None)  # updated changed
         self._index_page(page)
-        self.merged += 1
 
     def _assess_falsifiability(self, claim: str) -> tuple[float | None, str]:
         """Guarded fifth-signal call. Fail-open: any failure, missing
@@ -329,6 +356,7 @@ class _Consolidator:
         sources: list[str],
         applies_when: str = "",
         grounded_on: list[str] | None = None,
+        revision: str = "",
     ) -> None:
         grounded_on = list(grounded_on or [])
         evidence = {
@@ -341,6 +369,10 @@ class _Consolidator:
             # exclude self-agreement (F1 defense 1).
             "grounded_on": grounded_on,
         }
+        if revision:
+            # content_hash of the source file at processing time — pairs with
+            # reconcile_insight_revision to tell current from stale assertions.
+            evidence["revision"] = revision
 
         # Exact-duplicate fast path: identical claim text needs no adjudication.
         claim_id = make_claim_id(claim)
@@ -437,6 +469,34 @@ class _Consolidator:
                 save_cortex_page(other)
                 self._index_page(other)
                 self.contradiction_links += 1
+
+    def reconcile_insight_revision(self, insight_name: str, revision: str) -> int:
+        """After a re-processed insight lands its claims, reconcile its OLD
+        evidence: entries it re-asserted carry the new revision (refreshed in
+        place by _merge_into); entries it no longer asserts — including
+        pre-revision legacy entries — are marked superseded_by=<revision> so a
+        page's support chain stays honest and consumers (e.g. the ledger's
+        independence count) can discount them. Pages are never deleted and
+        scores are not rewound: reinforcement already granted is not cleanly
+        invertible (spacing rule + confidence cap); an unsupported claim simply
+        stops being reinforced and decays. Returns the number of entries marked.
+        """
+        marked = 0
+        for page in self.pages:
+            changed = False
+            for entry in page.evidence:
+                if not isinstance(entry, dict) or entry.get("insight") != insight_name:
+                    continue
+                if entry.get("revision") == revision or entry.get("superseded_by") == revision:
+                    continue
+                entry["superseded_by"] = revision
+                changed = True
+                marked += 1
+            if changed:
+                page.updated = _now()
+                save_cortex_page(page)
+                self._index_page(page)
+        return marked
 
     def _sim(self, vec, claim_id: str) -> float:
         return _cosine(vec, self.embeddings[claim_id])
@@ -597,27 +657,73 @@ def _is_candidate(meta: dict) -> bool:
     return True
 
 
-def has_pending_insights(insights_dir: Path = None, state_file: Path = None) -> bool:
-    """Cheap predicate: does any unprocessed insight with healthy signals await
-    consolidation? Mirrors run_consolidation's candidate gate so the daytime
-    DaydreamPump and the nightly pass share one definition of "owed" — and
-    returns on the first hit instead of scanning the whole directory."""
-    insights_dir = insights_dir or INSIGHTS_DIR
-    state_file = state_file or CORTEX_STATE_FILE
+def _processed_ledger(container) -> dict:
+    """Single normalization seam for the processed container: a corrupt
+    (non-dict) value counts as empty — recovery = everything owed again,
+    matching _load_json's start-fresh semantics for a corrupt state file.
+    Both run_consolidation and has_pending_insights normalize through here so
+    they cannot diverge on what "owed" means for a damaged ledger."""
+    return container if isinstance(container, dict) else {}
+
+
+def _iter_owed_insights(insights_dir: Path, processed: dict):
+    """Yield the Path of each insight owed consolidation.
+
+    THE single definition of "owed", shared by has_pending_insights and
+    run_consolidation: passes the signals gate AND is either absent from the
+    processed ledger or recorded under a content_hash that no longer matches
+    the file — a same-name insight whose content changed is re-digested.
+    A corrupt (non-dict) ledger entry counts as absent: recovery = reprocess.
+
+    Scan results are advisory only: the file can change again after this
+    yields, so consumers that act on an insight must re-read it and re-derive
+    gate/meta/hash from that processing-time snapshot (see run_consolidation).
+
+    Migration of legacy {"date", "claims"} entries (pre-hash): stamped in
+    place with the current content hash instead of being treated as stale.
+    Re-digesting every historical insight once would re-bill claim extraction
+    for the whole backlog and pollute existing pages with duplicate evidence
+    and reinforcement, while edits made before the stamp were already
+    invisible under the old filename-only semantics — nothing is recovered by
+    reprocessing. Change detection is live from the first post-upgrade scan
+    onward. The stamp mutates `processed` in place; a caller that persists
+    the ledger must save it (has_pending_insights is read-only and discards).
+    """
+    processed = _processed_ledger(processed)
     if not insights_dir.exists():
-        return False
-    state = _load_json(state_file, {})
-    processed = state.get("processed", {}) if isinstance(state, dict) else {}
+        return
     for path in sorted(insights_dir.glob("*.md")):
-        if path.name in processed:
-            continue
         try:
-            meta = parse_markdown_metadata(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        content_hash = _insight_hash(text)
+        entry = processed.get(path.name)
+        if isinstance(entry, dict):
+            stored = entry.get("content_hash")
+            if stored is None:
+                entry["content_hash"] = content_hash
+                continue
+            if stored == content_hash:
+                continue
+        try:
+            meta = parse_markdown_metadata(text)
         except Exception:
             continue
         if _is_candidate(meta):
-            return True
-    return False
+            yield path
+
+
+def has_pending_insights(insights_dir: Path = None, state_file: Path = None) -> bool:
+    """Cheap predicate: does any unprocessed insight with healthy signals await
+    consolidation? Shares _iter_owed_insights with run_consolidation so the
+    daytime DaydreamPump and the nightly pass use one definition of "owed" —
+    and returns on the first hit instead of scanning the whole directory."""
+    insights_dir = insights_dir or INSIGHTS_DIR
+    state_file = state_file or CORTEX_STATE_FILE
+    state = _load_json(state_file, {})
+    processed = state.get("processed", {}) if isinstance(state, dict) else {}
+    return next(_iter_owed_insights(insights_dir, processed), None) is not None
 
 
 def _insight_sources(meta: dict, body: str, pages_dir: Path, notes_dir: Path) -> list[str]:
@@ -695,21 +801,21 @@ def run_consolidation(
         return ConsolidationResult(status="skipped", message="Cortex consolidation disabled.")
 
     state = _load_json(state_file, {})
-    state.setdefault("processed", {})
+    state["processed"] = _processed_ledger(state.get("processed"))
     state.setdefault("claim_embeddings", {})
     cache = _load_json(cache_file, {})
 
-    candidates = []
-    if insights_dir.exists():
-        for path in sorted(insights_dir.glob("*.md")):
-            if path.name in state["processed"]:
-                continue
-            try:
-                meta = parse_markdown_metadata(path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if _is_candidate(meta):
-                candidates.append((path, meta))
+    def _legacy_entries() -> int:
+        return sum(
+            1
+            for e in state["processed"].values()
+            if isinstance(e, dict) and "content_hash" not in e
+        )
+
+    legacy_before = _legacy_entries()
+    candidates = list(_iter_owed_insights(insights_dir, state["processed"]))
+    if _legacy_entries() != legacy_before:  # lazy hash migration happened
+        _save_json(state_file, state)
 
     # A night with neither new insights NOR owed edges is a true no-op — skip
     # before paying to load pages/embeddings. But owed edges (pending from a
@@ -743,10 +849,29 @@ def run_consolidation(
         _save_json(state_file, state)
 
     insights_processed = 0
-    for path, meta in candidates[:max_insights]:
+    for path in candidates[:max_insights]:
+        # Everything about this insight — signals gate, meta, sources,
+        # grounded_on, hash — must come from ONE processing-time snapshot: the
+        # file may have been regenerated since the scan, and scan-time state
+        # could pass a gate the new content fails or carry stale provenance.
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception as e:
+            # Pre-commit-point I/O failure: nothing was consumed, so nothing
+            # is written to the ledger — the insight stays owed for the next
+            # run instead of being permanently skipped.
+            logging.warning(f"Cortex: {path.name} unreadable at processing time, kept owed: {e}")
+            continue
+        content_hash = _insight_hash(raw)
+        try:
+            meta = parse_markdown_metadata(raw)
+        except Exception:
+            continue  # unparseable == not owed, same verdict as the scan
+        if not _is_candidate(meta):
+            continue  # regenerated since the scan into a non-candidate
         claim_count = 0
         try:
-            body, _ = strip_body_frontmatter(path.read_text(encoding="utf-8"))
+            body, _ = strip_body_frontmatter(raw)
             claims = llm.extract_claims(body[:_INSIGHT_TEXT_CAP])
             sources = _insight_sources(meta, body, PAGES_DIR, NOTES_DIR)
             # Provenance for the firewall: which Cortex claims this insight was
@@ -764,14 +889,28 @@ def run_consolidation(
                     sources,
                     str(item.get("applies_when") or ""),
                     grounded_on=grounded_on,
+                    revision=content_hash,
                 )
                 claim_count += 1
+            # Reconcile only when extraction demonstrably produced claims:
+            # extract_claims fails soft to [], and a failed extraction must
+            # not masquerade as "this insight retracted everything"
+            # (failure ≠ verdict).
+            if claim_count:
+                worker.reconcile_insight_revision(path.name, content_hash)
         except Exception:
             logging.exception(f"Cortex: consolidation failed for {path.name}")
         finally:
-            # Processed regardless of outcome — a bad insight must not be
-            # re-extracted (and re-billed) every night.
-            state["processed"][path.name] = {"date": _now(), "claims": claim_count}
+            # Commit point: raw was read and the gate passed on it, so the
+            # extraction attempt is committed regardless of outcome — a bad
+            # insight must not be re-extracted (and re-billed) every night.
+            # content_hash makes the entry content-addressed: same name,
+            # changed content → owed again.
+            state["processed"][path.name] = {
+                "date": _now(),
+                "claims": claim_count,
+                "content_hash": content_hash,
+            }
             insights_processed += 1
             _save_json(state_file, state)
 
@@ -780,16 +919,18 @@ def run_consolidation(
     _save_json(state_file, state)
 
     pending_note = f"，補回 {pending_resolved} 條 pending 邊" if pending_resolved else ""
+    revision_note = f"，同 insight 改版更新 {worker.revised} 筆 evidence" if worker.revised else ""
     result = ConsolidationResult(
         status="succeeded",
         message=(
             f"Cortex: {insights_processed} insight(s) → {worker.created} new claim(s), "
             f"{worker.merged} merged, {worker.related_links} related link(s), "
-            f"{worker.contradiction_links} contradiction link(s){pending_note}, "
+            f"{worker.contradiction_links} contradiction link(s){pending_note}{revision_note}, "
             f"{worker.adjudications_used}/{max_adjudications} adjudications."
         ),
         created=worker.created,
         merged=worker.merged,
+        revised=worker.revised,
         contradiction_links=worker.contradiction_links,
         related_links=worker.related_links,
         pending_resolved=pending_resolved,

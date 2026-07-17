@@ -67,6 +67,34 @@ class TestRoundTrip:
         )
         assert _roundtrip(page) == page
 
+    def test_evidence_provenance_keys_roundtrip(self, tmp_path):
+        """revision / superseded_by / grounded_on must survive the store's
+        evidence whitelist — the revision-reconciliation and F1-independence
+        machinery reads them from RELOADED pages, not in-memory ones."""
+        page = _page(
+            tmp_path,
+            "Evidence provenance keys survive reload.",
+            evidence=[
+                {
+                    "insight": "current.md",
+                    "sources": ["Doc A"],
+                    "date": "2026-07-17",
+                    "summary": "s",
+                    "revision": "a" * 64,
+                    "grounded_on": ["cortex-1234"],
+                },
+                {
+                    "insight": "stale.md",
+                    "sources": [],
+                    "date": "2026-07-01",
+                    "summary": "s",
+                    "revision": "b" * 64,
+                    "superseded_by": "c" * 64,
+                },
+            ],
+        )
+        assert _roundtrip(page) == page
+
     def test_yaml_timestamp_coercion(self, tmp_path):
         """PyYAML parses ISO strings into datetime objects; the parser must
         coerce them back to strings or round-trip breaks."""
