@@ -33,6 +33,7 @@
 
 ### B. synthesis 品質閘——收尾
 - ~~**B1 #1 型模型不合規**~~：**✅ 完成（`bb811db`）**。retry 迴圈新增 `_needs_retry`：「verdict None 但有 critique section」（閘跑了卻讀不到判定）也重試（bounded）；讀不到就出貨但記成 unparseable（可見、計入 bad），不再靜默放行。＋critique.md 把總體判定段設為 REQUIRED、禁用「總結」替代。無 section（critique 關閉/失敗）仍不重試。
+- ~~**B2 prompt/parser 格式契約矛盾（2026-07-24 觀察窗重稽核頭條）**~~：**✅ 完成（2026-07-24，需 daemon 重啟）**。B1 的 critique.md 規定 header `**總體判定 (Overall Verdict)**`，但 parser 兩條 regex 都不認括號英文尾/無冒號形態→觀察窗 11/14 unparseable（詳見 `LingLing_Audit_ObsWindow_report_20260724.md` §2）。三修：①regex 加 `_VERDICT_HEADER_TAIL`（全半形括號尾）；②critique_text 空回應（reasoning-channel 空 content，同 A3 家族）套 reroll（attempts=3、retry 升溫），不再被當「critique off」無閘出貨；③`test_prompt_assets.py::TestCritiqueVerdictContract` 直接從 critique.md 抽 REQUIRED header 餵 parser——prompt 格式再漂移、suite 先紅。真實窗內 trace 驗證：16/22 可解析（其餘 6 筆為真 #1 型整篇無判定，誠實 unparseable 屬設計行為）。**殘留**：#1 型（模型完全不寫判定段，集中在大部頭數學書的賞析型輸出）仍靠 unparseable→NeedsReview 兜底。
 
 ### C. 觀察與再稽核——驗證本波的趨勢效果
 - 本波多數修法的 payoff 要**跨夜累積**才看得出（novelty 散開、grounding 去集中化、SE insight_dim 趨勢、M-arc 提案節奏、synthesis unparseable 率）。

@@ -284,6 +284,47 @@ def test_parse_verdict_zh_simplified_conclusion_heading():
     assert IngestionPipeline._parse_verdict("## 总体结论\n\n建议修改。") == "revise"
 
 
+# ── 2026-07-24 obs-window re-audit: the REQUIRED bilingual header ────────
+# bb811db made critique.md mandate `**總體判定 (Overall Verdict)**` — gemma then
+# complied verbatim, but neither regex accepted the parenthesized English tail,
+# so 11/14 window syntheses parsed to None. The format the prompt REQUIRES must
+# always parse. Shapes below are verbatim from 2026-07-24 critique traces.
+
+
+def test_parse_verdict_bilingual_header_backticked_keep():
+    critique = (
+        "- `[minor] Mermaid 圖表節點 → 標籤未依規範 → 修正`\n\n"
+        "**總體判定 (Overall Verdict)**\n"
+        "`keep`\n\n"
+        "該文件極度忠實於原始資料，僅有微小瑕疵。"
+    )
+    assert IngestionPipeline._parse_verdict(critique) == "keep"
+
+
+def test_parse_verdict_bilingual_header_plain_revise():
+    critique = (
+        "- `[major] Mermaid 圖表節點 E → 誤標示為「增加量」 → 修正`\n\n"
+        "**總體判定 (Overall Verdict)**\n"
+        "revise\n\n"
+        "此候選文本結構極佳，然而圖表存在一處重大錯誤。"
+    )
+    assert IngestionPipeline._parse_verdict(critique) == "revise"
+
+
+def test_parse_verdict_bilingual_header_same_line_colon():
+    assert (
+        IngestionPipeline._parse_verdict("**總體判定 (Overall Verdict)**: reject。含關鍵事實錯誤。")
+        == "reject"
+    )
+
+
+def test_parse_verdict_bilingual_header_fullwidth_parens():
+    assert (
+        IngestionPipeline._parse_verdict("### 總體判定（Overall Verdict）\n\n**保留 (Keep)**。")
+        == "keep"
+    )
+
+
 def test_parse_verdict_summary_section_still_none():
     # #1 Algorithms4Decision: model wrote 總結與建議 (summary), no verdict — the
     # "保留" in the suggestions is about keeping content, NOT a verdict. 總結 lacks

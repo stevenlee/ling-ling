@@ -1045,12 +1045,19 @@ class LLMClient:
             persona="none",
             operation="critique",
         )
-        try:
+
+        # Reasoning models intermittently emit the whole critique into the
+        # reasoning channel and hand back empty content (same failure family
+        # as adjudicate_claims, fixed in 3945e3f). An empty critique used to be
+        # treated as "critique off" downstream — the synthesis shipped UNGATED
+        # (2/14 in the 2026-07-24 obs window). Reroll: attempt 1 stays at the
+        # deterministic base temperature, retries run hotter to shake the dice.
+        def _attempt(attempt: int) -> str:
             return self._strip_accidental_frontmatter(
                 self._complete_text(
                     system_prompt,
                     prompt,
-                    temperature=0.1,
+                    temperature=0.1 if attempt == 1 else 0.4,
                     max_tokens=settings.MAX_OUTPUT,
                     trace_context={
                         "stage": "critique_text",
@@ -1060,9 +1067,18 @@ class LLMClient:
                         "metadata": {
                             "focus": focus,
                             "capability_resolution": cap_resolution,
+                            "content_attempt": attempt,
                         },
                     },
                 )
+            )
+
+        try:
+            return reroll(
+                _attempt,
+                lambda text: bool(text and text.strip()),
+                attempts=3,
+                fallback="",
             )
         except Exception as e:
             logging.error(f"Critique failed: {e}")

@@ -158,3 +158,53 @@ class TestMermaidPolicySentinel:
         text = self._rules()
         assert "$$" in text, "rules no longer mention the `$$...$$` KaTeX form"
         assert "sequenceDiagram" in text, "rules lost the per-kind (sequence) policy"
+
+
+class TestCritiqueVerdictContract:
+    """Format contract between critique.md and parse_verdict.
+
+    The verdict header has now drifted THREE times (判定/評定/評價 → 結論/裁定 →
+    the bilingual `**總體判定 (Overall Verdict)**`), each caught only after
+    unparseable syntheses shipped. Worst was self-inflicted (2026-07-24 audit):
+    bb811db made critique.md REQUIRE the bilingual header while the parser
+    accepted neither the parenthesized tail nor the missing colon — the more
+    faithfully gemma complied, the more the gate failed. This test reads the
+    mandated header straight out of the vault file, so changing the prompt's
+    required format without teaching the parser turns the suite red BEFORE a
+    single synthesis ships unparseable."""
+
+    _REQUIRED_LINE_RE = re.compile(r"REQUIRED verdict section headed \*\*(?P<header>[^*]+)\*\*")
+
+    def _mandated_header(self) -> str:
+        text = (OPERATIONS_DIR / "critique.md").read_text(encoding="utf-8")
+        m = self._REQUIRED_LINE_RE.search(text)
+        assert m, (
+            "critique.md no longer declares a REQUIRED verdict section as "
+            "`REQUIRED verdict section headed **<header>**` — update this "
+            "contract test together with the prompt AND parse_verdict."
+        )
+        return m.group("header").strip()
+
+    @pytest.mark.parametrize(
+        "keyword,expected",
+        [
+            ("keep", "keep"),
+            ("revise", "revise"),
+            ("reject", "reject"),
+        ],
+    )
+    def test_mandated_header_parses_as_section(self, keyword, expected):
+        from services.ingest.critique_loop import parse_verdict
+
+        header = self._mandated_header()
+        # Exactly the shape gemma produces when it follows the prompt: the
+        # bold mandated header on its own line, the bare keyword next
+        # (observed both backticked and plain), then the reason paragraph.
+        critique = f"- `[minor] finding`\n\n**{header}**\n`{keyword}`\n\n理由段落。"
+        assert parse_verdict(critique) == expected
+
+    def test_mandated_header_parses_with_colon(self):
+        from services.ingest.critique_loop import parse_verdict
+
+        header = self._mandated_header()
+        assert parse_verdict(f"**{header}**: keep。內容忠於來源。") == "keep"

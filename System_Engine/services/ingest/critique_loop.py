@@ -29,9 +29,16 @@ CRITIQUE_HEADER = "## 🔍 Quality Critique"
 # the class. Still anchored to 總體/整體 + a verdict keyword nearby, so a plain
 # 總結 (summary, no 體) section can't false-match as a verdict.
 _VERDICT_HEADER = r"(?:Overall\s+Verdict|[總总整][體体][判評评結结裁][定价價論论])"
+# critique.md (REQUIRED verdict section, bb811db) mandates the bilingual header
+# `**總體判定 (Overall Verdict)**` — and gemma complies faithfully, writing the
+# parenthesized English tail verbatim. The 2026-07-24 obs-window re-audit found
+# 11/14 syntheses unparseable because neither regex accepted that tail: the
+# format the prompt requires must always parse (see the contract test in
+# test_prompt_assets.py, which reads the header straight out of critique.md).
+_VERDICT_HEADER_TAIL = r"(?:\s*[（(][^()（）\n]{0,40}[)）])?"
 _VERDICT_KEYWORD = r"(keep|revise|reject|保留|修訂|修正|修改|重做|拒絕)"
 _VERDICT_RE = re.compile(
-    rf"(?im)^\**\s*{_VERDICT_HEADER}[\s*]*[:：][^\n]{{0,40}}?{_VERDICT_KEYWORD}",
+    rf"(?im)^\**\s*{_VERDICT_HEADER}{_VERDICT_HEADER_TAIL}[\s*]*[:：][^\n]{{0,40}}?{_VERDICT_KEYWORD}",
 )
 # Fully localized "verdict as its own section" shape (observed live on gemma
 # for cloud_act): the header is a markdown heading (or bold line, with the
@@ -42,7 +49,7 @@ _VERDICT_RE = re.compile(
 #
 #   **拒絕 (Reject)**。該文件包含兩項關鍵的事實錯誤...
 _VERDICT_SECTION_RE = re.compile(
-    rf"(?im)^(?:#{{1,6}}\s*|\**)\s*{_VERDICT_HEADER}[\s:：*]*$"
+    rf"(?im)^(?:#{{1,6}}\s*|\**)\s*{_VERDICT_HEADER}{_VERDICT_HEADER_TAIL}[\s:：*]*$"
     rf"\s*^\**\s*[^\n]{{0,20}}?{_VERDICT_KEYWORD}",
 )
 _VERDICT_NEGATION_RE = re.compile(r"(不需|不必|無需|无需|毋須|毋须)\s*$")
