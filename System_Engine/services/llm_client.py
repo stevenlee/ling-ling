@@ -44,6 +44,8 @@ from core.retrying import reroll, retry_call
 from core.utils import MtimeCache, digest_value_to_text
 from services.capability_manager import CapabilityManager
 from services.trace_store import TraceStore, elapsed_ms
+from services.ingest.entity_quality import assess_entity_body
+from services.llm.request_gate import PriorityRequestGate
 
 
 # ─── Constants ────────────────────────────────────────────────────────
@@ -119,6 +121,16 @@ class LLMClient:
 
         self.composer = PromptComposer(self._file_cache, self.capability_manager)
         self.client, self.model = _transport.build_client(self.provider)
+        self._request_gate = PriorityRequestGate()
+
+    @property
+    def _provider_request_gate(self) -> PriorityRequestGate:
+        """Lazy compatibility for tests/legacy clients built via ``__new__``."""
+        gate = self.__dict__.get("_request_gate")
+        if gate is None:
+            gate = PriorityRequestGate()
+            self._request_gate = gate
+        return gate
 
     # ─── Provider dispatch ──────────────────────────────────────────────
 
@@ -128,11 +140,17 @@ class LLMClient:
         user_msg: Any,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        retries: int = 3,
+        reasoning_effort: str | None = None,
         trace_context: dict | None = None,
     ) -> str:
         temperature = settings.CREATIVITY if temperature is None else temperature
         max_tokens = settings.MAX_OUTPUT if max_tokens is None else max_tokens
         trace_context = dict(trace_context or {})
+        stage = str(trace_context.get("stage") or "")
+        request_priority = (
+            "enrichment" if stage == "argument_map" or stage.startswith("artifact_") else "core"
+        )
         started = time.perf_counter()
 
         retry_meta = {
@@ -147,7 +165,10 @@ class LLMClient:
                     user_msg,
                     temperature,
                     max_tokens,
+                    retries=retries,
                     retry_meta=retry_meta,
+                    request_priority=request_priority,
+                    reasoning_effort=reasoning_effort,
                 )
             )
 
@@ -155,6 +176,7 @@ class LLMClient:
                 metadata = {
                     "temperature": temperature,
                     "max_tokens": max_tokens,
+                    "reasoning_effort": reasoning_effort,
                     **trace_context.pop("metadata", {}),
                     **retry_meta,
                 }
@@ -180,6 +202,7 @@ class LLMClient:
                 metadata = {
                     "temperature": temperature,
                     "max_tokens": max_tokens,
+                    "reasoning_effort": reasoning_effort,
                     **trace_context.pop("metadata", {}),
                     **retry_meta,
                 }
@@ -205,10 +228,18 @@ class LLMClient:
         user_msg: Any,
         temperature: float,
         max_tokens: int,
-    ) -> tuple[str, int | None, int | None, int | None]:
+        reasoning_effort: str | None = None,
+    ) -> tuple:
         # Thin delegate: tests monkeypatch this method; transport owns the logic.
         return _transport.complete_once(
-            self.provider, self.client, self.model, system_prompt, user_msg, temperature, max_tokens
+            self.provider,
+            self.client,
+            self.model,
+            system_prompt,
+            user_msg,
+            temperature,
+            max_tokens,
+            reasoning_effort,
         )
 
     def _complete_provider_text_with_retry(
@@ -222,6 +253,8 @@ class LLMClient:
         initial_delay: float = 1.0,
         backoff_factor: float = 2.0,
         retry_meta: dict,
+        request_priority: str = "core",
+        reasoning_effort: str | None = None,
     ) -> tuple[str, int | None, int | None, int | None]:
         def _record_attempt(attempt: int):
             retry_meta["retry_attempts"] = attempt
@@ -231,10 +264,22 @@ class LLMClient:
             if _is_transient_llm_error(e):
                 retry_meta["retry_transient"] = True
 
-        return retry_call(
-            lambda: self._complete_provider_text_once(
-                system_prompt, user_msg, temperature, max_tokens
-            ),
+        def _attempt():
+            with self._provider_request_gate.admit(request_priority) as waited_ms:
+                retry_meta["scheduler_wait_ms"] = (
+                    int(retry_meta.get("scheduler_wait_ms", 0)) + waited_ms
+                )
+                retry_meta["request_priority"] = request_priority
+                if reasoning_effort is None:
+                    return self._complete_provider_text_once(
+                        system_prompt, user_msg, temperature, max_tokens
+                    )
+                return self._complete_provider_text_once(
+                    system_prompt, user_msg, temperature, max_tokens, reasoning_effort
+                )
+
+        raw_result = retry_call(
+            _attempt,
             retries=retries,
             initial_delay=initial_delay,
             backoff_factor=backoff_factor,
@@ -243,6 +288,13 @@ class LLMClient:
             on_error=_record_error,
             log_label="LLM provider call",
         )
+        # Actual transports return provenance as item five. Older fakes and
+        # third-party test clients still return the historical four-tuple.
+        if len(raw_result) == 5:
+            text, prompt, completion, total, provider_metadata = raw_result
+            retry_meta.update(provider_metadata or {})
+            return text, prompt, completion, total
+        return raw_result
 
     def trace_run(self, **kwargs):
         return self.trace_store.run(**kwargs)
@@ -327,7 +379,10 @@ class LLMClient:
         context_hint: str | None = None,
         persona: str | None = None,
         forced_template: str | None = None,
+        content_attempts: int = 2,
     ) -> dict | None:
+        if content_attempts < 1:
+            raise ValueError("content_attempts must be at least 1")
         instruction_type = "Convert this material into a structured Wiki entity page."
         system_prompt, cap_resolution = self._build_system_prompt(
             instruction_type,
@@ -336,7 +391,10 @@ class LLMClient:
         )
         labels = _LABELS_BY_SUFFIX.get(self._localized_suffix(), _DEFAULT_LABELS)
 
-        try:
+        self.last_entity_failure = None
+
+        def generate_once(attempt: int) -> dict | None:
+            attempt_metadata = {"content_attempt": attempt}
             if image_path:
                 user_msg = self._build_multimodal_user_msg(image_path, filename, labels)
                 response = self._complete_text(
@@ -348,6 +406,7 @@ class LLMClient:
                             "filename": filename,
                             "input_kind": "image",
                             "capability_resolution": cap_resolution,
+                            **attempt_metadata,
                         },
                     },
                 )
@@ -356,6 +415,13 @@ class LLMClient:
                 if context_hint:
                     user_text += f"[Context]: {context_hint}\n\n"
                 user_text += f"{labels['content']}:\n{markdown_content}"
+                if attempt > 1 and isinstance(self.last_entity_failure, dict):
+                    prior_issues = ", ".join(self.last_entity_failure.get("issues") or [])
+                    user_text += (
+                        "\n\n[Retry feedback]: The previous response was rejected for: "
+                        f"{prior_issues}. Return a fresh final answer that satisfies the YAML "
+                        "contract; do not include planning or analysis."
+                    )
                 # End-of-message language pin: the part path has no other
                 # user-turn reminder (unlike synthesis), and the directive in
                 # the system prompt can be outweighed by an English template.
@@ -369,12 +435,46 @@ class LLMClient:
                             "filename": filename,
                             "input_kind": "markdown",
                             "capability_resolution": cap_resolution,
+                            **attempt_metadata,
                         },
                     },
                 )
-            return self._hybrid_parse(response)
+            parsed = response_parsing.parse_entity_response(response, require_yaml_header=True)
+            quality = assess_entity_body(parsed.value.get("content", ""))
+            issues = [*parsed.issues, *quality.hard_issues, *quality.suspect_issues]
+            if not parsed.valid or quality.hard_issues or quality.suspect_issues:
+                self.last_entity_failure = {
+                    "kind": "invalid_entity_response",
+                    "issues": issues,
+                    "transient": False,
+                    "attempt": attempt,
+                }
+                logging.warning(
+                    "Entity response rejected (attempt %s/%s): %s",
+                    attempt,
+                    content_attempts,
+                    ", ".join(issues),
+                )
+                return None
+            value = dict(parsed.value)
+            value["_parse_status"] = parsed.status
+            value["_parse_issues"] = parsed.issues
+            value["_salvage_actions"] = parsed.salvage_actions
+            return value
+
+        try:
+            return reroll(
+                generate_once,
+                lambda value: isinstance(value, dict),
+                attempts=content_attempts,
+            )
         except Exception as e:
             logging.error(f"LLM Error in generate_entity_page: {e}")
+            self.last_entity_failure = {
+                "kind": "transport_error" if _is_transient_llm_error(e) else "llm_error",
+                "issues": [str(e)],
+                "transient": _is_transient_llm_error(e),
+            }
             return None
 
     def _build_multimodal_user_msg(
@@ -480,8 +580,11 @@ class LLMClient:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        retries: int = 3,
+        reasoning_effort: str | None = None,
         stage: str = "complete",
         pin_language: bool = False,
+        raise_on_error: bool = False,
     ) -> str:
         """Lean completion with a caller-supplied system prompt.
 
@@ -505,27 +608,38 @@ class LLMClient:
                 user_msg=user_msg,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                retries=retries,
+                reasoning_effort=reasoning_effort,
                 trace_context={"stage": stage, "metadata": {}},
             )
         except Exception as e:
             logging.error(f"LLM Error in complete ({stage}): {e}")
+            if raise_on_error:
+                raise
             return ""
 
     def _complete_json(
-        self, *, kind: str = "object", raise_on_miss: bool = False, **complete_kwargs
+        self,
+        *,
+        kind: str = "object",
+        raise_on_miss: bool = False,
+        json_attempts: int = 2,
+        **complete_kwargs,
     ):
         """Complete a JSON-output prompt with one reasoning-channel re-roll.
 
         Transport-level retries already live in `_complete_text`. This guards a
         different, silent failure: reasoning models (gemma via Ollama) sometimes
         emit the whole reply into the reasoning channel and leave the content
-        with no parseable JSON — no exception is raised. One re-roll usually
-        lands it. (Same failure that silently zeroed LingLens extraction; see
-        roadmap R4.)
+        with no parseable JSON — no exception is raised. The default one re-roll
+        usually lands it. Latency-sensitive callers may set ``json_attempts=1``
+        so their explicit transport retry budget cannot be multiplied by a
+        second full completion. (Same failure that silently zeroed LingLens
+        extraction; see roadmap R4.)
 
         `kind` is "array" or "object". Returns the parsed list/dict, or the
-        empty container after a second miss so callers keep their fail-open
-        paths. With ``raise_on_miss=True``, a second miss raises instead so a
+        empty container after the final miss so callers keep their fail-open
+        paths. With ``raise_on_miss=True``, the final miss raises instead so a
         caller can distinguish operational failure from a semantic empty.
         A genuinely empty answer — the model emitted a literal [] / {} —
         is returned WITHOUT a re-roll, so a real zero is never mistaken for a
@@ -538,15 +652,18 @@ class LLMClient:
         """
         parse = extract_json_array if kind == "array" else extract_json_object
         empty: list | dict = [] if kind == "array" else {}
+        if json_attempts < 1:
+            raise ValueError("json_attempts must be at least 1")
         base_trace = dict(complete_kwargs.pop("trace_context", {}) or {})
         base_meta = dict(base_trace.get("metadata") or {})
-        for attempt in range(2):
+        for attempt in range(json_attempts):
             trace = {**base_trace, "metadata": {**base_meta, "json_attempt": attempt + 1}}
             try:
                 raw = self._complete_text(trace_context=trace, **complete_kwargs)
             except Exception as e:
                 logging.warning(
-                    f"_complete_json({kind}) call failed (attempt {attempt + 1}/2): {e}"
+                    f"_complete_json({kind}) call failed "
+                    f"(attempt {attempt + 1}/{json_attempts}): {e}"
                 )
                 continue
             parsed = parse(raw)
@@ -554,9 +671,11 @@ class LLMClient:
                 return parsed
             if is_empty_json_literal(raw, kind):
                 return empty  # whole reply IS [] / {} — genuine empty, not a parse miss
-            logging.warning(f"_complete_json({kind}) parse miss (attempt {attempt + 1}/2)")
+            logging.warning(
+                f"_complete_json({kind}) parse miss (attempt {attempt + 1}/{json_attempts})"
+            )
         if raise_on_miss:
-            raise ValueError(f"No parseable JSON {kind} after 2 attempts")
+            raise ValueError(f"No parseable JSON {kind} after {json_attempts} attempts")
         return empty
 
     _LANG_NAMES = {

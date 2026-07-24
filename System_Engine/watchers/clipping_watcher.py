@@ -225,7 +225,18 @@ class ClippingWatcher(watchdog.events.FileSystemEventHandler):
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            self.pipeline.ingest_markdown(content, filepath)
+            result = self.pipeline.ingest_markdown(content, filepath)
+            # Older test doubles returned None on success. Production results
+            # are typed and falsy until the document-level commit point is
+            # reached; leave partial/failed sources in place for safe retry.
+            if result is not None and not result:
+                stage = getattr(result, "stage", "unknown")
+                detail = getattr(result, "detail", "")
+                ui.error(
+                    f"Clipping 尚未完整處理：{filepath.name}（stage={stage}）"
+                    f"{f'— {detail}' if detail else ''}；來源檔保留待重試"
+                )
+                return
 
             # Archive
             self._archive_markdown_with_sidecar_images(filepath)

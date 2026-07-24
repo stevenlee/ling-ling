@@ -22,6 +22,7 @@ memory_limit: 32768
 search_depth: 3
 strict_mode: true
 visual_router: true
+ontology_bias: false
 argument_map_mermaid: true
 highlight_spans: true
 highlight_max: 5
@@ -61,7 +62,8 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 - **insight_rotation**: Comma-separated list of `Skills/` strategy names for the daily insight, cycled one per day by date (deterministic). Rotating different operations (counterfactual / analogy / dialogue / fable / montecarlo) is the anti-homogenization lever — same seeds, different lenses. Unknown names are skipped with a warning; empty list falls back to `montecarlo`. Each skill's frontmatter may set `temp_spark` / `temp_expand` / `temp_synthesize` to run hotter or colder than the engine defaults (0.9 / 0.5 / 0.3).
 
 ### 🖼️ Learning Aids (Phase 6)
-- **visual_router**: If `true`, long-doc Synthesis pages and Insight reports automatically get a "🖼️ 學習輔助" section — Ling Ling picks the right visual (comparison table / flowchart / mindmap / timeline / quadrant / concept map / argument map) for the content's structure, or attaches nothing if there's no strong structure. Each attach costs one extra LLM round. The on-demand `@ling-visualize` command always works regardless of this setting.
+- **visual_router**: If `true`, each long-doc Part, its Synthesis page, and Insight reports automatically get a "🖼️ 學習輔助" section — Ling Ling picks the right visual (comparison table / flowchart / mindmap / timeline / quadrant / concept map / argument map) for the content's structure, or attaches nothing if there's no strong structure. Part正文先發布，產圖與下一 Part 的正文流水線穿插執行；完成後直接插入同一檔案的「知識導航」之前。自動套用只擁有預留區，不覆寫人工編輯。Each attach costs classification plus the selected render calls. The on-demand `@ling-visualize` command always works regardless of this setting.
+- **ontology_bias**: If `true`, close relationship-graph ties lean toward ontology. Default `false`: ontology is reserved for content whose taxonomy/schema and typed relations are themselves the learning target; ordinary collections of related concepts should prefer a table, mindmap, or argument map.
 - **argument_map_mermaid**: If `true`, argument maps (Toulmin structure) additionally get a deterministic Mermaid graph below the Markdown. Pure structure-to-graph, no extra LLM call.
 - **highlight_spans**: If `true`, each Part note gets its key sentences wrapped in `== ==` highlights. The spans ride along on the existing Part Digest call (no extra LLM round); a deterministic pass marks only verbatim matches, never touching the original wording.
 - **highlight_max**: Maximum number of `== ==` highlights per Part note (default 5). Hard cap even if the model proposes more.

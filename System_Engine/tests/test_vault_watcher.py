@@ -78,16 +78,48 @@ class TestVaultWatcherReadingIndex:
             for timer in watcher._timers.values():
                 timer.cancel()
 
-    def test_deletion_gives_up_after_max_retries(self, monkeypatch, tmp_path):
+    def test_deletion_does_not_expire_while_long_ingest_holds_lock(self, monkeypatch, tmp_path):
         rag = MagicMock()
         watcher = VaultWatcher(rag)
 
         monkeypatch.setattr("watchers.vault_watcher.global_busy_state.try_set_busy", lambda: False)
 
-        watcher._process_deletion("Article L", attempt=10)
+        try:
+            for _ in range(11):
+                watcher._process_deletion("Article L")
+
+            rag.delete_document.assert_not_called()
+            assert "del::Article L" in watcher._timers
+        finally:
+            for timer in watcher._timers.values():
+                timer.cancel()
+
+    def test_atomic_replace_reindexes_instead_of_deleting(self, monkeypatch, tmp_path):
+        page = tmp_path / "Article L.md"
+        page.write_text("replacement", encoding="utf-8")
+        rag = MagicMock()
+        watcher = VaultWatcher(rag)
+        schedule = MagicMock()
+        monkeypatch.setattr(watcher, "_schedule_process", schedule)
+
+        watcher._process_deletion("Article L", page)
 
         rag.delete_document.assert_not_called()
-        assert "del::Article L" not in watcher._timers
+        schedule.assert_called_once_with(page, "Article L", delay=2.0)
+
+    def test_true_deletion_removes_rag_entry(self, monkeypatch, tmp_path):
+        missing_page = tmp_path / "Article L.md"
+        rag = MagicMock()
+        watcher = VaultWatcher(rag)
+        mock_update = MagicMock()
+        monkeypatch.setattr("watchers.vault_watcher.global_busy_state.try_set_busy", lambda: True)
+        monkeypatch.setattr("watchers.vault_watcher.global_busy_state.set_busy", MagicMock())
+        monkeypatch.setattr("core.vault_utils.update_wiki_index", mock_update)
+
+        watcher._process_deletion("Article L", missing_page)
+
+        rag.delete_document.assert_called_once_with("Article L")
+        mock_update.assert_called_once_with(sync_reading_index=True)
 
     def test_regular_file_deleted_syncs_reading_index(self, monkeypatch, tmp_path):
         regular_file = tmp_path / "Article L.md"

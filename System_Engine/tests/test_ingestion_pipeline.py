@@ -203,6 +203,25 @@ class TestExtractStitchableBody:
         assert "#### 🖼️ 學習輔助（mindmap）" in body
         assert "mindmap" in body
 
+    def test_preserves_new_owned_artifact_slot_before_navigation(self, pipeline):
+        content = (
+            "---\ntitle: X (Part 1)\n---\n\n# Main\n\nBody text.\n\n"
+            '<!-- lingling:learning-aids:start basis_sha256="b" ownership="generated" '
+            'section_sha256="s" -->\n'
+            "## 🖼️ 學習輔助（mindmap）\n\n```mermaid\nmindmap\n  root((X))\n```\n"
+            "<!-- lingling:learning-aids:end -->\n\n---\n## 🔗 知識導航\n* [[Original]]\n\n"
+            "## 🧩 Part Digest Appendix\ndigest\n"
+        )
+
+        body = pipeline._extract_stitchable_body(content)
+
+        assert "Body text." in body
+        assert "#### 🖼️ 學習輔助（mindmap）" in body
+        assert "root((X))" in body
+        assert "lingling:learning-aids" not in body
+        assert "知識導航" not in body
+        assert "Part Digest Appendix" not in body
+
     def test_accepts_path(self, pipeline, tmp_path):
         p = tmp_path / "part.md"
         p.write_text("---\ntitle: X\n---\n\n# Main\n\nBody.\n", encoding="utf-8")

@@ -12,12 +12,20 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
 from core.config import (
-    FACET_INDEX_ENABLED,
     FACET_MAX_PER_DOC,
+    INGEST_ARTIFACT_BACKUP_DIR,
+    INGEST_ARTIFACT_MAX_LAG_PARTS,
+    INGEST_ARTIFACT_MAX_ATTEMPTS,
+    INGEST_ARTIFACT_PENDING_DIR,
+    INGEST_ARTIFACT_QUARANTINE_HOURS,
+    INGEST_ARTIFACT_WORKERS,
+    INGEST_FAILURE_STATE_FILE,
     INDEX_FILE,
     PAGES_DIR,
     PROFILES_DIR,
@@ -35,18 +43,33 @@ from core.parser import (
     dump_markdown_with_metadata,
     parse_markdown_metadata,
     run_markdown_quality_checks,
+    strip_body_frontmatter,
 )
 from core.markdown_doc import MarkdownDocument
 from core.ui import ui
 from core.utils import digest_value_to_text
 from core.vault_utils import sanitize_filename, update_wiki_index
 from services.ingest.critique_loop import SynthesisCritiqueLoop, parse_verdict
+from services.ingest.artifact_pipeline import (
+    ArtifactJobDispatcher,
+    apply_artifact_section,
+    artifact_section_from_page,
+    artifact_slot_status,
+    content_hash as artifact_content_hash,
+    core_content_for_artifact,
+    begin_artifact_attempt,
+    defer_artifact_attempt,
+    prepare_artifact_slot,
+)
 from services.ingest.digest_format import PART_DIGEST_HEADER as _PART_DIGEST_HEADER
 from services.ingest.digest_format import format_digest_appendix as _format_digest_appendix
 from services.ingest.digest_format import format_one_digest as _format_one_digest_fn
 from services.ingest.part_state import PartState
+from services.ingest.atomic_io import atomic_write_text
+from services.ingest.entity_quality import assess_entity_body
+from services.ingest.failure_ledger import IngestFailureLedger
 from services.ingest.profile_routing import ProfileRouter
-from services.ingest.result import IngestResult
+from services.ingest.result import DocumentIngestResult, IngestResult
 from services.profile_manager import ProfileManager
 from services.text_splitter import TextSplitter
 
@@ -64,6 +87,9 @@ class IngestionPipeline:
     def __init__(self, llm_client, rag_manager):
         self.llm = llm_client
         self.rag = rag_manager
+        # LLM calls may overlap across the core and enrichment pipelines, but
+        # vault mutations remain short, serialized commit sections.
+        self._commit_lock = threading.Lock()
         # Splitter selection is Scripture-overridable (settings.*), not just env.
         # ThoughtfulSplitter's `split_text_with_spans` returns dicts with
         # extra `section_path` / `boundary_type` fields; TextSplitter's
@@ -91,6 +117,15 @@ class IngestionPipeline:
             pm.migrate_from_doctype(SCRIPTURE_DIR / "DocType.md")
         return pm
 
+    @property
+    def _commit_guard(self) -> threading.Lock:
+        """Lazy compatibility for tests/legacy callers constructed via __new__."""
+        lock = getattr(self, "_commit_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._commit_lock = lock
+        return lock
+
     # ── Public entry points ──────────────────────────────────────────
 
     def ingest_markdown(self, content: str, source_filepath: Path):
@@ -117,7 +152,7 @@ class IngestionPipeline:
         doc_config = self._resolve_routing(meta, content, source_filepath)
 
         if len(content) > self.splitter.chunk_size + 1000:
-            self._ingest_long_document(
+            return self._ingest_long_document(
                 content, source_filepath, source_filepath.stem, doc_config=doc_config
             )
         else:
@@ -127,7 +162,7 @@ class IngestionPipeline:
                     f"Short-doc ingest failed for {source_filepath.name}: "
                     f"stage={result.stage} kind={result.error_kind} — {result.detail}"
                 )
-            self._index_short_doc_facets(content, result)
+            return result
 
     # ── Facet index (summary-as-pointer retrieval) ───────────────────
 
@@ -167,41 +202,6 @@ class IngestionPipeline:
             seen.add(f)
             out.append(f)
         return out[:FACET_MAX_PER_DOC]
-
-    def _index_digest_facets(self, page_path_value, title, digest, tags=None) -> None:
-        """Phase A: register a page's digest facets as retrieval pointers."""
-        if not FACET_INDEX_ENABLED or not page_path_value or not title:
-            return
-        facets = self._facets_from_digest(digest)
-        if not facets:
-            return
-        try:
-            self.rag.add_facets(Path(page_path_value), title, facets, tags=tags)
-        except Exception as e:
-            logging.warning(f"Facet indexing failed for {title}: {e}")
-
-    def _index_short_doc_facets(self, raw_content: str, ingest_result: IngestResult | None) -> None:
-        """Phase B: short docs have no part digests, so spend one light LLM
-        call to produce one — then index its facets. Fail-soft throughout."""
-        if not FACET_INDEX_ENABLED or not ingest_result:
-            return
-        page_path = ingest_result.page_path
-        title = ingest_result.title
-        if not page_path or not title:
-            return
-        try:
-            digest = self.llm.generate_part_digest(
-                title,
-                1,
-                1,
-                raw_content,
-                ingest_result.content,
-                "",
-            )
-        except Exception as e:
-            logging.warning(f"Short-doc digest for facets failed for {title}: {e}")
-            return
-        self._index_digest_facets(page_path, title, digest, tags=ingest_result.tags)
 
     # ── Profile routing ──────────────────────────────────────────────
 
@@ -280,9 +280,37 @@ class IngestionPipeline:
                     context_hint=context_hint,
                     persona=persona,
                     forced_template=template,
+                    # Long-document retries are charged and persisted by the
+                    # per-Part failure ledger below. Keeping this call to one
+                    # content attempt prevents an invisible 2x multiplier.
+                    content_attempts=1 if part_info else 2,
                 )
                 if not llm_result:
-                    raise ValueError("LLM generation failed.")
+                    raw_failure = getattr(self.llm, "last_entity_failure", None)
+                    failure = raw_failure if isinstance(raw_failure, dict) else {}
+                    result = IngestResult.failure("llm", ValueError("LLM generation failed."))
+                    result.error_kind = str(failure.get("kind") or result.error_kind)
+                    result.issues = list(failure.get("issues") or [])
+                    result.transient = bool(failure.get("transient"))
+                    return result
+
+            parse_status = llm_result.get("_parse_status")
+            if parse_status == "invalid":
+                result = IngestResult.failure(
+                    "parse", ValueError("Entity response did not satisfy the YAML contract.")
+                )
+                result.issues = list(llm_result.get("_parse_issues") or [])
+                return result
+            entity_quality = assess_entity_body(llm_result.get("content", ""))
+            if entity_quality.hard_issues or entity_quality.suspect_issues:
+                result = IngestResult.failure(
+                    "entity_quality", ValueError("Generated entity body failed publication checks.")
+                )
+                result.issues = [
+                    *entity_quality.hard_issues,
+                    *entity_quality.suspect_issues,
+                ]
+                return result
 
             # Sanitize math + path separators out of the stem: it becomes the
             # page folder, the title, every Part/Synthesis filename and the RAG
@@ -334,11 +362,12 @@ class IngestionPipeline:
             page_folder = PAGES_DIR / base_title
             page_folder.mkdir(parents=True, exist_ok=True)
             page_path = page_folder / f"{title}.md"
-            page_path.write_text(wiki_markdown, encoding="utf-8")
-            self._record_artifact(page_path, page_type, title, wiki_meta)
+            if not (part_info and part_info.get("defer_commit")):
+                atomic_write_text(page_path, wiki_markdown)
+                self._record_artifact(page_path, page_type, title, wiki_meta)
 
             stage = "rag_index"
-            if not (part_info and part_info.get("defer_rag")):
+            if not (part_info and (part_info.get("defer_rag") or part_info.get("defer_commit"))):
                 self.rag.add_document(
                     page_path,
                     title,
@@ -350,7 +379,7 @@ class IngestionPipeline:
             # Long-doc parts pass `defer_index=True` so we only rebuild the
             # wiki index once at the end of the run, not per part.
             stage = "wiki_index"
-            if not (part_info and part_info.get("defer_index")):
+            if not (part_info and (part_info.get("defer_index") or part_info.get("defer_commit"))):
                 update_wiki_index(page_path, title, sync_reading_index=True)
 
             return IngestResult(
@@ -360,7 +389,14 @@ class IngestionPipeline:
                 tags=tags,
                 content=llm_result.get("content", ""),
                 pending_concepts=llm_result.get("pending_concepts", "") or "",
+                part_digest=(
+                    llm_result.get("part_digest")
+                    if isinstance(llm_result.get("part_digest"), dict)
+                    else None
+                ),
                 page_type=page_type,
+                rendered_markdown=wiki_markdown,
+                wiki_meta=wiki_meta,
             )
 
         except Exception as e:
@@ -425,8 +461,12 @@ class IngestionPipeline:
 
     def _ingest_long_document(
         self, content: str, source_filepath: Path, base_title: str, doc_config: dict | None = None
-    ):
+    ) -> DocumentIngestResult:
+        run_started = time.perf_counter()
+        stage_ms: dict[str, int] = {}
+        split_started = time.perf_counter()
         chunk_spans = self.splitter.split_text_with_spans(content)
+        stage_ms["split"] = self._elapsed_ms(split_started)
         chunks = [s["text"] for s in chunk_spans]
         source_spans = [
             self._source_span_for_chunk(content, span, i + 1) for i, span in enumerate(chunk_spans)
@@ -442,6 +482,7 @@ class IngestionPipeline:
         # `chunk_spans` carries section_path/boundary_type only when the
         # ThoughtfulSplitter is in use; under the legacy splitter the extra
         # keys simply aren't present and `_process_parts` falls back to "".
+        distill_started = time.perf_counter()
         part_state = self._process_parts(
             chunks,
             source_spans,
@@ -451,33 +492,201 @@ class IngestionPipeline:
             chunk_metas=chunk_spans,
             doc_config=doc_config,
         )
+        stage_ms["distill_parts"] = self._elapsed_ms(distill_started)
+
+        if part_state.failed_parts or len(part_state.completed_parts) != len(chunks):
+            result = DocumentIngestResult(
+                ok=False,
+                status="partial",
+                stage="distill_parts",
+                expected_parts=len(chunks),
+                completed_parts=part_state.completed_parts,
+                failed_parts=part_state.failed_parts,
+                archivable=False,
+                detail="One or more parts did not reach the digest commit point.",
+                metrics=self._ingest_metrics(stage_ms, part_state, run_started),
+            )
+            self._record_ingestion_run(source_filepath, base_title, result)
+            return result
 
         ui.set_status(f"Stitching: {base_title}...")
-        stitched_path = self._write_stitched_article(
-            base_title,
-            part_state.part_paths,
-            part_state.master_tags,
-            len(content),
-            part_state.total_output_chars,
-        )
+        stitch_started = time.perf_counter()
+        try:
+            stitched_path = self._write_stitched_article(
+                base_title,
+                part_state.part_paths,
+                part_state.master_tags,
+                len(content),
+                part_state.total_output_chars,
+            )
+        except Exception as e:
+            stage_ms["stitch"] = self._elapsed_ms(stitch_started)
+            result = DocumentIngestResult(
+                ok=False,
+                status="failed",
+                stage="stitch",
+                expected_parts=len(chunks),
+                completed_parts=part_state.completed_parts,
+                failed_parts=part_state.failed_parts,
+                archivable=False,
+                detail=str(e),
+                metrics=self._ingest_metrics(stage_ms, part_state, run_started),
+            )
+            self._record_ingestion_run(source_filepath, base_title, result)
+            return result
+        stage_ms["stitch"] = self._elapsed_ms(stitch_started)
+        if not stitched_path:
+            result = DocumentIngestResult(
+                ok=False,
+                status="failed",
+                stage="stitch",
+                expected_parts=len(chunks),
+                completed_parts=part_state.completed_parts,
+                archivable=False,
+                detail="Stitched article was not written.",
+                metrics=self._ingest_metrics(stage_ms, part_state, run_started),
+            )
+            self._record_ingestion_run(source_filepath, base_title, result)
+            return result
         if stitched_path:
             part_state.navigation_items.append(
                 f"- [[{base_title} (Stitched)]]: 忠實接合版，保留 Part notes 的主要內容"
             )
 
         ui.set_status(f"Synthesizing: {base_title}...")
-        synthesis_file = self._write_synthesis(
-            base_title=base_title,
-            content=content,
-            chunks=chunks,
-            source_spans=source_spans,
-            part_state=part_state,
-            doc_config=doc_config,
-        )
+        synthesis_started = time.perf_counter()
+        try:
+            synthesis_file = self._write_synthesis(
+                base_title=base_title,
+                content=content,
+                chunks=chunks,
+                source_spans=source_spans,
+                part_state=part_state,
+                doc_config=doc_config,
+            )
+        except Exception as e:
+            stage_ms["synthesize"] = self._elapsed_ms(synthesis_started)
+            result = DocumentIngestResult(
+                ok=False,
+                status="failed",
+                stage="synthesize",
+                expected_parts=len(chunks),
+                completed_parts=part_state.completed_parts,
+                archivable=False,
+                detail=str(e),
+                metrics=self._ingest_metrics(stage_ms, part_state, run_started),
+            )
+            self._record_ingestion_run(source_filepath, base_title, result)
+            return result
+        stage_ms["synthesize"] = self._elapsed_ms(synthesis_started)
 
         # Single index rebuild at the very end of the long-doc run, covering
         # every part + stitched + synthesis we just wrote.
-        update_wiki_index(synthesis_file, base_title, sync_reading_index=True)
+        index_started = time.perf_counter()
+        try:
+            update_wiki_index(synthesis_file, base_title, sync_reading_index=True)
+        except Exception as e:
+            stage_ms["wiki_index"] = self._elapsed_ms(index_started)
+            result = DocumentIngestResult(
+                ok=False,
+                status="failed",
+                stage="wiki_index",
+                expected_parts=len(chunks),
+                completed_parts=part_state.completed_parts,
+                failed_parts=part_state.failed_parts,
+                synthesis_path=synthesis_file,
+                archivable=False,
+                detail=str(e),
+                metrics=self._ingest_metrics(stage_ms, part_state, run_started),
+            )
+            self._record_ingestion_run(source_filepath, base_title, result)
+            return result
+        stage_ms["wiki_index"] = self._elapsed_ms(index_started)
+
+        result = DocumentIngestResult(
+            ok=True,
+            status="complete",
+            stage="done",
+            expected_parts=len(chunks),
+            completed_parts=part_state.completed_parts,
+            synthesis_path=synthesis_file,
+            archivable=True,
+            metrics=self._ingest_metrics(stage_ms, part_state, run_started),
+        )
+        self._record_ingestion_run(source_filepath, base_title, result)
+        return result
+
+    @staticmethod
+    def _elapsed_ms(started: float) -> int:
+        return max(0, round((time.perf_counter() - started) * 1000))
+
+    def _ingest_metrics(
+        self, stage_ms: dict[str, int], part_state: PartState, run_started: float
+    ) -> dict:
+        return {
+            "total_ms": self._elapsed_ms(run_started),
+            "stage_ms": dict(stage_ms),
+            "completed_parts": len(part_state.completed_parts),
+            "resumed_parts": list(part_state.resumed_parts),
+            "resumed_part_count": len(part_state.resumed_parts),
+            "failed_parts": len(part_state.failed_parts),
+            "degraded_parts": len(part_state.degraded_parts),
+            "part_metrics": list(part_state.part_metrics),
+            "artifact_metrics": list(part_state.artifact_metrics),
+        }
+
+    def _record_ingestion_run(
+        self, source_path: Path, title: str, result: DocumentIngestResult
+    ) -> None:
+        metadata = {
+            "status": result.status,
+            "stage": result.stage,
+            "archivable": result.archivable,
+            "expected_parts": result.expected_parts,
+            "completed_parts": list(result.completed_parts),
+            "failed_parts": list(result.failed_parts),
+            "metrics": result.metrics,
+        }
+        self._attach_trace_metadata(metadata)
+        self._record_artifact(source_path, "ingestion_run", title, metadata)
+
+    def _report_part_timing(
+        self,
+        source_path: Path,
+        base_title: str,
+        total_parts: int,
+        metric: dict,
+        *,
+        status: str,
+        stage: str,
+    ) -> None:
+        """Display and persist one Part's timing immediately.
+
+        The document-level ingestion_run remains the aggregate. This separate
+        artifact survives an interrupted long run and makes per-Part latency
+        queryable without parsing terminal output.
+        """
+        metadata = {**metric, "status": status, "stage": stage, "total_parts": total_parts}
+        self._attach_trace_metadata(metadata)
+        self._record_artifact(
+            source_path,
+            "ingestion_part_timing",
+            f"{base_title} (Part {metric['part']})",
+            metadata,
+        )
+
+        total_seconds = metric.get("total_ms", 0) / 1000
+        digest_mode = "inline" if metric.get("inline_digest") else "fallback"
+        detail = (
+            f"entity={metric.get('entity_ms', 0) / 1000:.1f}s, "
+            f"digest={metric.get('digest_ms', 0) / 1000:.1f}s ({digest_mode}), "
+            f"commit={metric.get('commit_ms', 0) / 1000:.1f}s"
+        )
+        message = f"Part {metric['part']}/{total_parts} {status} in {total_seconds:.1f}s [{detail}]"
+        if status == "complete":
+            ui.info(message)
+        else:
+            ui.warning(f"{message}; stage={stage}")
 
     def _process_parts(
         self,
@@ -490,43 +699,122 @@ class IngestionPipeline:
         doc_config: dict | None = None,
     ) -> PartState:
         state = PartState()
+        failure_ledger = IngestFailureLedger(path=INGEST_FAILURE_STATE_FILE)
+        artifact_dispatcher = ArtifactJobDispatcher(INGEST_ARTIFACT_WORKERS)
         total = len(chunks)
         full_source = "\n".join(chunks)
 
         for i, chunk in enumerate(chunks):
+            part_number = i + 1
+
+            def report_artifact_wait(info: dict, next_part: int = part_number) -> None:
+                ui.set_status(
+                    f"Waiting for {info.get('label', 'learning aids')} "
+                    f"({info.get('elapsed_seconds', 0):.0f}s); "
+                    f"Part {next_part}/{total} is next..."
+                )
+
+            # Core work has higher priority, but not absolute priority: keep a
+            # bounded lead so artifact jobs are admitted and make progress
+            # throughout the document instead of draining only at the end.
+            artifact_dispatcher.enforce_max_inflight(
+                INGEST_ARTIFACT_MAX_LAG_PARTS,
+                on_wait=report_artifact_wait,
+            )
+            part_started = time.perf_counter()
             # B1 resume: if this part's note is already complete (digest appendix
             # + persisted resume state), skip the LLM work and rebuild its state
             # from frontmatter, keeping the pending_concepts chain intact.
-            part_path = PAGES_DIR / base_title / f"{base_title} (Part {i + 1}).md"
+            part_path = PAGES_DIR / base_title / f"{base_title} (Part {part_number}).md"
             resumed = self._resume_part(part_path, chunk)
             if resumed is not None:
-                ui.set_status(f"Resuming: Part {i + 1}/{total} already distilled")
                 if not state.master_tags and resumed["tags"]:
                     state.master_tags = resumed["tags"]
                 state.pending_concepts = resumed["pending_concepts"]
                 if resumed["part_digest"]:
                     state.part_digests.append(resumed["part_digest"])
                     nav = digest_value_to_text(resumed["part_digest"].get("thesis")) or ""
-                    state.navigation_items.append(f"- [[{base_title} (Part {i + 1})]]: {nav[:140]}")
+                    state.navigation_items.append(
+                        f"- [[{base_title} (Part {part_number})]]: {nav[:140]}"
+                    )
                 state.part_paths.append(part_path)
+                state.completed_parts.append(part_number)
+                state.resumed_parts.append(part_number)
+                try:
+                    self._prepare_and_queue_resumed_artifact(
+                        artifact_dispatcher,
+                        part_path,
+                        chunk,
+                        base_title,
+                        part_number,
+                    )
+                except Exception as exc:
+                    logging.warning(
+                        "Part %s artifact resume preparation failed: %s",
+                        part_number,
+                        exc,
+                    )
+                    state.artifact_metrics.append(
+                        {
+                            "part": part_number,
+                            "status": "failed",
+                            "stage": "resume_prepare",
+                            "detail": str(exc),
+                        }
+                    )
                 continue
 
-            ui.set_status(f"Distilling Part {i + 1} of {total}...")
+            model = str(getattr(self.llm, "model", "unknown"))
+            try:
+                allowed, failure_key, _content_hash = failure_ledger.begin(
+                    source_filepath, part_number, chunk, model
+                )
+            except OSError as exc:
+                state.failed_parts.append(
+                    {
+                        "part": part_number,
+                        "stage": "failure_ledger",
+                        "error_kind": type(exc).__name__,
+                        "detail": str(exc),
+                    }
+                )
+                continue
+            if not allowed:
+                state.failed_parts.append(
+                    {
+                        "part": part_number,
+                        "stage": "quarantine",
+                        "error_kind": "entity_quarantined",
+                        "detail": "Deterministic entity failures exhausted the retry budget.",
+                    }
+                )
+                continue
 
-            context_hint = f"Part {i + 1}/{total}."
+            ui.set_status(f"Distilling Part {part_number} of {total}...")
+
+            context_hint = f"Part {part_number}/{total}."
             if i > 0 and state.pending_concepts:
                 context_hint += f" Previously you identified these pending concepts: {state.pending_concepts}. Please focus on them."
             if i < total - 1:
                 context_hint += " Since more parts follow, PLEASE include a 'pending_concepts' field in your YAML."
+            context_hint += (
+                " Include a 'part_digest' mapping in the same YAML header with: "
+                "part, title, thesis, key_points, evidence, terms, open_questions, "
+                "handoff, and highlights. thesis must be a non-empty string and "
+                "key_points a non-empty list. This digest describes only this part. "
+                "For LaTeX or any backslash inside YAML, prefer single-quoted scalars; "
+                "inside double quotes, escape every backslash as \\\\."
+            )
 
             chunk_meta = chunk_metas[i] if chunk_metas else {}
             part_info = {
-                "current": i + 1,
+                "current": part_number,
                 "total": total,
                 "master_tags": state.master_tags,
                 "context_hint": context_hint,
                 "defer_rag": True,
                 "defer_index": True,
+                "defer_commit": True,
                 "source_span": source_spans[i],
                 "index_content": index_content,
                 # Number fidelity compares against the WHOLE document, not
@@ -542,15 +830,83 @@ class IngestionPipeline:
                 "ingest_persona": (doc_config or {}).get("ingest_persona", "translator"),
                 "ingest_template": (doc_config or {}).get("ingest_template", "translation-rpt"),
             }
+            entity_started = time.perf_counter()
             result = self.ingest_to_wiki(chunk, source_filepath, part_info=part_info)
+            if self._should_reroll_entity(result):
+                failure_ledger.fail(
+                    failure_key,
+                    stage=result.stage,
+                    detail=", ".join(result.issues) or (result.detail or "entity failure"),
+                )
+                try:
+                    retry_allowed, failure_key, _content_hash = failure_ledger.begin(
+                        source_filepath, part_number, chunk, model
+                    )
+                except OSError as exc:
+                    retry_allowed = False
+                    logging.warning(
+                        "Part %s/%s could not persist its reroll budget: %s",
+                        part_number,
+                        total,
+                        exc,
+                    )
+                if retry_allowed:
+                    issues = ", ".join(result.issues) or result.detail or result.error_kind
+                    ui.warning(
+                        f"Part {part_number}/{total} draft rejected ({issues}); "
+                        "rerolling once before moving on."
+                    )
+                    retry_info = dict(part_info)
+                    retry_info["context_hint"] = (
+                        f"{context_hint} The previous draft was rejected by the publication "
+                        f"gate for: {issues}. Produce a fresh corrected document; close every "
+                        "Markdown fence and do not leak YAML or reasoning into the body."
+                    )
+                    result = self.ingest_to_wiki(chunk, source_filepath, part_info=retry_info)
+            entity_ms = self._elapsed_ms(entity_started)
             if not result:
                 # The typed result finally says WHICH part died and why — a
                 # silently dropped Part used to be indistinguishable from a skip.
                 logging.warning(
-                    f"Part {i + 1}/{total} of '{base_title}' failed at stage "
+                    f"Part {part_number}/{total} of '{base_title}' failed at stage "
                     f"{result.stage!r} ({result.error_kind}); skipping. {result.detail}"
                 )
+                state.failed_parts.append(
+                    {
+                        "part": part_number,
+                        "stage": result.stage,
+                        "error_kind": result.error_kind,
+                        "detail": result.detail,
+                    }
+                )
+                if result.transient:
+                    failure_ledger.outage(failure_key)
+                else:
+                    failure_ledger.fail(
+                        failure_key,
+                        stage=result.stage,
+                        detail=", ".join(result.issues) or (result.detail or "entity failure"),
+                    )
+                metric = {
+                    "part": part_number,
+                    "resumed": False,
+                    "entity_ms": entity_ms,
+                    "digest_ms": 0,
+                    "commit_ms": 0,
+                    "total_ms": self._elapsed_ms(part_started),
+                }
+                state.part_metrics.append(metric)
+                self._report_part_timing(
+                    source_filepath,
+                    base_title,
+                    total,
+                    metric,
+                    status="failed",
+                    stage=result.stage,
+                )
                 continue
+
+            failure_ledger.succeed(failure_key)
 
             if not state.master_tags and result.tags:
                 state.master_tags = result.tags
@@ -558,28 +914,144 @@ class IngestionPipeline:
 
             part_content = result.content
             state.total_output_chars += len(part_content)
-            digest = self.llm.generate_part_digest(
-                base_title,
-                i + 1,
-                total,
-                chunk,
-                part_content,
-                state.pending_concepts,
-            )
+            digest_started = time.perf_counter()
+            digest = self._normalize_inline_part_digest(result.part_digest, part_number)
+            inline_digest = digest is not None
+            try:
+                if digest is None:
+                    digest = self.llm.generate_part_digest(
+                        base_title,
+                        part_number,
+                        total,
+                        chunk,
+                        part_content,
+                        state.pending_concepts,
+                    )
+            except Exception as e:
+                digest_ms = self._elapsed_ms(digest_started)
+                logging.warning(f"Part {part_number}/{total} digest failed: {e}")
+                state.failed_parts.append(
+                    {
+                        "part": part_number,
+                        "stage": "digest",
+                        "error_kind": type(e).__name__,
+                        "detail": str(e),
+                    }
+                )
+                metric = {
+                    "part": part_number,
+                    "resumed": False,
+                    "entity_ms": entity_ms,
+                    "digest_ms": digest_ms,
+                    "commit_ms": 0,
+                    "inline_digest": False,
+                    "total_ms": self._elapsed_ms(part_started),
+                }
+                state.part_metrics.append(metric)
+                self._report_part_timing(
+                    source_filepath,
+                    base_title,
+                    total,
+                    metric,
+                    status="failed",
+                    stage="digest",
+                )
+                continue
+            digest_ms = self._elapsed_ms(digest_started)
+            if not isinstance(digest, dict):
+                state.failed_parts.append(
+                    {
+                        "part": part_number,
+                        "stage": "digest",
+                        "error_kind": "invalid_digest",
+                        "detail": "Digest result was not a mapping.",
+                    }
+                )
+                metric = {
+                    "part": part_number,
+                    "resumed": False,
+                    "entity_ms": entity_ms,
+                    "digest_ms": digest_ms,
+                    "commit_ms": 0,
+                    "inline_digest": False,
+                    "total_ms": self._elapsed_ms(part_started),
+                }
+                state.part_metrics.append(metric)
+                self._report_part_timing(
+                    source_filepath,
+                    base_title,
+                    total,
+                    metric,
+                    status="failed",
+                    stage="digest",
+                )
+                continue
             state.part_digests.append(digest)
-            self._append_part_digest_to_note(
-                result,
-                digest,
-                section_path=part_info.get("section_path"),
-                part_content=part_content,
-                pending_concepts=state.pending_concepts,
-                chunk=chunk,
-            )
-            self._index_digest_facets(
-                result.page_path,
-                result.title,
-                digest,
-                tags=state.master_tags,
+            commit_started = time.perf_counter()
+            commit_error = ""
+            try:
+                committed = self._append_part_digest_to_note(
+                    result,
+                    digest,
+                    section_path=part_info.get("section_path"),
+                    part_content=part_content,
+                    pending_concepts=state.pending_concepts,
+                    chunk=chunk,
+                )
+            except Exception as e:
+                committed = False
+                commit_error = str(e)
+            commit_ms = self._elapsed_ms(commit_started)
+            if not committed:
+                state.part_digests.pop()
+                state.failed_parts.append(
+                    {
+                        "part": part_number,
+                        "stage": "commit",
+                        "error_kind": "part_commit_failed",
+                        "detail": commit_error
+                        or "Part note and digest were not durably committed.",
+                    }
+                )
+                metric = {
+                    "part": part_number,
+                    "resumed": False,
+                    "entity_ms": entity_ms,
+                    "digest_ms": digest_ms,
+                    "commit_ms": commit_ms,
+                    "inline_digest": inline_digest,
+                    "total_ms": self._elapsed_ms(part_started),
+                }
+                state.part_metrics.append(metric)
+                self._report_part_timing(
+                    source_filepath,
+                    base_title,
+                    total,
+                    metric,
+                    status="failed",
+                    stage="commit",
+                )
+                continue
+            state.completed_parts.append(part_number)
+            if digest.get("degraded"):
+                state.degraded_parts.append(part_number)
+            metric = {
+                "part": part_number,
+                "resumed": False,
+                "entity_ms": entity_ms,
+                "digest_ms": digest_ms,
+                "commit_ms": commit_ms,
+                "inline_digest": inline_digest,
+                "total_ms": self._elapsed_ms(part_started),
+            }
+            state.part_metrics.append(metric)
+            self._report_part_timing(
+                source_filepath,
+                base_title,
+                total,
+                metric,
+                status="complete",
+                stage="commit",
             )
 
             nav_summary = (
@@ -587,12 +1059,67 @@ class IngestionPipeline:
             )
             if not nav_summary:
                 nav_summary = part_content.strip().split("\n")[0][:100]
-            state.navigation_items.append(f"- [[{base_title} (Part {i + 1})]]: {nav_summary[:140]}")
+            state.navigation_items.append(
+                f"- [[{base_title} (Part {part_number})]]: {nav_summary[:140]}"
+            )
 
             if result.page_path:
                 state.part_paths.append(result.page_path)
 
+                self._queue_artifact_if_pending(
+                    artifact_dispatcher,
+                    result.page_path,
+                    chunk,
+                    part_content,
+                    base_title,
+                    part_number,
+                )
+
+        state.artifact_metrics.extend(artifact_dispatcher.wait())
+        artifact_dispatcher.shutdown()
         return state
+
+    @staticmethod
+    def _should_reroll_entity(result: IngestResult) -> bool:
+        """One immediate retry for deterministic publication-contract failures.
+
+        Transport outages keep their existing outage semantics. A generic LLM
+        error without structured quality issues is not safe to reinterpret as
+        content poison, so only parser/publication evidence opens this path.
+        """
+        if result is None or result or result.transient:
+            return False
+        return bool(result.issues) and result.stage in {"llm", "parse", "entity_quality"}
+
+    @staticmethod
+    def _normalize_inline_part_digest(digest, part_number: int) -> dict | None:
+        """Validate the digest embedded in the entity-page response.
+
+        Invalid or incomplete inline data is deliberately rejected so the
+        established standalone digest call remains the compatibility fallback.
+        """
+        if not isinstance(digest, dict):
+            return None
+        thesis = digest_value_to_text(digest.get("thesis")).strip()
+        key_points = digest.get("key_points")
+        if not thesis or not isinstance(key_points, list):
+            return None
+        cleaned_points = [digest_value_to_text(item).strip() for item in key_points]
+        cleaned_points = [item for item in cleaned_points if item]
+        if not cleaned_points:
+            return None
+        normalized = dict(digest)
+        normalized["part"] = part_number
+        normalized["title"] = (
+            digest_value_to_text(digest.get("title")).strip() or f"Part {part_number}"
+        )
+        normalized["thesis"] = thesis
+        normalized["key_points"] = cleaned_points
+        for key in ("evidence", "terms", "open_questions", "highlights"):
+            value = normalized.get(key)
+            normalized[key] = value if isinstance(value, list) else []
+        normalized["handoff"] = digest_value_to_text(normalized.get("handoff")).strip()
+        return normalized
 
     def _write_synthesis(
         self,
@@ -671,21 +1198,13 @@ class IngestionPipeline:
             f"*   📄 **[[{base_title}|查看完整原始檔 (Original)]]**"
         )
         tag_line = " ".join(f"#{t}" for t in master_tags if "part-" not in t)
-
-        # Phase 6 auto-attach: a learning artifact for the summary (gated by
-        # Scripture's `visual_router`; "" and zero LLM calls when off → byte-identical).
-        from services.learning_artifacts import maybe_artifact_section
-
-        artifact_section = maybe_artifact_section(
-            self.llm, synthesis_text, limit=3, exclude_types={"flowchart", "concept_map"}
-        )
+        synthesis_file = PAGES_DIR / base_title / f"{base_title} (Synthesis).md"
 
         final_content = (
             f"# ✨ {base_title} (Synthesis)\n"
             f"---\n\n"
             f"{warning_block}"
             f"## 📝 Executive Summary\n{synthesis_text}\n\n"
-            f"{artifact_section}"
             f"## 📂 Navigation\n{nav_block}{syn_nav}\n\n"
             f"{digest_appendix}\n\n"
             f"{critique_section}"
@@ -732,11 +1251,17 @@ class IngestionPipeline:
 
         entity_dir = PAGES_DIR / base_title
         entity_dir.mkdir(parents=True, exist_ok=True)
-        synthesis_file = entity_dir / f"{base_title} (Synthesis).md"
-        synthesis_file.write_text(
-            dump_markdown_with_metadata(self._frontmatter_meta(final_meta), final_content),
-            encoding="utf-8",
+        rendered = dump_markdown_with_metadata(self._frontmatter_meta(final_meta), final_content)
+        existing = synthesis_file.read_text(encoding="utf-8") if synthesis_file.exists() else ""
+        basis_hash = artifact_content_hash(synthesis_text)
+        prepared = prepare_artifact_slot(
+            rendered,
+            existing,
+            basis_hash=basis_hash,
+            enabled=bool(settings.VISUAL_ROUTER_ENABLED),
         )
+        with self._commit_guard:
+            atomic_write_text(synthesis_file, prepared.text)
         self._record_artifact(
             synthesis_file,
             "synthesis",
@@ -746,6 +1271,18 @@ class IngestionPipeline:
         )
 
         self.rag.add_document(synthesis_file, base_title, final_content, tags=final_meta["tags"])
+        if prepared.should_generate:
+            dispatcher = ArtifactJobDispatcher(INGEST_ARTIFACT_WORKERS)
+            dispatcher.submit(
+                self._run_artifact_job,
+                synthesis_file,
+                basis_hash,
+                synthesis_text,
+                base_title,
+                "Synthesis",
+            )
+            part_state.artifact_metrics.extend(dispatcher.wait())
+            dispatcher.shutdown()
         return synthesis_file
 
     # ── Critique post-step (logic: services/ingest/critique_loop.py) ──
@@ -847,6 +1384,17 @@ class IngestionPipeline:
         meta = parse_markdown_metadata(text)
         if "part_digest" not in meta:
             return None
+        ingest_status = meta.get("ingest_status")
+        if ingest_status and ingest_status != "complete":
+            return None
+        if not ingest_status:
+            # Lazy migration: old pages do not trigger a 219-Part re-bill, but
+            # known poison shapes fail the current publication gate and are
+            # regenerated. New writes always carry the explicit status.
+            body, _ = strip_body_frontmatter(text)
+            legacy_quality = assess_entity_body(body)
+            if legacy_quality.hard_issues or legacy_quality.suspect_issues:
+                return None
         stored_hash = meta.get("part_chunk_hash")
         if stored_hash and chunk is not None and stored_hash != cls._chunk_fingerprint(chunk):
             return None  # chunk text changed (re-chunked) → note is stale
@@ -856,6 +1404,228 @@ class IngestionPipeline:
             "part_digest": meta.get("part_digest"),
         }
 
+    def _prepare_and_queue_resumed_artifact(
+        self,
+        dispatcher: ArtifactJobDispatcher,
+        page_path: Path,
+        chunk: str,
+        base_title: str,
+        part_number: int,
+    ) -> None:
+        if not settings.VISUAL_ROUTER_ENABLED:
+            return
+        basis_hash = artifact_content_hash(chunk)
+        with self._commit_guard:
+            current = page_path.read_text(encoding="utf-8")
+            prepared = prepare_artifact_slot(
+                current,
+                current,
+                basis_hash=basis_hash,
+                enabled=True,
+            )
+            if prepared.text != current:
+                self._backup_artifact_patch(page_path, current)
+                atomic_write_text(page_path, prepared.text)
+        if prepared.should_generate or artifact_slot_status(prepared.text, basis_hash) == "pending":
+            self._queue_artifact_if_pending(
+                dispatcher,
+                page_path,
+                chunk,
+                core_content_for_artifact(prepared.text),
+                base_title,
+                part_number,
+            )
+
+    def _queue_artifact_if_pending(
+        self,
+        dispatcher: ArtifactJobDispatcher,
+        page_path: Path,
+        chunk: str,
+        part_content: str,
+        base_title: str,
+        part_number: int,
+    ) -> None:
+        basis_hash = artifact_content_hash(chunk)
+        try:
+            current = page_path.read_text(encoding="utf-8")
+        except OSError:
+            return
+        if artifact_slot_status(current, basis_hash) != "pending":
+            return
+        dispatcher.submit(
+            self._run_artifact_job,
+            page_path,
+            basis_hash,
+            part_content,
+            base_title,
+            part_number,
+            wait_until_running=True,
+            job_label=f"Part {part_number} learning aids",
+        )
+
+    def _run_artifact_job(
+        self,
+        page_path: Path,
+        basis_hash: str,
+        part_content: str,
+        base_title: str,
+        part_number: int | str,
+    ) -> dict:
+        from services.learning_artifacts import ArtifactSectionOutcome, maybe_artifact_section
+
+        started = time.perf_counter()
+        with self._commit_guard:
+            admission = begin_artifact_attempt(
+                page_path,
+                basis_hash=basis_hash,
+                max_attempts=INGEST_ARTIFACT_MAX_ATTEMPTS,
+                quarantine_hours=INGEST_ARTIFACT_QUARANTINE_HOURS,
+            )
+        if not admission.allowed:
+            metric: dict = {
+                "part": part_number,
+                "status": admission.status,
+                "generate_ms": 0,
+                "apply_ms": 0,
+                "total_ms": self._elapsed_ms(started),
+                "detail": f"artifact attempt {admission.status}",
+                "artifact_types": [],
+                "attempt": admission.attempts,
+            }
+            self._record_artifact(
+                page_path,
+                "ingestion_artifact_timing",
+                f"{base_title} (Part {part_number}) learning aids",
+                metric,
+            )
+            return metric
+        generate_started = time.perf_counter()
+        raw_outcome = maybe_artifact_section(
+            self.llm,
+            part_content,
+            limit=2,
+            exclude_types={"flowchart", "concept_map"},
+            return_outcome=True,
+        )
+        outcome = (
+            raw_outcome
+            if isinstance(raw_outcome, ArtifactSectionOutcome)
+            else ArtifactSectionOutcome(
+                "complete" if str(raw_outcome or "").strip() else "not_applicable",
+                section=str(raw_outcome or ""),
+            )
+        )
+        section = outcome.section
+        generate_ms = self._elapsed_ms(generate_started)
+        if outcome.status == "deferred":
+            with self._commit_guard:
+                defer_artifact_attempt(
+                    page_path,
+                    basis_hash=basis_hash,
+                    detail=outcome.detail,
+                    max_attempts=INGEST_ARTIFACT_MAX_ATTEMPTS,
+                    quarantine_hours=INGEST_ARTIFACT_QUARANTINE_HOURS,
+                    transient=outcome.transient,
+                )
+            metric = {
+                "part": part_number,
+                "status": "deferred",
+                "generate_ms": generate_ms,
+                "apply_ms": 0,
+                "total_ms": self._elapsed_ms(started),
+                "detail": outcome.detail,
+                "artifact_types": list(outcome.artifact_types),
+                "attempt": admission.attempts,
+                "transient": outcome.transient,
+            }
+            self._record_artifact(
+                page_path,
+                "ingestion_artifact_timing",
+                f"{base_title} (Part {part_number}) learning aids",
+                metric,
+            )
+            ui.warning(f"Part {part_number} learning aids deferred: {outcome.detail}")
+            return metric
+        apply_started = time.perf_counter()
+        with self._commit_guard:
+            patch = apply_artifact_section(
+                page_path,
+                section,
+                basis_hash=basis_hash,
+                backup_dir=INGEST_ARTIFACT_BACKUP_DIR,
+            )
+        apply_ms = self._elapsed_ms(apply_started)
+        if patch.status == "conflict" and section:
+            pending_path = self._save_pending_artifact(
+                base_title, part_number, basis_hash, section, patch.detail
+            )
+            detail = f"{patch.detail}; pending={pending_path}"
+        else:
+            detail = patch.detail
+        status = (
+            "complete"
+            if patch.status == "applied" and section
+            else "skipped"
+            if patch.status == "applied"
+            else patch.status
+        )
+        total_ms = self._elapsed_ms(started)
+        metric = {
+            "part": part_number,
+            "status": status,
+            "generate_ms": generate_ms,
+            "apply_ms": apply_ms,
+            "total_ms": total_ms,
+            "detail": detail,
+            "artifact_types": list(outcome.artifact_types),
+        }
+        self._record_artifact(
+            page_path,
+            "ingestion_artifact_timing",
+            f"{base_title} (Part {part_number}) learning aids",
+            metric,
+        )
+        if status == "complete":
+            ui.info(f"Part {part_number} learning aids ready in {total_ms / 1000:.1f}s")
+        elif status == "conflict":
+            ui.warning(f"Part {part_number} learning aids preserved for review: {detail}")
+        return metric
+
+    @staticmethod
+    def _backup_artifact_patch(page_path: Path, current: str) -> Path:
+        backup = (
+            INGEST_ARTIFACT_BACKUP_DIR
+            / artifact_content_hash(str(page_path))[:16]
+            / f"{time.time_ns()}.md"
+        )
+        atomic_write_text(backup, current)
+        return backup
+
+    @staticmethod
+    def _save_pending_artifact(
+        base_title: str,
+        part_number: int | str,
+        basis_hash: str,
+        section: str,
+        detail: str,
+    ) -> Path:
+        safe_title = sanitize_filename(base_title)
+        path = (
+            INGEST_ARTIFACT_PENDING_DIR
+            / safe_title
+            / f"Part-{part_number}-{basis_hash[:12]}-{time.time_ns()}.md"
+        )
+        payload = dump_markdown_with_metadata(
+            {
+                "title": f"{safe_title} Part {part_number} learning-aid conflict",
+                "basis_sha256": basis_hash,
+                "reason": detail,
+            },
+            f"{section.strip()}\n",
+        )
+        atomic_write_text(path, payload)
+        return path
+
     def _append_part_digest_to_note(
         self,
         ingest_result: IngestResult,
@@ -864,31 +1634,18 @@ class IngestionPipeline:
         part_content: str | None = None,
         pending_concepts: str = "",
         chunk: str | None = None,
-    ) -> None:
+    ) -> bool:
         page_path = ingest_result.page_path if ingest_result else None
-        if not page_path or not page_path.exists():
-            return
+        if not page_path:
+            return False
 
         appendix = self.format_digest_appendix([digest])
-        # Per-part learning artifact (top-2 visuals), gated by visual_router;
-        # "" and zero LLM calls when off → byte-identical default behaviour.
-        artifact_section = ""
-        if part_content:
-            from services.learning_artifacts import maybe_artifact_section
-
-            artifact_section = maybe_artifact_section(
-                self.llm, part_content, limit=3, exclude_types={"flowchart", "concept_map"}
-            )
-
-        content = page_path.read_text(encoding="utf-8").rstrip()
-        # Strip any previously-appended auto sections (whichever comes first) so
-        # re-ingesting the same part regenerates rather than duplicates them.
-        cut = len(content)
-        for marker in (_ARTIFACT_HEADER, _PART_DIGEST_HEADER):
-            i = content.find(marker)
-            if i != -1:
-                cut = min(cut, i)
-        content = content[:cut].rstrip()
+        if ingest_result.rendered_markdown:
+            content = ingest_result.rendered_markdown.rstrip()
+        elif page_path.exists():
+            content = page_path.read_text(encoding="utf-8").rstrip()
+        else:
+            return False
 
         # Inline key-point highlighting (== ==): a deterministic, non-destructive
         # wrap of verbatim spans the digest call already chose. No extra LLM call.
@@ -900,27 +1657,46 @@ class IngestionPipeline:
                 settings.HIGHLIGHT_MAX,
             )
 
-        tail = f"{artifact_section}{appendix}".strip()
-        body_full = f"{content}\n\n{tail}\n" if tail else f"{content}\n"
+        existing = page_path.read_text(encoding="utf-8") if page_path.exists() else ""
+        basis_hash = artifact_content_hash(chunk or part_content or "")
+        prepared = prepare_artifact_slot(
+            content,
+            existing,
+            basis_hash=basis_hash,
+            enabled=bool(settings.VISUAL_ROUTER_ENABLED),
+        )
+        body_full = f"{prepared.text.rstrip()}\n\n{appendix}\n"
 
         # B1 resume state: persist the carry-forward pending_concepts and the
         # structured digest into the note's frontmatter, so an interrupted run
         # can resume from disk (skip-existing) without re-calling the LLM.
         doc = MarkdownDocument.from_text(body_full, path=page_path)
         doc.meta["pending_concepts"] = pending_concepts or ""
+        doc.meta["ingest_status"] = "pending_index"
         if isinstance(digest, dict):
             doc.meta["part_digest"] = digest
             if digest.get("degraded"):
                 doc.meta["digest_degraded"] = True
         if chunk is not None:
             doc.meta["part_chunk_hash"] = self._chunk_fingerprint(chunk)
-        updated = doc.save()
-
         title = ingest_result.title or page_path.stem
         tags = ingest_result.tags
-        self.rag.add_document(
-            page_path, title, updated, tags=tags, section_path=section_path or None
-        )
+        with self._commit_guard:
+            updated = doc.to_text()
+            atomic_write_text(page_path, updated)
+            self.rag.add_document(
+                page_path, title, updated, tags=tags, section_path=section_path or None
+            )
+            doc.meta["ingest_status"] = "complete"
+            updated = doc.to_text()
+            atomic_write_text(page_path, updated)
+            self._record_artifact(
+                page_path,
+                ingest_result.page_type,
+                title,
+                {**ingest_result.wiki_meta, "ingest_status": "complete"},
+            )
+        return True
 
     @staticmethod
     def _apply_highlights(text: str, highlights, max_spans: int = 5) -> tuple[str, int]:
@@ -1175,9 +1951,7 @@ class IngestionPipeline:
 
     def _extract_stitchable_body(self, content_or_path) -> str:
         """Strip frontmatter, navigation, and digest appendix from a part note,
-        but keep the per-part learning artifacts (comparison_table / mindmap /
-        flowchart). Those sit *after* the navigation section, so the navigation
-        cut below would otherwise drop them — we carry them forward explicitly."""
+        while preserving inline learning aids on either side of navigation."""
         if isinstance(content_or_path, Path):
             content = content_or_path.read_text(encoding="utf-8")
         else:
@@ -1185,15 +1959,14 @@ class IngestionPipeline:
 
         content = _FRONTMATTER_RE.sub("", content, count=1).strip()
 
-        # Carry the learning-artifact block forward (it lives between the
-        # navigation section and the digest appendix).
-        artifacts = ""
-        a = content.find("\n" + _ARTIFACT_HEADER)
-        if a != -1:
-            end = content.find("\n" + _PART_DIGEST_HEADER, a)
-            artifacts = content[a + 1 : (end if end != -1 else None)].strip()
+        artifacts = artifact_section_from_page(content)
 
-        cut_markers = ("\n## 🔗 知識導航", "\n" + _PART_DIGEST_HEADER, "\n" + _ARTIFACT_HEADER)
+        cut_markers = (
+            "\n## 🔗 知識導航",
+            "\n" + _PART_DIGEST_HEADER,
+            "\n" + _ARTIFACT_HEADER,
+            "\n<!-- lingling:learning-aids:start",
+        )
         positions = [pos for marker in cut_markers if (pos := content.find(marker)) != -1]
         if positions:
             content = content[: min(positions)].rstrip()

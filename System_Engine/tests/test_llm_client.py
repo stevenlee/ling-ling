@@ -95,6 +95,50 @@ class TestHybridParse:
         r = LLMClient._hybrid_parse("---\ntitle: T\npending_concepts: [unfinished]\n---\nBody")
         assert r.get("pending_concepts") == ["unfinished"]
 
+    def test_yaml_with_structured_part_digest(self):
+        r = LLMClient._hybrid_parse(
+            "---\ntitle: T\npart_digest:\n  thesis: Core claim\n"
+            "  key_points: [First point]\n---\nBody"
+        )
+        assert r["part_digest"] == {
+            "thesis": "Core claim",
+            "key_points": ["First point"],
+        }
+
+    def test_yaml_latex_backslashes_round_trip_without_parse_loss(self):
+        formulas = [
+            r"$\operatorname{Fmv}_{\langle\emptyset\rangle} = \emptyset$",
+            r"$a \neq b$",
+        ]
+        text = (
+            "```yaml\n---\ntitle: Math\ntags: [math]\npart_digest:\n"
+            '  thesis: "A mathematical thesis"\n'
+            '  key_points: ["One sufficiently detailed point"]\n'
+            f'  evidence: ["{formulas[0]}", "{formulas[1]}"]\n'
+            "---\n```\nBody"
+        )
+
+        result = LLMClient._hybrid_parse(text)
+
+        assert result["title"] == "Math"
+        assert result["part_digest"]["evidence"] == formulas
+        assert not any(
+            ord(char) < 32 and char not in "\n\t"
+            for formula in result["part_digest"]["evidence"]
+            for char in formula
+        )
+
+    def test_yaml_latex_sanitizer_is_idempotent_for_escaped_backslashes(self):
+        text = (
+            '---\ntitle: "Math"\npart_digest:\n  thesis: "Thesis"\n'
+            '  key_points: ["Long enough point"]\n'
+            '  evidence: ["$\\\\operatorname{Fmv} = \\\\emptyset$"]\n---\nBody'
+        )
+
+        result = LLMClient._hybrid_parse(text)
+
+        assert result["part_digest"]["evidence"] == [r"$\operatorname{Fmv} = \emptyset$"]
+
     def test_outer_fence_wrap(self):
         text = "```markdown\n---\ntitle: Outer\ntags: [tag]\n---\nBody inside outer fence\n```"
         r = LLMClient._hybrid_parse(text)
@@ -108,6 +152,71 @@ class TestHybridParse:
         assert r["title"] == "Inner"
         assert r["tags"] == ["tag"]
         assert r["content"] == "Body inside inner fence"
+
+    def test_strict_parse_salvages_standalone_fullwidth_punctuation(self):
+        from services.llm.response_parsing import parse_entity_response
+
+        result = parse_entity_response(
+            "---\ntitle: T\npart_digest:\n  thesis: Core\n"
+            "  key_points:\n    - One point\n    ．\n---\nClean body"
+        )
+
+        assert result.status == "salvaged"
+        assert result.value["content"] == "Clean body"
+        assert "remove_standalone_punctuation" in result.salvage_actions
+
+    def test_strict_parse_salvages_overindented_digest_list(self):
+        from services.llm.response_parsing import parse_entity_response
+
+        result = parse_entity_response(
+            "---\ntitle: T\npart_digest:\n  thesis: Core\n"
+            "  key_points:\n        - One point\n  evidence: []\n---\nClean body"
+        )
+
+        assert result.status == "salvaged"
+        assert result.value["part_digest"]["key_points"] == ["One point"]
+        assert "normalize_digest_list_indentation" in result.salvage_actions
+
+    def test_strict_parse_does_not_guess_broken_single_quote_semantics(self):
+        from services.llm.response_parsing import parse_entity_response
+
+        result = parse_entity_response("---\ntitle: T\ntags: ['Bayes' Theorem']\n---\nClean body")
+
+        assert result.status == "invalid"
+        assert result.issues == ["yaml_parse_failed"]
+
+    def test_strict_parse_rejects_missing_yaml_contract(self):
+        from services.llm.response_parsing import parse_entity_response
+
+        result = parse_entity_response("Goal: plan\nConstraints: none\nDraft")
+
+        assert result.status == "invalid"
+        assert result.issues == ["missing_yaml_header"]
+
+    def test_fenced_yaml_double_close_does_not_steal_mermaid_close(self):
+        from services.ingest.entity_quality import assess_entity_body
+        from services.llm.response_parsing import parse_entity_response
+
+        result = parse_entity_response(
+            "```yaml\n---\ntitle: T\ntags: [math]\n---\n```\n\n"
+            "# Body\n\n```mermaid\ngraph TD\n  A --> B\n```"
+        )
+
+        assert result.status == "salvaged"
+        assert "strip_orphan_leading_fence" in result.salvage_actions
+        assert result.value["content"].count("```") == 2
+        assert assess_entity_body(result.value["content"]).clean
+
+    def test_real_unclosed_mermaid_is_not_silently_closed(self):
+        from services.ingest.entity_quality import assess_entity_body
+        from services.llm.response_parsing import parse_entity_response
+
+        result = parse_entity_response(
+            "---\ntitle: T\ntags: [math]\n---\n# Body\n\n```mermaid\ngraph TD\n  A --> B"
+        )
+
+        assert "strip_orphan_leading_fence" not in result.salvage_actions
+        assert assess_entity_body(result.value["content"]).hard_issues == ["unclosed_code_fence"]
 
 
 # ── _strip_accidental_frontmatter ────────────────────────────────────
@@ -501,6 +610,17 @@ class TestTranslateTags:
     def test_parse_miss_fails_open(self, monkeypatch):
         c = self._client(monkeypatch, ["not json", "still not json"])
         assert c.translate_tags(["x"]) == {}
+
+    def test_json_attempt_budget_can_disable_content_reroll(self, monkeypatch):
+        c = self._client(monkeypatch, ["not json"])
+        with pytest.raises(ValueError, match="after 1 attempts"):
+            c._complete_json(
+                kind="object",
+                system_prompt="system",
+                user_msg="user",
+                json_attempts=1,
+                raise_on_miss=True,
+            )
 
 
 class TestTranslateQuery:

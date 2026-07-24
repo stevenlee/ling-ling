@@ -193,6 +193,33 @@ class TestMathBlock:
         assert blocks[0].kind == BlockKind.MATH_BLOCK
         assert blocks[0].atomic is True
 
+    def test_single_line_math_closes_on_same_line(self):
+        text = "$$a^2 + b^2 = c^2.$$\n\nProse between formulas.\n\n$$x = y.$$\n"
+        blocks = scan(text)
+        math_blocks = [b for b in blocks if b.kind == BlockKind.MATH_BLOCK]
+
+        assert [b.text for b in math_blocks] == [
+            "$$a^2 + b^2 = c^2.$$\n",
+            "$$x = y.$$\n",
+        ]
+        assert any(b.kind == BlockKind.PARAGRAPH and "Prose between" in b.text for b in blocks)
+
+    def test_multiline_math_can_close_at_end_of_content_line(self):
+        text = "$$\\begin{array}\nx & y\n\\end{array}$$\nAfter.\n"
+        blocks = scan(text)
+
+        assert blocks[0].kind == BlockKind.MATH_BLOCK
+        assert blocks[0].text == "$$\\begin{array}\nx & y\n\\end{array}$$\n"
+        assert blocks[1].kind == BlockKind.PARAGRAPH
+
+    def test_escaped_dollars_do_not_close_single_line_math(self):
+        text = "$$ price \\$$ remains\ncontinued\n$$\n"
+        blocks = scan(text)
+
+        assert len(blocks) == 1
+        assert blocks[0].kind == BlockKind.MATH_BLOCK
+        assert blocks[0].text == text
+
 
 # ── Blockquote vs callout ─────────────────────────────────────────
 

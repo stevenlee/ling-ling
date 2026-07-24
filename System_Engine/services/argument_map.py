@@ -33,7 +33,7 @@ _SYSTEM = (
 )
 
 
-def build_argument_map(llm, content: str) -> dict:
+def build_argument_map(llm, content: str, *, strict: bool = False) -> dict:
     """Extract the Toulmin skeleton. Fail-open: empty dict on failure."""
     if not content or not content.strip() or not hasattr(llm, "_complete_json"):
         return {}
@@ -43,10 +43,17 @@ def build_argument_map(llm, content: str) -> dict:
             system_prompt=_SYSTEM,
             user_msg=content[:6000],
             temperature=0.1,
+            max_tokens=4096,
+            retries=2,
+            json_attempts=1,
+            reasoning_effort="none",
+            raise_on_miss=strict,
             trace_context={"stage": "argument_map", "metadata": {}},
         )
     except Exception as e:
         logging.warning(f"argument_map: extraction failed: {e}")
+        if strict:
+            raise
         return {}
     if not isinstance(parsed, dict) or not str(parsed.get("claim") or "").strip():
         return {}

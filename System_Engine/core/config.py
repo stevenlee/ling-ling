@@ -120,6 +120,18 @@ FACET_BACKFILL_DAILY_BUDGET = int(os.getenv("FACET_BACKFILL_DAILY_BUDGET", "1000
 FACET_BACKFILL_MAX_ATTEMPTS = int(os.getenv("FACET_BACKFILL_MAX_ATTEMPTS", "3"))
 FACET_BACKFILL_MIN_BYTES = int(os.getenv("FACET_BACKFILL_MIN_BYTES", "400"))
 
+# Long-document entity contract. A deterministic poison Part receives one
+# bounded content reroll per run; repeated runs are capped by the persistent
+# ledger. Changing model, source content, or contract version creates a fresh
+# budget because it is a materially different generation attempt.
+INGEST_ENTITY_CONTRACT_VERSION = os.getenv("INGEST_ENTITY_CONTRACT_VERSION", "3")
+INGEST_ENTITY_MAX_ATTEMPTS = max(1, int(os.getenv("INGEST_ENTITY_MAX_ATTEMPTS", "3")))
+INGEST_ENTITY_QUARANTINE_HOURS = max(1, int(os.getenv("INGEST_ENTITY_QUARANTINE_HOURS", "24")))
+INGEST_ARTIFACT_WORKERS = max(1, int(os.getenv("INGEST_ARTIFACT_WORKERS", "1")))
+INGEST_ARTIFACT_MAX_LAG_PARTS = max(1, int(os.getenv("INGEST_ARTIFACT_MAX_LAG_PARTS", "2")))
+INGEST_ARTIFACT_MAX_ATTEMPTS = max(1, int(os.getenv("INGEST_ARTIFACT_MAX_ATTEMPTS", "2")))
+INGEST_ARTIFACT_QUARANTINE_HOURS = max(1, int(os.getenv("INGEST_ARTIFACT_QUARANTINE_HOURS", "24")))
+
 # ─── Daydream (daytime makeup + spontaneous reflection, idle, low-priority) ──
 # Night belongs to the scheduler's deep sleep (1–5am dreaming window). If that
 # window is busy the day's cognition is otherwise lost. The DaydreamPump runs
@@ -309,6 +321,9 @@ RETRIEVAL_BENCH_FILE = SCRATCH_DIR / "retrieval_bench.yml"
 RETRIEVAL_BENCH_AUTO_FILE = SCRATCH_DIR / "retrieval_bench_auto.yml"
 BENCH_HISTORY_FILE = DATABASE_DIR / "bench_history.json"
 FACET_BACKFILL_STATE_FILE = DATABASE_DIR / "facet_backfill_state.json"
+INGEST_FAILURE_STATE_FILE = DATABASE_DIR / "ingest_failure_state.json"
+INGEST_ARTIFACT_BACKUP_DIR = BACKUPS_DIR / "ingest_artifact_patches"
+INGEST_ARTIFACT_PENDING_DIR = WIKI_VAULT_DIR / "_pending" / "LearningArtifacts"
 DAYDREAM_STATE_FILE = DATABASE_DIR / "daydream_state.json"
 # Live daemon status for out-of-process readers (the TUI). Written by
 # ui.set_status on every activity transition; .kb_lock only marks hard locks,
@@ -435,7 +450,7 @@ class DynamicSettings:
         # type-able relation (is-a / part-of / instance-of) renders as a proper
         # ontology rather than a flat concept web. Set ontology_bias: false in
         # Scripture to fall back to neutral classification.
-        self.ONTOLOGY_BIAS = True
+        self.ONTOLOGY_BIAS = False
         # Inline highlighting: wrap up to N verbatim key spans in == == on each
         # part note. Spans ride along on the existing part-digest call (no extra
         # LLM round-trip); a deterministic pass applies the markers afterwards.

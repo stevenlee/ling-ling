@@ -2,6 +2,8 @@
 
 import os
 
+import pytest
+
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 from services.learning_artifacts import build_artifact, classify_structure
@@ -31,6 +33,24 @@ def test_classify_valid_type():
 def test_classify_invalid_type_falls_to_none():
     llm = FakeLLM(classify={"type": "banana", "confidence": 0.9})
     assert classify_structure(llm, "x")["type"] == "none"
+
+
+def test_table_renderer_rejects_reasoning_scratchpad():
+    from services.learning_artifacts import _render_table
+
+    llm = FakeLLM(completion="* Input: compare methods\n* Goal: create a table\n* Final check")
+
+    assert _render_table(llm, "content") == ""
+    with pytest.raises(ValueError, match="invalid comparison_table"):
+        _render_table(llm, "content", strict=True)
+
+
+def test_table_renderer_accepts_one_table_and_outer_markdown_fence():
+    from services.learning_artifacts import _render_table
+
+    llm = FakeLLM(completion="```markdown\n| Method | Bound |\n| :--- | ---: |\n| A | $|x|$ |\n```")
+
+    assert _render_table(llm, "content") == ("| Method | Bound |\n| :--- | ---: |\n| A | $|x|$ |")
 
 
 # ── classify top-2 (ranked) ──────────────────────────────────────────────
@@ -85,6 +105,30 @@ def test_classify_structures_dedups():
         }
     )
     assert [c["type"] for c in classify_structures(llm, "x")] == ["flowchart"]
+
+
+def test_ontology_is_only_kept_as_high_confidence_primary():
+    from services.learning_artifacts import classify_structures
+
+    secondary = FakeLLM(
+        classify={
+            "ranked": [
+                {"type": "mindmap", "confidence": 0.95},
+                {"type": "ontology", "confidence": 0.99},
+                {"type": "comparison_table", "confidence": 0.8},
+            ]
+        }
+    )
+    assert [c["type"] for c in classify_structures(secondary, "x", limit=3)] == [
+        "mindmap",
+        "comparison_table",
+    ]
+
+    weak_primary = FakeLLM(classify={"ranked": [{"type": "ontology", "confidence": 0.89}]})
+    assert classify_structures(weak_primary, "x")[0]["type"] == "none"
+
+    strong_primary = FakeLLM(classify={"ranked": [{"type": "ontology", "confidence": 0.9}]})
+    assert classify_structures(strong_primary, "x")[0]["type"] == "ontology"
 
 
 # ── build_artifact ───────────────────────────────────────────────────────
@@ -267,12 +311,83 @@ def test_maybe_section_emits_two_when_two_render(monkeypatch):
     monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", True)
     monkeypatch.setattr(
         la,
-        "build_artifacts",
-        lambda llm, content, **_: [
-            {"type": "flowchart", "reason": "", "artifact": "```mermaid\nflowchart TD\nA-->B\n```"},
-            {"type": "mindmap", "reason": "", "artifact": "```mermaid\nmindmap\n  root((X))\n```"},
-        ],
+        "build_artifact_section_outcome",
+        lambda llm, content, **_: la.ArtifactSectionOutcome(
+            "complete",
+            section=(
+                "## 🖼️ 學習輔助（flowchart）\n```mermaid\nflowchart TD\nA-->B\n```\n"
+                "## 🖼️ 學習輔助（mindmap）\n```mermaid\nmindmap\n  root((X))\n```\n"
+            ),
+            artifact_types=("flowchart", "mindmap"),
+        ),
     )
     section = la.maybe_artifact_section(object(), "content")
     assert section.count("## 🖼️ 學習輔助") == 2
     assert "（flowchart）" in section and "（mindmap）" in section
+
+
+def test_auto_attach_prefers_table_as_complement_and_caps_at_two(monkeypatch):
+    import services.learning_artifacts as la
+
+    monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", True)
+    llm = FakeLLM(
+        classify={
+            "ranked": [
+                {"type": "mindmap", "confidence": 0.95},
+                {"type": "argument_map", "confidence": 0.9},
+                {"type": "comparison_table", "confidence": 0.85},
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        la,
+        "_render_for_type",
+        lambda llm, content, artifact_type, strict=False: f"rendered {artifact_type}",
+    )
+
+    outcome = la.maybe_artifact_section(llm, "content", limit=2, return_outcome=True)
+
+    assert outcome.status == "complete"
+    assert outcome.artifact_types == ("mindmap", "comparison_table")
+    assert "argument_map" not in outcome.section
+
+
+def test_operational_artifact_failure_is_deferred_not_skipped(monkeypatch):
+    import services.learning_artifacts as la
+
+    monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", True)
+
+    class Broken:
+        def _complete_json(self, **kwargs):
+            raise TimeoutError("provider timeout")
+
+    outcome = la.maybe_artifact_section(Broken(), "content", return_outcome=True)
+
+    assert outcome.status == "deferred"
+    assert "provider timeout" in outcome.detail
+
+
+def test_artifact_job_budget_keeps_completed_primary_and_defers_complement(monkeypatch):
+    import services.learning_artifacts as la
+
+    ranked = [
+        {"type": "mindmap", "confidence": 0.95},
+        {"type": "comparison_table", "confidence": 0.9},
+    ]
+    monkeypatch.setattr(la, "classify_structures", lambda *args, **kwargs: ranked)
+    rendered = []
+
+    def render(_llm, _content, artifact_type, *, strict=False):
+        rendered.append(artifact_type)
+        return f"rendered {artifact_type}"
+
+    ticks = iter((0.0, 1.0, 601.0))
+    monkeypatch.setattr(la, "_render_for_type", render)
+    monkeypatch.setattr(la.time, "monotonic", lambda: next(ticks))
+
+    outcome = la.build_artifact_section_outcome(object(), "content", limit=2)
+
+    assert outcome.status == "complete"
+    assert outcome.artifact_types == ("mindmap",)
+    assert rendered == ["mindmap"]
+    assert "comparison_table: deferred after 601.0s job budget" in outcome.detail

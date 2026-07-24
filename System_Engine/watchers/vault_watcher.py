@@ -78,29 +78,52 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
                 self._timers[title].cancel()
                 del self._timers[title]
 
-        self._process_deletion(title)
+        self._process_deletion(title, filepath=filepath)
 
-    def _process_deletion(self, title: str, attempt: int = 0):
-        # Keyed separately from modification timers so a later modify event
-        # on the same title cannot cancel a pending deletion retry.
+    def _schedule_deletion(self, title: str, filepath: Path | None, delay: float = 10.0):
+        """Coalesce a deletion until the global writer becomes idle."""
         timer_key = f"del::{title}"
         with self._timers_lock:
-            self._timers.pop(timer_key, None)
+            previous = self._timers.get(timer_key)
+            if previous is not None:
+                previous.cancel()
+            timer = threading.Timer(delay, self._process_deletion, args=[title, filepath])
+            self._timers[timer_key] = timer
+            timer.start()
+
+    def _clear_deletion_timer(self, title: str):
+        with self._timers_lock:
+            timer = self._timers.pop(f"del::{title}", None)
+            if timer is not None:
+                timer.cancel()
+
+    def _process_deletion(self, title: str, filepath: Path | None = None):
+        # Keyed separately from modification timers so a later modify event
+        # on the same title cannot cancel a pending deletion retry.
+        # Same-directory atomic replace is reported by some watchdog backends
+        # as delete + create.  Reconcile against the filesystem before touching
+        # RAG: if the path is back, its current contents must be indexed rather
+        # than deleting by title and briefly erasing the replacement.
+        if filepath is not None and filepath.exists():
+            self._clear_deletion_timer(title)
+            self._schedule_process(filepath, title, delay=2.0)
+            return
 
         if not global_busy_state.try_set_busy():
-            if attempt >= 10:
-                logging.error(
-                    f"Vault: giving up on delete of {title} after {attempt} retries; "
-                    f"RAG may hold a stale entry until the next full sync."
-                )
-                return
-            with self._timers_lock:
-                timer = threading.Timer(5.0, self._process_deletion, args=[title, attempt + 1])
-                self._timers[timer_key] = timer
-                timer.start()
+            # Ingestion may legitimately hold the busy state for hours.  A
+            # fixed retry budget turns that normal condition into stale RAG
+            # data, so retain one coalesced retry until the writer is idle.
+            self._schedule_deletion(title, filepath)
             return
 
         try:
+            # Close the race where an atomic replacement lands after the first
+            # existence check but before the busy state is acquired.
+            if filepath is not None and filepath.exists():
+                self._clear_deletion_timer(title)
+                self._schedule_process(filepath, title, delay=2.0)
+                return
+            self._clear_deletion_timer(title)
             logging.info(f"File deleted in Vault: {title}. Removing from RAG memory...")
             self.rag.delete_document(title)
             from core.vault_utils import update_wiki_index
@@ -126,7 +149,7 @@ class VaultWatcher(watchdog.events.FileSystemEventHandler):
             return
 
         if str(src).endswith(".md") and self._should_watch(src):
-            self._process_deletion(src.stem)
+            self._process_deletion(src.stem, filepath=src)
         if str(dest).endswith(".md") and self._should_watch(dest):
             self._schedule_process(dest, dest.stem, delay=2.0)
 

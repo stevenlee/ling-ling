@@ -191,18 +191,50 @@ class _Scanner:
     # ── Math block ─────────────────────────────────────────────────────
 
     def _scan_math_block(self, stripped: str) -> bool:
-        if not _MATH_OPEN_RE.match(stripped):
+        opener = _MATH_OPEN_RE.match(stripped)
+        if not opener:
             return False
         start_i = self.i
+
+        # A large share of imported textbooks uses one-line display math:
+        # ``$$formula$$``.  Treating the next line that starts with ``$$`` as
+        # its closer pairs unrelated formulas and makes all intervening prose
+        # one enormous atomic block.  An unescaped second delimiter closes the
+        # block on this line.
+        if self._find_unescaped_math_delimiter(stripped, opener.end()) >= 0:
+            self._emit_range(BlockKind.MATH_BLOCK, start_i, start_i + 1, atomic=True)
+            self.i += 1
+            return True
+
         j = self.i + 1
         while j < self.n:
-            if _MATH_OPEN_RE.match(self.lines[j].rstrip("\n")):
+            # Imported TeX also commonly opens as ``$$\begin{array}`` and
+            # closes as ``\end{array}$$``.  Delimiters, rather than line
+            # position, define the block boundary.
+            if self._find_unescaped_math_delimiter(self.lines[j], 0) >= 0:
                 j += 1
                 break
             j += 1
         self._emit_range(BlockKind.MATH_BLOCK, start_i, j, atomic=True)
         self.i = j
         return True
+
+    @staticmethod
+    def _find_unescaped_math_delimiter(text: str, start: int) -> int:
+        """Return the next ``$$`` not escaped by an odd backslash run."""
+        cursor = start
+        while True:
+            found = text.find("$$", cursor)
+            if found < 0:
+                return -1
+            backslashes = 0
+            previous = found - 1
+            while previous >= 0 and text[previous] == "\\":
+                backslashes += 1
+                previous -= 1
+            if backslashes % 2 == 0:
+                return found
+            cursor = found + 2
 
     # ── ATX heading ────────────────────────────────────────────────────
 

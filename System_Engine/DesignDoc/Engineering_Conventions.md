@@ -35,6 +35,13 @@
 - 多步寫入要**指明 commit point**：commit 前失敗 = 乾淨回滾、回報
   未套用；commit 後失敗 = 誠實回報「已生效但待清理」，絕不謊稱未套用
   （範例：`improvement_store.approve_proposal`）。
+- 延遲 enrichment 不得用生成時保存的整頁 snapshot 覆寫最新版。Learning
+  artifact 只擁有明確 marker 區域：套用前重讀、檢查 basis/ownership/hash，
+  原子 patch 並備份；marker 外人工編輯必須保留，marker 內被修改即 conflict
+  並送 `_pending`（範例：`ingest.artifact_pipeline.apply_artifact_section`）。昂貴
+  artifact 的 attempts/quarantine 直接持久化在 content-addressed pending slot；
+  attempt 必須在呼叫前落盤，outage 回退，內容 basis 改變重設 budget。generated
+  slot 的自動修復只允許在 section hash 仍相符時重設，否則視為人工所有。
 - `raw/` 允許建立／歸檔新檔，**歸檔後不得原地改寫**；migration
   例外，但必須先備份。報告輸出到 `fromLingLing/`；需審核的自動生成
   資產進 `_pending/`（範例：ProfileManager）。
@@ -77,6 +84,16 @@
   舊格式 entry lazy 補 hash、損壞
   container/entry 以重處理恢復（範例：
   `cortex_consolidation._iter_owed_insights` / `reconcile_insight_revision`）。
+- Long-document ingestion 的 Part progress 以 raw chunk hash 驗證，且新頁只有
+  `ingest_status: complete` 才能 resume；`pending_index` 表示 vault 已落盤但 RAG
+  commit 尚未完成，必須重試。舊頁採 lazy deterministic audit，避免全量重新計費。
+  Entity 的確定性失敗 ledger 以 source/Part/chunk hash/model/contract version
+  內容定址並持久化 attempts/quarantine；outage 不消耗 poison budget，TTL 只放行
+  half-open probe（範例：`ingest.failure_ledger.IngestFailureLedger`、
+  `ingestion_pipeline._resume_part`）。
+  Learning artifact 的 pending slot 同時是失敗 ledger：保留 attempts、failure hash
+  與 quarantine TTL；重啟不得把 pending 誤遷移為 preserved（範例：
+  `begin_artifact_attempt` / `defer_artifact_attempt`）。
 - ID 用**內容定址**（hash of content）確保重跑冪等；寫入前先刪同
   key 舊資料（範例：`add_facets`）。
 - 持久化狀態會活得比寫它的 code 久——邊界檢查放在**消費端接縫**，

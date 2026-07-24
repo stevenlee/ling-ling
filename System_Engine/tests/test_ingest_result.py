@@ -58,7 +58,7 @@ def test_write_failure_reports_write_stage(monkeypatch, tmp_path):
     def boom(*a, **kw):
         raise OSError("disk full")
 
-    monkeypatch.setattr(Path, "write_text", boom)
+    monkeypatch.setattr(ip_mod, "atomic_write_text", boom)
     result = pipe.ingest_to_wiki("body", Path("Doc.md"))
     assert not result
     assert result.stage == "write"

@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+from dataclasses import dataclass
 
-from core.parser import run_markdown_quality_checks
+from core.parser import clean_llm_response, run_markdown_quality_checks
+from services.llm.transport import is_transient_llm_error
 
 # type → (human description for the classifier, renderer kind).
 ARTIFACT_TYPES = {
-    "comparison_table": "內容在比較 ≥2 個對象的多個維度",
+    "comparison_table": "≥2 個定義、定理、方法、物件或練習群共享 ≥2 個可比較欄位（條件、結論、用途、技巧、例子、反例等）",
     "flowchart": "流程、因果序列或步驟",
     "mindmap": "一個主題的階層分解",
     "timeline": "時序、階段或歷史演進",
@@ -144,6 +147,31 @@ _ONTOLOGY_PRIORITY = (
     "**僅當 concept_map 與 ontology 兩者適合度難分軒輊時,才傾向選 ontology。**"
 )
 
+_ROUTING_POLICY = (
+    "【選擇準則】一般數學／技術內容若包含多個定義、定理、方法或練習群，且能以共同欄位整理，"
+    "comparison_table 通常比 ontology 更適合查閱。mindmap 適合主題階層；argument_map 適合主張、"
+    "證據與反例。ontology 是少見的專門類型：只有 taxonomy/schema 本身就是學習重點，而且來源"
+    "明確呈現至少兩種 typed relations（is-a、part-of、instance-of、object property）時才可選；"
+    "不能只因為文中有許多彼此相關的概念就選 ontology。"
+)
+
+_CLASSIFY_MAX_TOKENS = 2048
+_TABLE_MAX_TOKENS = 4096
+_DIAGRAM_MAX_TOKENS = 6144
+_ARTIFACT_RETRIES = 2
+_ARTIFACT_JOB_BUDGET_SECONDS = 600.0
+_ONTOLOGY_MIN_CONFIDENCE = 0.9
+_TABLE_SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
+
+
+@dataclass(frozen=True)
+class ArtifactSectionOutcome:
+    status: str  # complete | not_applicable | deferred
+    section: str = ""
+    detail: str = ""
+    artifact_types: tuple[str, ...] = ()
+    transient: bool = False
+
 
 def _build_classify_system(limit: int, exclude_types: set[str] | None = None) -> str:
     allowed_types = {
@@ -166,7 +194,9 @@ def _build_classify_system(limit: int, exclude_types: set[str] | None = None) ->
         + '\n\n回 JSON：{"ranked": [{"type": "<上列之一>", "confidence": <0-1>, '
         '"reason": "<一句話為什麼>"}, ...]}（依適合度排序,1~' + str(limit) + " 項）\n"
         '重要：內容若沒有清楚的結構,ranked 只放一項 type="none"——寧可不產圖,也不要硬湊誤導的圖。'
-        "多種產物要呈現不同的認知切面(例如流程 vs 階層),不要選本質相同的。" + priority_clause
+        "多種產物要呈現不同的認知切面(例如流程 vs 階層),不要選本質相同的。"
+        + _ROUTING_POLICY
+        + priority_clause
     )
 
 
@@ -218,7 +248,12 @@ def _coerce_choice(raw) -> dict | None:
 
 
 def classify_structures(
-    llm, content: str, *, limit: int = 2, exclude_types: set[str] | None = None
+    llm,
+    content: str,
+    *,
+    limit: int = 2,
+    exclude_types: set[str] | None = None,
+    strict: bool = False,
 ) -> list[dict]:
     """Return a ranked list (1..limit) of {type, confidence, reason}.
 
@@ -232,6 +267,11 @@ def classify_structures(
             system_prompt=_build_classify_system(limit, exclude_types),
             user_msg=content[:6000],
             temperature=0.0,
+            max_tokens=_CLASSIFY_MAX_TOKENS,
+            retries=_ARTIFACT_RETRIES,
+            json_attempts=1,
+            reasoning_effort="none",
+            raise_on_miss=strict,
             trace_context={"stage": "artifact_classify", "metadata": {}},
         )
         if hasattr(llm, "_complete_json")
@@ -256,6 +296,15 @@ def classify_structures(
 
     # Drop 'none' as soon as a real structure exists; cap to limit.
     real = [c for c in ranked if c["type"] != "none"]
+    # Ontology is a specialized primary view, never a generic top-3 filler.
+    # Prompt discipline is the first line; this deterministic gate prevents a
+    # lower-ranked ontology from consuming tens of minutes anyway.
+    real = [
+        c
+        for index, c in enumerate(real)
+        if c["type"] != "ontology"
+        or (index == 0 and float(c.get("confidence") or 0.0) >= _ONTOLOGY_MIN_CONFIDENCE)
+    ]
     if real:
         return real[:limit]
     return [dict(_NONE_RESULT)]
@@ -266,15 +315,49 @@ def classify_structure(llm, content: str) -> dict:
     return classify_structures(llm, content, limit=1)[0]
 
 
-def _render_table(llm, content: str) -> str:
+def validate_markdown_table(text: str) -> str:
+    """Return one table-only Markdown block, or ``""``.
+
+    Reasoning-channel fallbacks can be long, non-empty English scratchpads.
+    A table renderer therefore needs a structural publication gate just like
+    Mermaid: header, delimiter row, at least one data row, and no prose outside
+    the table. Cell-count equality is intentionally not enforced because math
+    cells can legitimately contain an unescaped absolute-value ``|x|``.
+    """
+    cleaned = clean_llm_response(text or "").strip()
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    if len(lines) < 3 or any(not (line.startswith("|") and line.endswith("|")) for line in lines):
+        return ""
+    separators = [cell.strip() for cell in lines[1].strip("|").split("|")]
+    if len(separators) < 2 or not all(
+        _TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in separators
+    ):
+        return ""
+    return "\n".join(lines)
+
+
+def _render_table(llm, content: str, *, strict: bool = False) -> str:
     sys = (
         "把內容整理成**一個 Markdown 比較表格**,欄是比較維度、列是被比較的對象。"
         "只輸出表格本身,不要前後說明。維度要能凸顯差異。" + _LANG_MATCH_RULE
     )
-    return llm.complete(sys, content[:6000], temperature=0.2, stage="artifact_table").strip()
+    raw = llm.complete(
+        sys,
+        content[:6000],
+        temperature=0.2,
+        max_tokens=_TABLE_MAX_TOKENS,
+        retries=_ARTIFACT_RETRIES,
+        reasoning_effort="none",
+        stage="artifact_table",
+        raise_on_error=strict,
+    )
+    table = validate_markdown_table(raw)
+    if not table and strict:
+        raise ValueError("invalid comparison_table artifact output")
+    return table
 
 
-def _render_mermaid(llm, content: str, kind: str) -> str:
+def _render_mermaid(llm, content: str, kind: str, *, strict: bool = False) -> str:
     header = _MERMAID_KIND.get(kind, "flowchart TD")
     hint = _MERMAID_HINTS.get(kind, "")
     if kind == "mindmap":
@@ -284,12 +367,23 @@ def _render_mermaid(llm, content: str, kind: str) -> str:
     else:
         rules = _MERMAID_RULES_COMMON
     sys = f"把內容畫成一個 Mermaid **{kind}**（以 `{header}` 開頭）。{hint} {rules} {_LANG_MATCH_RULE}"
-    raw = llm.complete(sys, content[:6000], temperature=0.2, stage=f"artifact_{kind}")
+    raw = llm.complete(
+        sys,
+        content[:6000],
+        temperature=0.2,
+        max_tokens=_DIAGRAM_MAX_TOKENS,
+        retries=_ARTIFACT_RETRIES,
+        reasoning_effort="none",
+        stage=f"artifact_{kind}",
+        raise_on_error=strict,
+    )
     # Repair common issues (fences, label quotes, arrows) via the existing
     # quality checker, then validate the diagram is actually the requested kind.
     cleaned, _ = run_markdown_quality_checks(raw or "")
     m = _MERMAID_BLOCK_RE.search(cleaned)
     if not m or not _validate_mermaid(m.group(0), kind):
+        if strict:
+            raise ValueError(f"invalid {kind} artifact output")
         return ""
     return m.group(0)
 
@@ -323,22 +417,25 @@ def _validate_mermaid(block: str, kind: str) -> bool:
     return True
 
 
-def _render_for_type(llm, content: str, t: str) -> str:
+def _render_for_type(llm, content: str, t: str, *, strict: bool = False) -> str:
     """Render one artifact of type `t`. "" on failure / 'none'. Never raises."""
     try:
         if t == "comparison_table":
-            return _render_table(llm, content)
+            return _render_table(llm, content, strict=strict)
         if t in _MERMAID_KIND:
-            return _render_mermaid(llm, content, t)
+            return _render_mermaid(llm, content, t, strict=strict)
         if t == "argument_map":
             from core.config import settings
             from services.argument_map import build_argument_map, render_argument_map
 
             return render_argument_map(
-                build_argument_map(llm, content), with_mermaid=settings.ARGUMENT_MAP_MERMAID
+                build_argument_map(llm, content, strict=strict),
+                with_mermaid=settings.ARGUMENT_MAP_MERMAID,
             )
     except Exception as e:
         logging.warning(f"learning_artifacts: render failed for {t}: {e}")
+        if strict:
+            raise
     return ""
 
 
@@ -382,9 +479,90 @@ def build_artifacts(
     return results
 
 
-def maybe_artifact_section(
+def build_artifact_section_outcome(
     llm, content: str, *, limit: int = 2, exclude_types: set[str] | None = None
-) -> str:
+) -> ArtifactSectionOutcome:
+    """Typed auto-attach result; operational failures remain retryable."""
+    if not content or not content.strip():
+        return ArtifactSectionOutcome("not_applicable", detail="empty content")
+    started = time.monotonic()
+    try:
+        # Ask for three candidates so a useful table can survive behind the
+        # primary view, but render at most ``limit`` complementary artifacts.
+        ranked = classify_structures(
+            llm, content, limit=max(3, limit), exclude_types=exclude_types, strict=True
+        )
+    except Exception as exc:
+        return ArtifactSectionOutcome(
+            "deferred",
+            detail=f"classification failed: {exc}",
+            transient=is_transient_llm_error(exc),
+        )
+    real = [c for c in ranked if c.get("type") != "none"]
+    if not real:
+        return ArtifactSectionOutcome("not_applicable", detail="no strong visual structure")
+
+    primary = real[0]
+    selected = [primary]
+    if limit > 1:
+        remaining = real[1:]
+        table = next((c for c in remaining if c.get("type") == "comparison_table"), None)
+        if table is not None and primary.get("type") != "comparison_table":
+            selected.append(table)
+        elif remaining:
+            selected.append(remaining[0])
+    selected = selected[:limit]
+
+    rendered: list[dict] = []
+    failures: list[str] = []
+    transient_failure = False
+    for chosen in selected:
+        artifact_type = str(chosen.get("type") or "")
+        elapsed = time.monotonic() - started
+        if elapsed >= _ARTIFACT_JOB_BUDGET_SECONDS:
+            failures.append(f"{artifact_type}: deferred after {elapsed:.1f}s job budget")
+            break
+        try:
+            artifact = _render_for_type(llm, content, artifact_type, strict=True)
+            if not artifact:
+                raise ValueError("empty artifact output")
+            rendered.append(
+                {
+                    "type": artifact_type,
+                    "reason": chosen.get("reason", ""),
+                    "artifact": artifact,
+                }
+            )
+        except Exception as exc:
+            failures.append(f"{artifact_type}: {exc}")
+            transient_failure = transient_failure or is_transient_llm_error(exc)
+
+    if not rendered:
+        return ArtifactSectionOutcome(
+            "deferred",
+            detail="; ".join(failures),
+            transient=transient_failure,
+        )
+    section = "".join(
+        f"## 🖼️ 學習輔助（{r['type']}）\n\n{_nest_artifact_headings(r['artifact'])}\n\n"
+        for r in rendered
+    )
+    return ArtifactSectionOutcome(
+        "complete",
+        section=section,
+        detail="; ".join(failures),
+        artifact_types=tuple(r["type"] for r in rendered),
+    )
+
+
+def maybe_artifact_section(
+    llm,
+    content: str,
+    *,
+    limit: int = 2,
+    exclude_types: set[str] | None = None,
+    return_outcome: bool = False,
+) -> str | ArtifactSectionOutcome:
     """One or more '## 🖼️ 學習輔助（type）' sections for `content` (the top-`limit`
     complementary views), or '' when disabled / unstructured / all renders fail.
     Gated by Scripture's `visual_router` — this is the AUTO-attach to
@@ -395,16 +573,10 @@ def maybe_artifact_section(
     from core.config import settings
 
     if not settings.VISUAL_ROUTER_ENABLED:
-        return ""
-    try:
-        results = build_artifacts(llm, content, limit=limit, exclude_types=exclude_types)
-    except Exception as e:
-        logging.warning(f"learning_artifacts: auto-attach failed: {e}")
-        return ""
-    return "".join(
-        f"## 🖼️ 學習輔助（{r['type']}）\n\n{_nest_artifact_headings(r['artifact'])}\n\n"
-        for r in results
-    )
+        outcome = ArtifactSectionOutcome("not_applicable", detail="visual router disabled")
+        return outcome if return_outcome else ""
+    outcome = build_artifact_section_outcome(llm, content, limit=limit, exclude_types=exclude_types)
+    return outcome if return_outcome else outcome.section
 
 
 def _nest_artifact_headings(artifact: str) -> str:

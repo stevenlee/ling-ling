@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 from typing import Any
+from urllib.parse import urlparse
 
 from core.config import settings
 from services.trace_store import usage_to_counts
@@ -110,7 +112,40 @@ def _build_openai_client(*, base_url: str, api_key: str, model: str):
         from openai import OpenAI
     except ImportError as e:
         raise ImportError("pip install openai") from e
-    return OpenAI(base_url=base_url, api_key=api_key, timeout=300.0), model
+    # Ling Ling owns retries in ``LLMClient._complete_provider_text_with_retry``.
+    # Leaving the SDK default (two hidden retries) multiplies the outer
+    # three-attempt budget into as many as nine 300-second HTTP requests while
+    # trace metadata still reports a single outer attempt.
+    return OpenAI(base_url=base_url, api_key=api_key, timeout=300.0, max_retries=0), model
+
+
+def _ollama_endpoint_reachable(base_url: str, timeout: float) -> bool:
+    """Probe only the configured TCP endpoint; the real request validates Ollama."""
+    parsed = urlparse(base_url)
+    host = parsed.hostname
+    if not host:
+        return False
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _select_ollama_base_url(primary: str, fallback: str, probe_timeout: float) -> str:
+    """Prefer the LAN endpoint and select the fallback when it is unreachable."""
+    if not fallback or fallback == primary:
+        return primary
+    if _ollama_endpoint_reachable(primary, probe_timeout):
+        logging.info("Ollama endpoint selected: primary %s", primary)
+        return primary
+    logging.warning(
+        "Ollama primary endpoint %s is unreachable; using fallback %s",
+        primary,
+        fallback,
+    )
+    return fallback
 
 
 def build_client(provider: str) -> tuple[Any, str]:
@@ -122,8 +157,15 @@ def build_client(provider: str) -> tuple[Any, str]:
             model=os.getenv("VLLM_MODEL", "gpt-oss-20b"),
         )
     if provider == "ollama":
+        primary = os.getenv("OLLAMA_API_BASE", "http://localhost:11434/v1")
+        fallback = os.getenv("OLLAMA_API_BASE_FALLBACK", "").strip()
+        try:
+            probe_timeout = max(float(os.getenv("OLLAMA_PROBE_TIMEOUT_SECONDS", "1.0")), 0.05)
+        except ValueError:
+            logging.warning("Invalid OLLAMA_PROBE_TIMEOUT_SECONDS; using 1.0 seconds")
+            probe_timeout = 1.0
         return _build_openai_client(
-            base_url=os.getenv("OLLAMA_API_BASE", "http://localhost:11434/v1"),
+            base_url=_select_ollama_base_url(primary, fallback, probe_timeout),
             api_key=os.getenv("OLLAMA_API_KEY", "ollama"),
             model=os.getenv("OLLAMA_MODEL", "gemma2:27b"),
         )
@@ -154,8 +196,12 @@ def openai_chat(
     user_msg: Any,
     temperature: float,
     max_tokens: int,
-) -> tuple[str, Any]:
+    reasoning_effort: str | None = None,
+) -> tuple[str, Any, dict[str, Any]]:
     extra_body = {"num_ctx": settings.MEMORY_LIMIT} if provider == "ollama" else {}
+    reasoning_kwargs = (
+        {"reasoning_effort": reasoning_effort} if provider == "ollama" and reasoning_effort else {}
+    )
     response = client.chat.completions.create(
         model=model,
         messages=[
@@ -165,9 +211,11 @@ def openai_chat(
         temperature=temperature,
         max_tokens=max_tokens,
         extra_body=extra_body,
+        **reasoning_kwargs,
     )
     message = response.choices[0].message
     content = message.content or ""
+    response_channel = "content"
     if not content.strip():
         # Reasoning models served via Ollama (e.g. gemma thinking
         # variants) intermittently emit the whole answer — including
@@ -184,7 +232,16 @@ def openai_chat(
                 "falling back to the reasoning channel."
             )
             content = reasoning
-    return content, getattr(response, "usage", None)
+            response_channel = "reasoning"
+    choice = response.choices[0]
+    return (
+        content,
+        getattr(response, "usage", None),
+        {
+            "response_channel": response_channel,
+            "finish_reason": getattr(choice, "finish_reason", None),
+        },
+    )
 
 
 def complete_once(
@@ -195,8 +252,9 @@ def complete_once(
     user_msg: Any,
     temperature: float,
     max_tokens: int,
-) -> tuple[str, int | None, int | None, int | None]:
-    """One completion call; returns (text, prompt/completion/total tokens)."""
+    reasoning_effort: str | None = None,
+) -> tuple[str, int | None, int | None, int | None, dict[str, Any]]:
+    """One completion call with response-channel provenance."""
     if provider == "gemini":
         genai = _genai()
         response = client.models.generate_content(
@@ -210,9 +268,20 @@ def complete_once(
         )
         text = response.text or ""
         prompt_tokens, completion_tokens, total_tokens = gemini_usage_counts(response)
+        provider_metadata = {
+            "response_channel": "content",
+            "finish_reason": getattr(response, "finish_reason", None),
+        }
     else:
-        text, usage = openai_chat(
-            provider, client, model, system_prompt, user_msg, temperature, max_tokens
+        text, usage, provider_metadata = openai_chat(
+            provider,
+            client,
+            model,
+            system_prompt,
+            user_msg,
+            temperature,
+            max_tokens,
+            reasoning_effort,
         )
         prompt_tokens, completion_tokens, total_tokens = usage_to_counts(usage)
-    return text, prompt_tokens, completion_tokens, total_tokens
+    return text, prompt_tokens, completion_tokens, total_tokens, provider_metadata

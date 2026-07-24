@@ -1,4 +1,5 @@
 import pytest
+import threading
 from unittest.mock import MagicMock
 from services.ingestion_pipeline import IngestionPipeline
 from services.profile_manager import render_profile_markdown
@@ -10,6 +11,7 @@ class FakeLLM:
 
     def __init__(self):
         self.generate_entity_page_calls = []
+        self.generate_part_digest_calls = []
         self.generate_synthesis_calls = []
         self.select_profile_calls = []
         self.model = "fake-model"
@@ -23,6 +25,7 @@ class FakeLLM:
         context_hint=None,
         persona=None,
         forced_template=None,
+        content_attempts=2,
     ):
         self.generate_entity_page_calls.append(
             {
@@ -30,6 +33,7 @@ class FakeLLM:
                 "filename": filename,
                 "persona": persona,
                 "forced_template": forced_template,
+                "context_hint": context_hint,
             }
         )
         return {
@@ -42,6 +46,7 @@ class FakeLLM:
     def generate_part_digest(
         self, title, part_number, total_parts, raw_chunk, part_note, pending_concepts=""
     ):
+        self.generate_part_digest_calls.append(part_number)
         return {
             "part": part_number,
             "title": f"Part {part_number}",
@@ -132,6 +137,18 @@ def _setup_vault(monkeypatch, tmp_path, profiles: dict[str, tuple[str, str]] | N
     monkeypatch.setattr("services.ingestion_pipeline.PAGES_DIR", tmp_path / "pages")
     monkeypatch.setattr("services.ingestion_pipeline.INDEX_FILE", tmp_path / "index.md")
     monkeypatch.setattr("services.ingestion_pipeline.TEMPLATES_DIR", tmp_path / "Templates")
+    monkeypatch.setattr(
+        "services.ingestion_pipeline.INGEST_FAILURE_STATE_FILE",
+        tmp_path / "Database" / "ingest_failure_state.json",
+    )
+    monkeypatch.setattr(
+        "services.ingestion_pipeline.INGEST_ARTIFACT_BACKUP_DIR",
+        tmp_path / "Backups" / "artifact_patches",
+    )
+    monkeypatch.setattr(
+        "services.ingestion_pipeline.INGEST_ARTIFACT_PENDING_DIR",
+        tmp_path / "_pending" / "LearningArtifacts",
+    )
 
     if profiles is None:
         profiles = {
@@ -350,7 +367,9 @@ class TestRoutingTraceAndTemplateStamp:
 
 
 class TestFacetIndexWiring:
-    def test_short_doc_gets_phase_b_facets(self, monkeypatch, tmp_path, fake_services):
+    def test_short_doc_facets_are_deferred_to_idle_backfill(
+        self, monkeypatch, tmp_path, fake_services
+    ):
         llm, rag = fake_services
         pipeline = IngestionPipeline(llm, rag)
         monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
@@ -362,13 +381,12 @@ class TestFacetIndexWiring:
 
         pipeline.ingest_markdown(content, source_file)
 
-        # FakeLLM.generate_part_digest returns thesis "Thesis description".
-        assert len(rag.facets) == 1
-        title, facets = rag.facets[0]
-        assert "(Synthesis)" in title
-        assert facets == ["Thesis description"]
+        assert rag.facets == []
+        assert llm.generate_part_digest_calls == []
 
-    def test_long_doc_gets_phase_a_facets_per_part(self, monkeypatch, tmp_path, fake_services):
+    def test_long_doc_facets_are_deferred_to_idle_backfill(
+        self, monkeypatch, tmp_path, fake_services
+    ):
         llm, rag = fake_services
         pipeline = IngestionPipeline(llm, rag)
         monkeypatch.setattr(pipeline.splitter, "chunk_size", 20)
@@ -381,24 +399,295 @@ class TestFacetIndexWiring:
 
         pipeline.ingest_markdown(content, source_file)
 
-        # One facet batch per part, each pointing at its part page.
-        assert len(rag.facets) == len(llm.generate_entity_page_calls)
-        assert all("(Part" in title for title, _ in rag.facets)
+        # The persisted digest appendix is the idle FacetBackfillPump's input;
+        # no optional facet writes remain on the critical ingest path.
+        assert rag.facets == []
+        part_pages = list((tmp_path / "pages").rglob("*(Part *).md"))
+        assert part_pages
+        assert all("## 🧩 Part Digest Appendix" in p.read_text() for p in part_pages)
 
-    def test_facet_flag_off_disables_indexing(self, monkeypatch, tmp_path, fake_services):
+
+class TestLongDocumentCommitAndInlineDigest:
+    def _long_pipeline(self, monkeypatch, tmp_path, fake_services):
         llm, rag = fake_services
         pipeline = IngestionPipeline(llm, rag)
-        monkeypatch.setattr(pipeline.splitter, "chunk_size", 10000)
+        monkeypatch.setattr(pipeline.splitter, "chunk_size", 40)
         _setup_vault(monkeypatch, tmp_path)
-        monkeypatch.setattr("services.ingestion_pipeline.FACET_INDEX_ENABLED", False)
+        monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", False)
+        return pipeline, llm, rag
 
-        content = "Claims\nPrior Art\nAn invention."
-        source_file = tmp_path / "MyPatent.md"
-        source_file.write_text(content)
+    def test_inline_digest_uses_one_llm_call_per_part(self, monkeypatch, tmp_path, fake_services):
+        pipeline, llm, _ = self._long_pipeline(monkeypatch, tmp_path, fake_services)
+        original = llm.generate_entity_page
 
-        pipeline.ingest_markdown(content, source_file)
+        def with_digest(*args, **kwargs):
+            value = original(*args, **kwargs)
+            value["part_digest"] = {
+                "thesis": "Inline thesis",
+                "key_points": ["An inline key point with enough detail."],
+            }
+            return value
 
-        assert rag.facets == []
+        llm.generate_entity_page = with_digest
+        content = "Long source. " * 100
+        source = tmp_path / "inline.md"
+        source.write_text(content)
+
+        result = pipeline.ingest_markdown(content, source)
+
+        assert result.archivable is True
+        assert llm.generate_part_digest_calls == []
+        assert all(m.get("inline_digest") for m in result.metrics["part_metrics"])
+        assert "part_digest" in llm.generate_entity_page_calls[0]["context_hint"]
+        timing_calls = [
+            call
+            for call in llm.trace_store.record_artifact.call_args_list
+            if call.kwargs.get("artifact_type") == "ingestion_part_timing"
+        ]
+        assert len(timing_calls) == result.expected_parts
+        assert timing_calls[0].kwargs["metadata"]["status"] == "complete"
+        assert timing_calls[0].kwargs["metadata"]["inline_digest"] is True
+
+    def test_malformed_inline_digest_falls_back(self, monkeypatch, tmp_path, fake_services):
+        pipeline, llm, _ = self._long_pipeline(monkeypatch, tmp_path, fake_services)
+        original = llm.generate_entity_page
+
+        def with_bad_digest(*args, **kwargs):
+            value = original(*args, **kwargs)
+            value["part_digest"] = {"thesis": "", "key_points": []}
+            return value
+
+        llm.generate_entity_page = with_bad_digest
+        content = "Long source. " * 100
+        source = tmp_path / "fallback.md"
+        source.write_text(content)
+
+        result = pipeline.ingest_markdown(content, source)
+
+        assert result.archivable is True
+        assert len(llm.generate_part_digest_calls) == result.expected_parts
+        assert not any(m.get("inline_digest") for m in result.metrics["part_metrics"])
+
+    def test_resumed_parts_do_not_emit_fake_latency_samples(
+        self, monkeypatch, tmp_path, fake_services
+    ):
+        pipeline, llm, _ = self._long_pipeline(monkeypatch, tmp_path, fake_services)
+        content = "Long source. " * 100
+        source = tmp_path / "resume.md"
+        source.write_text(content)
+        first = pipeline.ingest_markdown(content, source)
+        assert first.archivable is True
+
+        llm.trace_store.reset_mock()
+        second = pipeline.ingest_markdown(content, source)
+
+        assert second.archivable is True
+        assert second.metrics["resumed_part_count"] == second.expected_parts
+        assert second.metrics["resumed_parts"] == list(range(1, second.expected_parts + 1))
+        assert second.metrics["part_metrics"] == []
+        timing_calls = [
+            call
+            for call in llm.trace_store.record_artifact.call_args_list
+            if call.kwargs.get("artifact_type") == "ingestion_part_timing"
+        ]
+        assert timing_calls == []
+
+    def test_failed_part_blocks_synthesis_and_archival(self, monkeypatch, tmp_path, fake_services):
+        pipeline, llm, _ = self._long_pipeline(monkeypatch, tmp_path, fake_services)
+        original = pipeline.ingest_to_wiki
+        calls = 0
+
+        def fail_second(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                from services.ingest.result import IngestResult
+
+                return IngestResult.failure("generate", RuntimeError("poison part"))
+            return original(*args, **kwargs)
+
+        pipeline.ingest_to_wiki = fail_second
+        content = "Long source. " * 100
+        source = tmp_path / "partial.md"
+        source.write_text(content)
+
+        result = pipeline.ingest_markdown(content, source)
+
+        assert result.status == "partial"
+        assert result.archivable is False
+        assert result.failed_parts[0]["part"] == 2
+        assert llm.generate_synthesis_calls == []
+        trace_calls = [
+            call
+            for call in llm.trace_store.record_artifact.call_args_list
+            if call.kwargs.get("artifact_type") == "ingestion_run"
+        ]
+        assert trace_calls
+        assert trace_calls[-1].kwargs["metadata"]["metrics"]["stage_ms"]["distill_parts"] >= 0
+
+    def test_reasoning_leak_cannot_be_redeemed_by_fallback_digest(
+        self, monkeypatch, tmp_path, fake_services
+    ):
+        pipeline, llm, _ = self._long_pipeline(monkeypatch, tmp_path, fake_services)
+        original = llm.generate_entity_page
+
+        def poisoned(*args, **kwargs):
+            value = original(*args, **kwargs)
+            value["content"] = (
+                "Source Material: harmonic numbers\nGoal: translate faithfully\n"
+                "Constraints: preserve equations\nDraft"
+            )
+            return value
+
+        llm.generate_entity_page = poisoned
+        content = "Long source. " * 100
+        source = tmp_path / "reasoning-leak.md"
+        source.write_text(content)
+
+        result = pipeline.ingest_markdown(content, source)
+
+        assert result.status == "partial"
+        assert llm.generate_part_digest_calls == []
+        assert not list((tmp_path / "pages").rglob("*(Part *).md"))
+        assert all(item["stage"] == "entity_quality" for item in result.failed_parts)
+
+    def test_unclosed_fence_gets_one_immediate_persisted_reroll(
+        self, monkeypatch, tmp_path, fake_services
+    ):
+        pipeline, llm, _ = self._long_pipeline(monkeypatch, tmp_path, fake_services)
+        original = llm.generate_entity_page
+        poisoned = False
+
+        def fail_once(*args, **kwargs):
+            nonlocal poisoned
+            value = original(*args, **kwargs)
+            if not poisoned:
+                poisoned = True
+                value["content"] = "```mermaid\ngraph TD\nA --> B"
+            return value
+
+        llm.generate_entity_page = fail_once
+        content = "Long source. " * 100
+        source = tmp_path / "reroll.md"
+        source.write_text(content)
+
+        result = pipeline.ingest_markdown(content, source)
+
+        assert result.archivable is True
+        assert len(llm.generate_entity_page_calls) == result.expected_parts + 1
+        failure_state = tmp_path / "Database" / "ingest_failure_state.json"
+        assert '"failures": {}' in failure_state.read_text(encoding="utf-8")
+
+    def test_rag_failure_leaves_pending_note_that_cannot_resume(
+        self, monkeypatch, tmp_path, fake_services
+    ):
+        pipeline, llm, rag = self._long_pipeline(monkeypatch, tmp_path, fake_services)
+
+        def fail_index(*args, **kwargs):
+            raise RuntimeError("rag unavailable")
+
+        rag.add_document = fail_index
+        content = "Long source. " * 100
+        source = tmp_path / "rag-fail.md"
+        source.write_text(content)
+
+        result = pipeline.ingest_markdown(content, source)
+
+        assert result.status == "partial"
+        first_page = tmp_path / "pages" / "rag-fail" / "rag-fail (Part 1).md"
+        assert first_page.exists()
+        assert "ingest_status: pending_index" in first_page.read_text(encoding="utf-8")
+        assert pipeline._resume_part(first_page, pipeline.splitter.split_text(content)[0]) is None
+        assert llm.generate_synthesis_calls == []
+
+    def test_part_artifact_pipeline_overlaps_next_part_core_generation(
+        self, monkeypatch, tmp_path, fake_services
+    ):
+        pipeline, llm, _ = self._long_pipeline(monkeypatch, tmp_path, fake_services)
+        from core.config import settings
+
+        monkeypatch.setattr(settings, "VISUAL_ROUTER_ENABLED", True)
+        artifact_started = threading.Event()
+        release_artifact = threading.Event()
+        second_part_started = threading.Event()
+        original_entity = llm.generate_entity_page
+
+        def entity(*args, **kwargs):
+            if len(llm.generate_entity_page_calls) >= 1:
+                second_part_started.set()
+            value = original_entity(*args, **kwargs)
+            value["part_digest"] = {
+                "thesis": "Inline thesis",
+                "key_points": ["Enough detail for the inline digest."],
+            }
+            return value
+
+        def blocking_artifact(*args, **kwargs):
+            artifact_started.set()
+            assert release_artifact.wait(timeout=5)
+            return "## 🖼️ 學習輔助（mindmap）\n\n```mermaid\nmindmap\n  root((完成))\n```\n"
+
+        llm.generate_entity_page = entity
+        monkeypatch.setattr("services.learning_artifacts.maybe_artifact_section", blocking_artifact)
+        content = "Long source. " * 100
+        source = tmp_path / "parallel.md"
+        source.write_text(content)
+        outcome = {}
+
+        worker = threading.Thread(
+            target=lambda: outcome.setdefault("result", pipeline.ingest_markdown(content, source))
+        )
+        worker.start()
+        assert artifact_started.wait(timeout=5)
+        assert second_part_started.wait(timeout=5)
+        release_artifact.set()
+        worker.join(timeout=10)
+
+        assert not worker.is_alive()
+        assert outcome["result"].archivable is True
+        part_one = tmp_path / "pages" / "parallel" / "parallel (Part 1).md"
+        text = part_one.read_text(encoding="utf-8")
+        assert text.index("## 🖼️ 學習輔助") < text.index("## 🔗 知識導航")
+
+    def test_synthesis_failure_is_not_archivable(self, monkeypatch, tmp_path, fake_services):
+        pipeline, _, _ = self._long_pipeline(monkeypatch, tmp_path, fake_services)
+        pipeline._write_synthesis = MagicMock(side_effect=RuntimeError("provider down"))
+        content = "Long source. " * 100
+        source = tmp_path / "synthesis-fail.md"
+        source.write_text(content)
+
+        result = pipeline.ingest_markdown(content, source)
+
+        assert result.status == "failed"
+        assert result.stage == "synthesize"
+        assert result.archivable is False
+
+    def test_part_commit_failure_blocks_synthesis_and_archival(
+        self, monkeypatch, tmp_path, fake_services
+    ):
+        pipeline, llm, _ = self._long_pipeline(monkeypatch, tmp_path, fake_services)
+        original = pipeline._append_part_digest_to_note
+        calls = 0
+
+        def fail_second_commit(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("disk full")
+            return original(*args, **kwargs)
+
+        pipeline._append_part_digest_to_note = fail_second_commit
+        content = "Long source. " * 100
+        source = tmp_path / "commit-fail.md"
+        source.write_text(content)
+
+        result = pipeline.ingest_markdown(content, source)
+
+        assert result.status == "partial"
+        assert result.archivable is False
+        assert result.failed_parts[0]["stage"] == "commit"
+        assert "disk full" in result.failed_parts[0]["detail"]
+        assert llm.generate_synthesis_calls == []
 
 
 class TestDocTypeMigrationInPipeline:

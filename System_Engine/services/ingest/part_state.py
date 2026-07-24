@@ -20,3 +20,9 @@ class PartState:
     part_paths: list[Path] = field(default_factory=list)
     navigation_items: list[str] = field(default_factory=list)
     total_output_chars: int = 0
+    completed_parts: list[int] = field(default_factory=list)
+    resumed_parts: list[int] = field(default_factory=list)
+    failed_parts: list[dict] = field(default_factory=list)
+    degraded_parts: list[int] = field(default_factory=list)
+    part_metrics: list[dict] = field(default_factory=list)
+    artifact_metrics: list[dict] = field(default_factory=list)

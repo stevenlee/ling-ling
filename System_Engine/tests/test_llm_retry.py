@@ -102,6 +102,35 @@ def test_transient_retry_success(tmp_path, monkeypatch):
     assert "Too many requests" in metadata["retry_last_error"]
 
 
+def test_response_channel_provenance_is_recorded(tmp_path, monkeypatch):
+    client = LLMClient.__new__(LLMClient)
+    client.provider = "vllm"
+    client.model = "fake-model"
+    client.trace_store = TraceStore(tmp_path / "trace.sqlite")
+
+    monkeypatch.setattr(
+        LLMClient,
+        "_complete_provider_text_once",
+        lambda *args: (
+            "contract-shaped response",
+            1,
+            2,
+            3,
+            {"response_channel": "reasoning", "finish_reason": "stop"},
+        ),
+    )
+
+    client._complete_text("system", "user")
+
+    import json
+
+    with client.trace_store._connect() as conn:
+        row = conn.execute("SELECT metadata_json FROM llm_calls").fetchone()
+    metadata = json.loads(row["metadata_json"])
+    assert metadata["response_channel"] == "reasoning"
+    assert metadata["finish_reason"] == "stop"
+
+
 def test_non_transient_fails_immediately(tmp_path, monkeypatch):
     sleep_calls = []
     monkeypatch.setattr(time, "sleep", lambda d: sleep_calls.append(d))
@@ -192,3 +221,128 @@ def test_exhausted_transient_retries(tmp_path, monkeypatch):
     assert metadata["retry_attempts"] == 3
     assert metadata["retry_transient"] is True
     assert "Service unavailable" in metadata["retry_last_error"]
+
+
+def test_call_site_can_bound_transport_attempts(tmp_path, monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda _delay: None)
+    client = LLMClient.__new__(LLMClient)
+    client.provider = "vllm"
+    client.model = "fake-model"
+    client.trace_store = TraceStore(tmp_path / "trace.sqlite")
+    calls = 0
+
+    def fail(*args):
+        nonlocal calls
+        calls += 1
+        raise GenericHTTPError(503, "busy")
+
+    monkeypatch.setattr(LLMClient, "_complete_provider_text_once", fail)
+
+    with pytest.raises(GenericHTTPError):
+        client._complete_text("system", "user", retries=2)
+
+    assert calls == 2
+
+
+def test_openai_transport_disables_hidden_sdk_retries():
+    from services.llm.transport import build_client
+
+    client, _model = build_client("vllm")
+
+    assert client.max_retries == 0
+
+
+def test_ollama_endpoint_prefers_reachable_primary(monkeypatch):
+    from services.llm import transport
+
+    monkeypatch.setattr(transport, "_ollama_endpoint_reachable", lambda _url, _timeout: True)
+
+    selected = transport._select_ollama_base_url(
+        "http://192.168.1.103:11434/v1",
+        "http://ollama-fallback.example:11434/v1",
+        0.25,
+    )
+
+    assert selected == "http://192.168.1.103:11434/v1"
+
+
+def test_ollama_endpoint_uses_fallback_when_primary_is_unreachable(monkeypatch):
+    from services.llm import transport
+
+    monkeypatch.setattr(transport, "_ollama_endpoint_reachable", lambda _url, _timeout: False)
+
+    selected = transport._select_ollama_base_url(
+        "http://192.168.1.103:11434/v1",
+        "http://ollama-fallback.example:11434/v1",
+        0.25,
+    )
+
+    assert selected == "http://ollama-fallback.example:11434/v1"
+
+
+def test_ollama_endpoint_without_fallback_does_not_probe(monkeypatch):
+    from services.llm import transport
+
+    monkeypatch.setattr(
+        transport,
+        "_ollama_endpoint_reachable",
+        lambda *_args: pytest.fail("primary should not be probed without a fallback"),
+    )
+
+    assert (
+        transport._select_ollama_base_url("http://localhost:11434/v1", "", 0.25)
+        == "http://localhost:11434/v1"
+    )
+
+
+def test_artifact_reasoning_effort_is_forwarded_and_traced(tmp_path, monkeypatch):
+    import json
+
+    client = LLMClient.__new__(LLMClient)
+    client.provider = "ollama"
+    client.model = "fake-model"
+    client.trace_store = TraceStore(tmp_path / "trace.sqlite")
+    captured = []
+
+    def mock_complete_once(self_ref, sys_p, usr_m, temp, max_t, reasoning_effort=None):
+        captured.append(reasoning_effort)
+        return "| A | B |\n|---|---|\n| 1 | 2 |", 1, 2, 3
+
+    monkeypatch.setattr(LLMClient, "_complete_provider_text_once", mock_complete_once)
+
+    client._complete_text(
+        "system",
+        "user",
+        reasoning_effort="none",
+        trace_context={"stage": "artifact_table", "metadata": {}},
+    )
+
+    assert captured == ["none"]
+    with client.trace_store._connect() as conn:
+        metadata_json = conn.execute("SELECT metadata_json FROM llm_calls").fetchone()[0]
+    metadata = json.loads(metadata_json)
+    assert metadata["reasoning_effort"] == "none"
+    assert metadata["request_priority"] == "enrichment"
+
+
+def test_ollama_transport_sends_reasoning_effort_only_when_requested():
+    from types import SimpleNamespace
+
+    from services.llm.transport import openai_chat
+
+    captured = []
+
+    class Completions:
+        def create(self, **kwargs):
+            captured.append(kwargs)
+            message = SimpleNamespace(content='{"ok": true}')
+            choice = SimpleNamespace(message=message, finish_reason="stop")
+            return SimpleNamespace(choices=[choice], usage=None)
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+
+    openai_chat("ollama", client, "model", "system", "user", 0.0, 128, "none")
+    openai_chat("vllm", client, "model", "system", "user", 0.0, 128, "none")
+
+    assert captured[0]["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in captured[1]

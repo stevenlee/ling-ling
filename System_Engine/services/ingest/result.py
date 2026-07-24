@@ -35,7 +35,12 @@ class IngestResult:
     tags: list = field(default_factory=list)
     content: str = ""  # raw LLM body (pre-quality-checks), as before
     pending_concepts: str = ""
+    part_digest: dict | None = None
     page_type: str = "entity"
+    rendered_markdown: str = ""
+    wiki_meta: dict = field(default_factory=dict)
+    issues: list[str] = field(default_factory=list)
+    transient: bool = False
 
     def __bool__(self) -> bool:
         return self.ok
@@ -49,3 +54,22 @@ class IngestResult:
         else:
             kind = "unexpected"
         return cls(ok=False, stage=stage, error_kind=kind, detail=str(exc))
+
+
+@dataclass
+class DocumentIngestResult:
+    """Document-level outcome and commit decision for a long ingest."""
+
+    ok: bool
+    status: str  # "complete" | "partial" | "failed"
+    stage: str
+    expected_parts: int
+    completed_parts: list[int] = field(default_factory=list)
+    failed_parts: list[dict] = field(default_factory=list)
+    synthesis_path: Path | None = None
+    archivable: bool = False
+    detail: str = ""
+    metrics: dict = field(default_factory=dict)
+
+    def __bool__(self) -> bool:
+        return self.ok and self.archivable

@@ -10,6 +10,7 @@ os.environ.setdefault("LLM_PROVIDER", "vllm")
 
 import watchers.clipping_watcher as cw_mod
 from watchers.clipping_watcher import ClippingWatcher
+from services.ingest.result import DocumentIngestResult
 
 
 def _archiver(tmp_path, monkeypatch):
@@ -128,3 +129,46 @@ def test_worker_drains_off_thread(tmp_path):
     finally:
         w.stop()
     assert not w._worker.is_alive()
+
+
+def test_partial_markdown_result_is_not_archived(tmp_path, monkeypatch):
+    w, raw, cons, _ = _archiver(tmp_path, monkeypatch)
+    source = cons / "partial.md"
+    source.write_text("# source", encoding="utf-8")
+    w.pipeline = SimpleNamespace(
+        ingest_markdown=lambda *_: DocumentIngestResult(
+            ok=False,
+            status="partial",
+            stage="distill_parts",
+            expected_parts=2,
+            completed_parts=[1],
+            archivable=False,
+            detail="part 2 failed",
+        )
+    )
+
+    w._handle_markdown(source)
+
+    assert source.exists()
+    assert not (raw / source.name).exists()
+
+
+def test_complete_markdown_result_is_archived(tmp_path, monkeypatch):
+    w, raw, cons, _ = _archiver(tmp_path, monkeypatch)
+    source = cons / "complete.md"
+    source.write_text("# source", encoding="utf-8")
+    w.pipeline = SimpleNamespace(
+        ingest_markdown=lambda *_: DocumentIngestResult(
+            ok=True,
+            status="complete",
+            stage="done",
+            expected_parts=2,
+            completed_parts=[1, 2],
+            archivable=True,
+        )
+    )
+
+    w._handle_markdown(source)
+
+    assert not source.exists()
+    assert (raw / source.name).exists()
