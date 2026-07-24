@@ -313,6 +313,7 @@ SCOUT_MIRROR_DIR = NOTES_DIR / "Scout"
 DATABASE_DIR = WIKI_VAULT_DIR / "Database"
 MAINTENANCE_STATE_FILE = DATABASE_DIR / "maintenance_state.json"
 SCOUT_STATE_FILE = DATABASE_DIR / "scout_state.json"
+EVIDENCE_TRACEBACK_STATE_FILE = DATABASE_DIR / "evidence_traceback_state.json"
 INSIGHT_SIGNALS_FILE = DATABASE_DIR / "insight_signals.json"
 PLANS_DIR = DATABASE_DIR / "plans"
 RETRIEVAL_BENCH_FILE = SCRATCH_DIR / "retrieval_bench.yml"
@@ -411,6 +412,13 @@ class DynamicSettings:
         # path (a low-similarity "equivalent" verdict links instead of merges).
         ("cortex_link_threshold", "CORTEX_LINK_THRESHOLD", float),
         ("cortex_merge_threshold", "CORTEX_MERGE_THRESHOLD", float),
+        # Cortex evidence traceback (A2): falsifier-first corroboration scan
+        # over thin-evidence claims. Dry-run reporting only in its current
+        # form; batch bounds the nightly LLM spend, the distance gate keeps
+        # weakly-related passages out of judgment.
+        ("evidence_traceback", "EVIDENCE_TRACEBACK_ENABLED", bool),
+        ("evidence_traceback_batch", "EVIDENCE_TRACEBACK_BATCH", int),
+        ("evidence_traceback_max_distance", "EVIDENCE_TRACEBACK_MAX_DISTANCE", float),
     )
 
     def __init__(self):
@@ -479,6 +487,11 @@ class DynamicSettings:
         # knob doing both jobs — too high, so the graph starved of edges.
         self.CORTEX_LINK_THRESHOLD = 0.60
         self.CORTEX_MERGE_THRESHOLD = 0.80
+        # Evidence traceback (A2): default OFF — enable with
+        # `evidence_traceback: true` in Scripture.md. Dry-run only for now.
+        self.EVIDENCE_TRACEBACK_ENABLED = False
+        self.EVIDENCE_TRACEBACK_BATCH = 5
+        self.EVIDENCE_TRACEBACK_MAX_DISTANCE = 0.45
         # Splitter selection: env value is the default (deployment), but
         # Scripture (use_thoughtful_splitter / thoughtful_use_llm) can override
         # at runtime — see _BINDINGS above.

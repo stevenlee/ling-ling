@@ -33,6 +33,7 @@ scout: true
 scout_language: ""
 scout_max_items: 10
 scout_fetch_content: true
+evidence_traceback: true
 ---
 
 # 📜 Scripture (Settings)
@@ -78,6 +79,9 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 - **scout_fetch_content**: If `true`（預設），每條新項目抓回頁面內文給 LLM 逐條分析（每條多一次 HTTP GET＋一次 LLM 呼叫）；`false` 退回輕量模式（只看標題＋列表摘錄）。
 - **scout_bridging**: If `true`（預設），每條新項目查 RAG，把真正相關的 vault 筆記以「相關筆記: [[title]]」附在該行（確定性、零額外 LLM）。
 - **scout_mirror**: If `true`（預設），日報同步鏡射一份到 `Notes/Scout/`，讓它被 RAG 索引、可被 @ling 檢索到。`fromLingLing/` 的正本不受影響。
+- **evidence_traceback**: If `true`，每日 `evidence_traceback_daily` 任務對 Cortex 薄證據主張（evidence ≤1）做 falsifier-first 佐證掃描：先查「什麼會推翻它」再查主張本身，排除自我來源後由 LLM 判定 supports/contradicts/neutral，寫 `fromLingLing/✅EvidenceTrace-YYYY-MM-DD.md`。**目前為 dry-run 形態：只出報告、不寫入任何 Cortex 狀態**；看過命中率再決定開 apply。每輪掃 `evidence_traceback_batch`（預設 5）條、輪替不重複。（新任務註冊在 daemon 啟動時——第一次啟用需重啟 daemon；之後熱生效。）
+- **evidence_traceback_batch**: 每輪掃描的主張數上限（預設 5；LLM 花費 ≈ batch × 3 次 lean 呼叫）。
+- **evidence_traceback_max_distance**: RAG 候選段落的距離閘門（預設 0.45，越小越嚴）。
 
 ### 🔪 Chunking (how documents are split into Parts)
 - **use_thoughtful_splitter**: If `true`, split documents structure-aware — cut at chapter/heading boundaries, pack short sections up to the size budget, and recursively sub-split sections that are too long. If `false`, fall back to mechanical character-count chunks. (Takes effect on the next pipeline build / daemon restart.)

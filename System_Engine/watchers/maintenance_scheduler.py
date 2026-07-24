@@ -252,6 +252,20 @@ class MaintenanceScheduler(threading.Thread):
             result = run_scout_digest(self.llm, rag=self.rag)
             return MaintenanceResult(result.status, result.summary)
 
+        def evidence_traceback() -> MaintenanceResult:
+            # A2: falsifier-first corroboration scan over thin-evidence Cortex
+            # claims. Master switch is the hot-reloadable `evidence_traceback`
+            # knob; DRY-RUN reporting only (no Cortex mutation) until the hit
+            # rates have been reviewed.
+            if not settings.EVIDENCE_TRACEBACK_ENABLED:
+                return MaintenanceResult(
+                    "skipped", "Evidence traceback disabled (evidence_traceback: false)."
+                )
+            from maintenance.evidence_traceback import run_evidence_traceback
+
+            result = run_evidence_traceback(self.llm, self.rag)
+            return MaintenanceResult(result.status, result.summary)
+
         def tag_optimizer() -> MaintenanceResult:
             from services.tag_optimizer import TagOptimizer
             from core.config import PAGES_DIR, NOTES_DIR
@@ -311,6 +325,14 @@ class MaintenanceScheduler(threading.Thread):
                 idle_required=True,
                 intent="maintenance.retrieval_bench",
                 agent="RetrievalBench",
+            ),
+            MaintenanceTask(
+                name="evidence_traceback_daily",
+                action=evidence_traceback,
+                daily=True,
+                idle_required=True,
+                intent="maintenance.evidence_traceback",
+                agent="EvidenceTraceback",
             ),
             MaintenanceTask(
                 name="spaced_review_daily",
