@@ -16,6 +16,10 @@ Scan source text and identify **every instance** of a user-defined concept. The 
    - `high` — clearly and unambiguously an instance of the concept.
    - `medium` — likely an instance, but could be interpreted otherwise.
    - `low` — borderline; included for completeness.
+6. **Negative Constraints**:
+   - Do NOT include any claims or interpretations not explicitly supported by the source text.
+   - Do NOT include any information that cannot be directly traced back to the `quote`.
+7. **Self-Correction**: Before finalizing, review each entry to ensure every part of the reasoning is strictly grounded in the provided `quote`.
 
 ## Output Format
 
@@ -25,7 +29,7 @@ Return **ONLY** a valid JSON array. No markdown fences, no commentary, no explan
 [
   {
     "quote": "exact text from source",
-    "reasoning": "why this is an instance",
+    "reasoning": "why this is an instance, explicitly linked to the quote",
     "confidence": "high",
     "closest_heading": "the exact text of the closest preceding markdown heading (without the # symbols)"
   }
