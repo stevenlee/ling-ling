@@ -105,5 +105,26 @@
 
 ---
 
+## 3.5 N.2 觀察窗清單（2026-07-24 起，排程 `lingling-n2-obswindow-reaudit` 於 2026-07-31 09:00 提醒）
+
+> N.1 重稽核（`LingLing_Audit_ObsWindow_report_20260724.md`）後又落了三個修法＋清了佇列，各自需要跨夜累積才驗得出。到期照這份清單重量測，重點仍是**觀察窗期間新產出**（date ≥ 2026-07-24），全庫平均會被存量稀釋。
+
+**優先觀察（本輪新修法的成效）：**
+1. **A2 evidence_traceback dry-run 命中率**（最高優先，全新機制）：讀 `fromLingLing/✅EvidenceTrace-*.md`。看 ①supports/contradicts vs neutral 比例——全 neutral ⇒ 放寬 `evidence_traceback_max_distance`（0.45→0.55）或代表 vault 真無獨立佐證；②自我來源排除計數是否乾淨（supports 來源不該是變相同源）；③有沒有出現有據 contradicts（= Cortex 第一次有 tension 訊號）。約需 ~2 週掃完 79 條薄證據池一輪。**看過幾晚後裁決 apply 路徑（+evidence／記 tension／強化）是否開。**
+2. **synthesis 品質閘 parser 修復生效**（B2，commit 3513ddc）：只取觀察窗 ts 的 synthesis artifact，`quality_verdict` 分佈——unparseable 應大幅下降、keep/revise 正常出現（修前窗內 11/14 unparseable）。若仍高 ⇒ header 又漂移新形態，看 critique trace。
+3. **兩筆已套用 prompt 的效果**（commit 2afa9bf，熱載入）：①`agent_counter.md`（LingLens）→ lens_report 型別失敗率是否從 ~50% 降；②`agent_insight.md` → 新 insight 的 novelty 是否升、refute 存活率是否改善（注意殼改造/輪替也在同時作用，需分辨）。
+
+**延續觀察（N.1 已在追、繼續看趨勢）：**
+4. **Cortex thin-evidence 佔比 + merge 事件**：N.1 實測 79/80 薄、零 merge。A2 dry-run 不寫入，所以這輪佔比不會因 A2 而降（除非開 apply）；看的是 grounding/decay/merge 三被動 lever 有沒有任何自然變化。
+5. **grounding 去集中化維持**：新 insight 的 grounded_on distinct / top-4 share（N.1 已達 0.159，看是否守住不回升）。
+6. **SE insight_dim 趨勢**：`self_assessment_history.json`，N.1 三點 13.79→14.22，續看方向。
+7. **產出頻率**：N.1 發現 7/15-18 三個夜間 insight slot 缺席，疑似被重 ingestion（Mathematics for CS 等）排擠。看重 ingestion 過後 slot 是否回歸每日一篇。
+
+**待查 bug（非趨勢、可隨時查）：**
+8. **insight 生成逾時仍落盤**（N.1 §3 小項的根因）：7/22 fable body=「Error: Request timed out.」照樣寫成檔（已隔離到 `Backups/audit-cleanup-20260724/`）。生成層應攔截失敗、不落盤——比照 entity/critique 的「失敗不出貨」。查 `daily_insight`/montecarlo pipeline 的 LLM 逾時落盤路徑。
+9. **novelty null 2/11**：觀察窗有 2 篇 novelty 算不出（7/22 fable=退化檔已處理；7/23 montecarlo 待查 signals 為何跳過）。
+
+---
+
 ## 4. 一句話總結
 本波把 **insight 生成 → synthesis 品質閘 → 自省弧線** 三條品質迴路都硬化了；下一階段先**觀察趨勢**驗證成效,再往**最深的 Cortex 結構缺口**（薄證據累積、M3 接通 Cortex、裁決過鬆）推進,房務平行填空。
