@@ -122,7 +122,7 @@
 
 **待查 bug（非趨勢、可隨時查）：**
 8. ~~**insight 生成逾時仍落盤**~~：**✅ 完成（2026-07-27）**。根因是 `LLMClient.answer_query` 的 `Error: ...` sentinel 被 insight pipeline 當正常內容，`daily_insight` 又無條件回 `succeeded`。現在 generation artifact boundary 會拒絕空內容／error sentinel、不計 signals、不寫 canonical 或 mirror；排程收到明確 `failed`，Daydream 也把失敗夜間 slot 視為仍 owed。Full insight 會跳過單一失敗 strategy，但全數失敗或 cross-synthesis 失敗時不出貨。
-9. **novelty null 2/11**：觀察窗有 2 篇 novelty 算不出（7/22 fable=退化檔已處理；7/23 montecarlo 待查 signals 為何跳過）。
+9. ~~**novelty null 2/11**~~：**✅ 完成（2026-07-27）**。7/22 fable 是已處理的失敗出貨；7/23 montecarlo 內容完整、groundedness/refute 正常，但該內容在 embedding cache 與 `insight_signals.json` 都沒有 commit，後續每日 novelty 又自行恢復，證據最符合單次 embedding transport failure（當時 exception 未持久化，無法事後精確還原）。修正兩條可重現缺口：①novelty embedding 對 raising transport failure 做 2 次 bounded retry；②sidecar 消費端清除 malformed/null、NaN/Inf、zero-norm、錯維度 entry，避免一筆長壽狀態毒死本輪計算。sidecar 同時改用同目錄唯一 temp＋fsync 的原子寫入；持續 outage 仍誠實 fail-open 為 null。
 
 ## 3.6 Code review hardening（2026-07-27）
 
@@ -130,6 +130,15 @@
 - **Evidence traceback 候選完整性**：同一來源跨 falsifier／claim query 的 hits 先聚合、保留最佳 distance，再做距離與獨立性 gate；同 title 不同來源保持獨立，NaN／Inf distance fail-closed。仍維持 dry-run，不改 Cortex。
 - **Insight artifact commit point**：canonical report 與 Insights mirror 都改同目錄原子寫入；canonical 是 commit point，mirror 若失敗會明確回報「已提交、待修 mirror」，不再把 post-commit failure 說成未套用。
 - **驗證**：`make check` exit 0（ruff clean、mypy clean、1796 passed／1 skipped）；另以實建 wheel 安裝到隔離目錄後做 nested-package import smoke test。
+
+## 3.7 N.2 中期稽核（2026-07-27，觀察窗第 4 天）
+
+- **evidence_traceback 已穩定跨夜**：7/24–7/27 共 4/4 日出報，覆蓋 20 個 unique claims、49 次判讀；raw 分佈 supports 11／contradicts 1／neutral 37，0 error、0 unparseable。尚未開 apply，這些數字只代表候選命中，不代表已強化 Cortex。
+- **中期稽核抓到兩種同源灌票**：7/27 有 2 筆 claim 把自身 Cortex 頁判為 supports；另有同一 SOAR 文件的 Synthesis／Stitched view 同時算兩份證據。已補 metadata gate：vault-relative `Cortex/...` 也必須排除，claim-id title fail-closed；Part N／Stitched／Synthesis 則 canonicalize 成同一 source family，只留最佳距離候選。
+- **SeedSampler 的 doc anchor 改採 metadata 白名單**：7/27 fable 抽到 Cortex claim text，導致 `refute_verdict: null`、bridging 0；根因是舊 filter 只看 title 是否以 `cortex-` 起頭。現在由 RAG 只列 `pages/`、`Notes/` 的 concrete source titles，Cortex／Insights／fromLingLing 不再進 seed pool；測試替身仍保留 legacy accessor fallback。
+- **薄證據尚未自然改善**：Cortex 目前 total 80、active 61、fading 19；active 中 60/61 仍只有一筆 evidence，1/61 有兩筆，merge 仍為 0。這支持維持 N.2 的 A2 優先級，但在 source gate 修正後還需再累積乾淨樣本，現在不宜依 raw 11 supports 開 apply。
+- **新 insight 訊號健康但樣本仍小**：7/24–7/27 四個每日 slot 全到；novelty 0.3014／0.3213／0.2660／0.3408（mean 0.3074、0 null），24 個 grounded refs／20 distinct，top-4 share 0.333。synthesis parser 修復後的新 synthesis sample 仍為 0；7/24 的 4 筆（2 unparseable、2 null）都早於修復 commit，不能據此判 regression。post-fix LLM calls 219/219 succeeded。
+- **7/31 重稽核仍保留**：中期稽核用來提前修資料污染，不取代完整觀察窗。到期應從修正部署後重新切 evidence_traceback 樣本，核對 self-source=0、同 source-family 不重複，再決定 apply 契約（+evidence／tension／strengthening）；同時等待至少一筆 post-fix synthesis 才裁決 parser 趨勢。
 
 ---
 

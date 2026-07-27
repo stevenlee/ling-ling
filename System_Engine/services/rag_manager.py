@@ -1078,6 +1078,31 @@ class RAGManager:
             logging.error(f"Failed to get indexed titles: {e}")
             return set()
 
+    def get_seed_candidate_titles(self) -> set[str]:
+        """Concrete source titles eligible for doc-anchored insight seeds.
+
+        Metadata paths are authoritative: a Cortex page may expose its claim
+        text as ``title``, so filtering only titles that start with ``cortex-``
+        lets derivative belief pages enter the seed pool.
+        """
+        try:
+            results = self._get_all(["metadatas"])
+            titles: set[str] = set()
+            for meta in results.get("metadatas") or []:
+                if not isinstance(meta, dict):
+                    continue
+                source_path = str(meta.get("source_path") or "").replace("\\", "/")
+                parts = [part.casefold() for part in source_path.split("/") if part]
+                if not parts or parts[0] not in {"pages", "notes"}:
+                    continue
+                title = meta.get("title")
+                if isinstance(title, str) and title.strip():
+                    titles.add(title.strip())
+            return titles
+        except Exception as e:
+            logging.error(f"Failed to get seed candidate titles: {e}")
+            return set()
+
     def get_total_chunks_count(self) -> int:
         """Returns the total number of chunks in the collection."""
         try:

@@ -173,6 +173,28 @@ def test_self_and_derivative_sources_excluded(env):
     assert len(llm.calls) == 1
 
 
+def test_relative_cortex_path_and_claim_id_title_are_excluded(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    rag = _StubRAG(
+        [
+            _hit(
+                "主張文字作為 title",
+                source_path="Cortex/claim-page.md",
+            ),
+            _hit(
+                "cortex-thin1",
+                source_path="another-claim-page.md",
+            ),
+            _hit("Independent", source_path="pages/Independent.md"),
+        ]
+    )
+
+    result = _run(env, _StubLLM(), rag)
+
+    assert [j.title for j in result.scans[0].judgments] == ["Independent"]
+    assert result.scans[0].excluded_self == 2
+
+
 def test_distance_gate_excludes_far_hits(env):
     _claim_page(env["cortex"], "cortex-thin1", "主張 A")
     rag = _StubRAG([_hit("Far Doc", distance=0.9), _hit("Near Doc", distance=0.2)])
@@ -209,6 +231,48 @@ def test_same_title_different_sources_are_distinct_candidates(env):
     result = _run(env, _StubLLM(), rag)
 
     assert [j.title for j in result.scans[0].judgments] == ["Shared Title", "Shared Title"]
+
+
+def test_part_stitched_and_synthesis_share_one_source_family(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A", falsifier="")
+    rag = _StubRAG(
+        [
+            _hit(
+                "Doc (Synthesis)",
+                distance=0.3,
+                source_path="pages/Doc/Doc (Synthesis).md",
+            ),
+            _hit(
+                "Doc (Stitched)",
+                distance=0.2,
+                source_path="pages/Doc/Doc (Stitched).md",
+            ),
+            _hit(
+                "Doc (Part 3)",
+                distance=0.1,
+                source_path="pages/Doc/Doc (Part 3).md",
+            ),
+        ]
+    )
+
+    result = _run(env, _StubLLM(), rag)
+
+    assert [j.title for j in result.scans[0].judgments] == ["Doc (Part 3)"]
+    assert result.scans[0].judgments[0].distance == 0.1
+
+
+def test_same_filename_in_different_directories_remains_distinct(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A", falsifier="")
+    rag = _StubRAG(
+        [
+            _hit("Doc A", source_path="pages/A/Doc.md"),
+            _hit("Doc B", source_path="pages/B/Doc.md"),
+        ]
+    )
+
+    result = _run(env, _StubLLM(), rag)
+
+    assert [j.title for j in result.scans[0].judgments] == ["Doc A", "Doc B"]
 
 
 def test_non_finite_distance_is_excluded(env):

@@ -216,6 +216,48 @@ def test_novelty_survives_embedding_dim_change(patch_env):
     assert all(len(v["embedding"]) == 2 for v in history.values())
 
 
+def test_novelty_retries_transient_embedding_failure(patch_env, monkeypatch):
+    class FlakyRAG(FakeRAG):
+        def __init__(self):
+            super().__init__([])
+            self.calls = 0
+
+        def ef(self, texts):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("embedding timeout")
+            return super().ef(texts)
+
+    monkeypatch.setattr("core.retrying.time.sleep", lambda _seconds: None)
+    rag = FlakyRAG()
+
+    signals = compute_signals("novel stuff here", [], rag, FakeLLM())
+
+    assert signals.novelty == 1.0
+    assert rag.calls == 2
+
+
+def test_novelty_purges_malformed_and_zero_norm_history(patch_env):
+    patch_env.write_text(
+        json.dumps(
+            {
+                "null-entry": None,
+                "zero-vector": {"embedding": [0.0, 0.0], "ts": "old"},
+                "non-finite": {"embedding": [float("nan"), 1.0], "ts": "old"},
+                "valid": {"embedding": [1.0, 0.0], "ts": "old"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    signals = compute_signals("novel stuff here", [], FakeRAG([]), FakeLLM())
+
+    assert signals.novelty == 1.0
+    history = json.loads(patch_env.read_text(encoding="utf-8"))
+    assert "valid" in history
+    assert len(history) == 2
+
+
 # -- S2 Tests --
 
 

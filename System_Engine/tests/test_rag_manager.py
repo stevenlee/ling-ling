@@ -171,6 +171,28 @@ class TestRAGManagerLogic:
         assert get_effective_model_name("gemini", None) == "text-embedding-004"
         assert get_effective_model_name("gemini", "custom-gemini") == "custom-gemini"
 
+    def test_seed_candidate_titles_use_source_path_metadata(self):
+        manager = RAGManager.__new__(RAGManager)
+        manager._get_all = MagicMock(
+            return_value={
+                "metadatas": [
+                    {"title": "Page", "source_path": "pages/Page/Page.md"},
+                    {"title": "Note", "source_path": r"Notes\Note.md"},
+                    {
+                        "title": "claim text that does not start with cortex-",
+                        "source_path": "Cortex/cortex-1.md",
+                    },
+                    {"title": "Insight", "source_path": "Insights/Insight.md"},
+                    {"title": "Legacy", "source": "pages/Legacy.md"},
+                    {"title": "  ", "source_path": "pages/Blank.md"},
+                    None,
+                ]
+            }
+        )
+
+        assert manager.get_seed_candidate_titles() == {"Page", "Note"}
+        manager._get_all.assert_called_once_with(["metadatas"])
+
     def test_sanitize_tag_key(self):
         # Normalized tags
         assert RAGManager._sanitize_tag_key("China/History") == "tag_china_history"

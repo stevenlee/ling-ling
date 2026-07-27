@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -50,6 +51,8 @@ _MAX_PASSAGES = 3
 _TOP_K = 5
 
 _VALID_RELATIONS = ("supports", "contradicts", "neutral")
+_DERIVATIVE_ROOTS = {"cortex", "insights", "fromlingling"}
+_SOURCE_VARIANT_RE = re.compile(r"\s+\((?:Part\s+\d+|Stitched|Synthesis)\)$", re.IGNORECASE)
 
 # Control-plane JSON-extraction prompt: stays in code on purpose (the
 # content/control boundary from the prompt-system review — vault files carry
@@ -142,9 +145,12 @@ def _is_independent(hit: dict, page) -> tuple[bool, str]:
     path = str(meta.get("source_path") or meta.get("source") or "")
     if not title:
         return False, "untitled"
+    if title.casefold().startswith("cortex-") or title.casefold() == str(page.claim_id).casefold():
+        return False, "derivative"
     if title.lstrip("✅").strip().startswith(("Scout-", "Dig-", "EvidenceTrace-")):
         return False, "own-report"
-    if any(marker in path for marker in ("/Cortex/", "/Insights/", "/fromLingLing/")):
+    path_parts = {part.casefold() for part in path.replace("\\", "/").split("/") if part.strip()}
+    if path_parts & _DERIVATIVE_ROOTS:
         return False, "derivative"
     # Insight filenames truncate long source titles, so origin matching works
     # on a prefix — but only when the prefix is long enough to be distinctive
@@ -162,6 +168,23 @@ def _is_independent(hit: dict, page) -> tuple[bool, str]:
             if (prefix in s or s[:24] in title) if fuzzy else (title == s):
                 return False, "self-source"
     return True, ""
+
+
+def _source_family(hit: dict) -> str:
+    """Canonical underlying document key across Part/Stitched/Synthesis views."""
+    meta = hit.get("metadata") or {}
+    source = str(meta.get("source_path") or meta.get("source") or "").strip()
+    source_path = Path(source.replace("\\", "/")) if source else None
+    name = source_path.stem if source_path else ""
+    name = name or str(meta.get("title") or "").strip()
+    previous = None
+    while name and name != previous:
+        previous = name
+        name = _SOURCE_VARIANT_RE.sub("", name).strip()
+    if source_path:
+        parent = source_path.parent.as_posix().casefold()
+        return f"{parent}/{name.casefold()}" if parent != "." else name.casefold()
+    return name.casefold()
 
 
 def _candidate_passages(rag, page, max_distance: float) -> tuple[list[dict], int, int]:
@@ -184,10 +207,7 @@ def _candidate_passages(rag, page, max_distance: float) -> tuple[list[dict], int
             logging.warning(f"evidence_traceback: retrieval failed for {page.claim_id}: {e}")
             continue
         for hit in hits:
-            meta = hit.get("metadata") or {}
-            title = str(meta.get("title") or "").strip()
-            source = str(meta.get("source_path") or meta.get("source") or "").strip()
-            key = source or title
+            key = _source_family(hit)
             if not key:
                 key = f"untitled:{len(candidate_order)}"
             previous = candidates.get(key)

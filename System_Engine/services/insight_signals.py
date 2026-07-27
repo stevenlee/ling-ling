@@ -15,7 +15,9 @@ from core.config import (
     NOTES_DIR,
 )
 from core.parser import strip_body_frontmatter
+from core.retrying import retry_call
 from core.vault_utils import sanitize_filename
+from services.ingest.atomic_io import atomic_write_text
 
 
 @dataclass
@@ -31,6 +33,27 @@ class InsightSignals:
 
 _WIKILINK_RE = re.compile(r"\[\[(.*?)\]\]")
 _sidecar_lock = threading.Lock()
+
+
+def _valid_history_entries(history: object, emb_dim: int) -> tuple[dict, int]:
+    """Return consumer-safe sidecar entries and the number discarded."""
+    if not isinstance(history, dict):
+        return {}, 1
+    clean = {}
+    for key, data in history.items():
+        if not isinstance(key, str) or not isinstance(data, dict):
+            continue
+        raw_emb = data.get("embedding")
+        if not isinstance(raw_emb, list) or len(raw_emb) != emb_dim:
+            continue
+        try:
+            vector = np.asarray(raw_emb, dtype=float)
+        except (TypeError, ValueError):
+            continue
+        if not np.all(np.isfinite(vector)) or np.linalg.norm(vector) <= 0:
+            continue
+        clean[key] = data
+    return clean, len(history) - len(clean)
 
 
 def compute_signals(
@@ -93,7 +116,19 @@ def compute_signals(
         if rag and hasattr(rag, "ef"):
             core_text, _ = strip_body_frontmatter(report_content)
             core_text = core_text[:2000]
-            emb = rag.ef([core_text])[0]
+            batch = retry_call(
+                lambda: rag.ef([core_text]),
+                retries=2,
+                initial_delay=0.5,
+                log_label="InsightSignals novelty embedding",
+            )
+            if not isinstance(batch, (list, tuple)) or len(batch) != 1:
+                raise ValueError("embedding backend did not return exactly one vector")
+            emb = np.asarray(batch[0], dtype=float)
+            if emb.ndim != 1 or len(emb) == 0:
+                raise ValueError("embedding backend returned an empty or non-vector result")
+            if not np.all(np.isfinite(emb)) or np.linalg.norm(emb) <= 0:
+                raise ValueError("embedding backend returned a non-finite or zero-norm vector")
 
             with _sidecar_lock:
                 history = {}
@@ -104,20 +139,13 @@ def compute_signals(
                         logging.warning(f"Failed to read {INSIGHT_SIGNALS_FILE}: {e}")
                         history = {}
 
-                # Drop sidecar entries whose embedding dim doesn't match the
-                # current model (e.g. 768-dim leftovers from before bge-m3):
-                # np.dot would raise on them, killing novelty forever — and the
-                # exception fired before the save below, so the poisoned file
-                # never healed on its own.
                 emb_dim = len(emb)
-                stale = [k for k, v in history.items() if len(v.get("embedding") or []) != emb_dim]
-                if stale:
+                history, discarded = _valid_history_entries(history, emb_dim)
+                if discarded:
                     logging.info(
-                        f"InsightSignals: purging {len(stale)} sidecar entries with "
-                        f"embedding dim != {emb_dim} (embedding model changed)"
+                        f"InsightSignals: purging {discarded} malformed, non-finite, "
+                        f"zero-norm, or dimension-mismatched sidecar entries (expected {emb_dim})"
                     )
-                    for k in stale:
-                        del history[k]
 
                 # Content-hash id, computed up front so the comparison loop can
                 # skip the insight's own earlier entry — otherwise recomputing
@@ -159,12 +187,12 @@ def compute_signals(
                         sorted_keys = sorted(history.keys(), key=lambda k: history[k].get("ts", ""))
                         history = {k: history[k] for k in sorted_keys[-500:]}
 
-                    INSIGHT_SIGNALS_FILE.parent.mkdir(parents=True, exist_ok=True)
-                    tmp_file = INSIGHT_SIGNALS_FILE.with_suffix(".tmp")
-                    tmp_file.write_text(json.dumps(history, ensure_ascii=False), encoding="utf-8")
-                    tmp_file.replace(INSIGHT_SIGNALS_FILE)
-    except Exception as e:
-        logging.error(f"InsightSignals: Novelty calculation failed: {e}")
+                    atomic_write_text(
+                        INSIGHT_SIGNALS_FILE,
+                        json.dumps(history, ensure_ascii=False),
+                    )
+    except Exception:
+        logging.exception("InsightSignals: Novelty calculation failed")
 
     def _load_source_contents(titles: list[str]) -> list[str]:
         contents = []

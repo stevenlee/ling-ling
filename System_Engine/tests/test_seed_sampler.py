@@ -22,6 +22,15 @@ class FakeTrace:
         return self.hits
 
 
+class MetadataRAG(FakeRAG):
+    def __init__(self, titles, seed_titles):
+        super().__init__(titles)
+        self.seed_titles = set(seed_titles)
+
+    def get_seed_candidate_titles(self):
+        return self.seed_titles
+
+
 def _sampler(tmp_path, titles, hits=(), epsilon=0.5):
     return SeedSampler(
         FakeRAG(titles),
@@ -45,6 +54,19 @@ class TestPoolFiltering:
             ],
         )
         assert sampler._candidate_titles() == ["Another Doc", "Good Doc"]
+
+    def test_prefers_metadata_filtered_seed_api(self, tmp_path):
+        rag = MetadataRAG(
+            titles={"Concrete Doc", "claim text that does not start with cortex-"},
+            seed_titles={"Concrete Doc"},
+        )
+        sampler = SeedSampler(
+            rag,
+            FakeTrace([]),
+            state_file=tmp_path / "seed_history.json",
+        )
+
+        assert sampler._candidate_titles() == ["Concrete Doc"]
 
     def test_empty_pool_returns_empty(self, tmp_path):
         assert _sampler(tmp_path, []).select_targets(2) == []

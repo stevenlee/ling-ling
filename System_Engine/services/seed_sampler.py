@@ -48,7 +48,10 @@ class SeedSampler:
 
     def _candidate_titles(self) -> list[str]:
         try:
-            titles = self.rag.get_all_indexed_titles()
+            if hasattr(self.rag, "get_seed_candidate_titles"):
+                titles = self.rag.get_seed_candidate_titles()
+            else:
+                titles = self.rag.get_all_indexed_titles()
         except Exception as e:
             logging.warning(f"SeedSampler: title listing failed: {e}")
             return []
