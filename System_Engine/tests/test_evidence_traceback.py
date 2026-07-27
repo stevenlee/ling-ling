@@ -45,7 +45,8 @@ def _claim_page(
     return page
 
 
-def _hit(title, text="passage text", distance=0.3, source_path="/vault/pages/x/doc.md"):
+def _hit(title, text="passage text", distance=0.3, source_path=None):
+    source_path = source_path or f"/vault/pages/{title}.md"
     return {
         "text": text,
         "distance": distance,
@@ -61,6 +62,14 @@ class _StubRAG:
     def query_notes(self, query, top_k=3, **kwargs):
         self.queries.append(query)
         return list(self.hits)
+
+
+class _PerQueryRAG:
+    def __init__(self, hits_by_query):
+        self.hits_by_query = hits_by_query
+
+    def query_notes(self, query, top_k=3, **kwargs):
+        return list(self.hits_by_query[query])
 
 
 class _StubLLM:
@@ -171,6 +180,43 @@ def test_distance_gate_excludes_far_hits(env):
     scan = result.scans[0]
     assert [j.title for j in scan.judgments] == ["Near Doc"]
     assert scan.excluded_far >= 1
+
+
+def test_same_source_keeps_nearest_hit_across_queries(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A", falsifier="反例情境 X")
+    rag = _PerQueryRAG(
+        {
+            "反例情境 X": [_hit("Same Doc", distance=0.9)],
+            "主張 A": [_hit("Same Doc", distance=0.2)],
+        }
+    )
+
+    result = _run(env, _StubLLM(), rag)
+
+    assert [j.title for j in result.scans[0].judgments] == ["Same Doc"]
+    assert result.scans[0].judgments[0].distance == 0.2
+
+
+def test_same_title_different_sources_are_distinct_candidates(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A", falsifier="")
+    rag = _StubRAG(
+        [
+            _hit("Shared Title", source_path="/vault/pages/a.md"),
+            _hit("Shared Title", source_path="/vault/pages/b.md"),
+        ]
+    )
+
+    result = _run(env, _StubLLM(), rag)
+
+    assert [j.title for j in result.scans[0].judgments] == ["Shared Title", "Shared Title"]
+
+
+def test_non_finite_distance_is_excluded(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    result = _run(env, _StubLLM(), _StubRAG([_hit("NaN Doc", distance=float("nan"))]))
+
+    assert result.scans[0].judgments == []
+    assert result.scans[0].excluded_far == 1
 
 
 def test_contradicts_maps_to_tension_action(env):

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -172,8 +173,8 @@ def _candidate_passages(rag, page, max_distance: float) -> tuple[list[dict], int
         queries.append(page.falsifier.strip()[:500])
     queries.append(page.claim.strip()[:500])
 
-    seen_titles: set[str] = set()
-    passages: list[dict] = []
+    candidates: dict[str, dict] = {}
+    candidate_order: list[str] = []
     excluded_self = 0
     excluded_far = 0
     for query in queries:
@@ -185,19 +186,47 @@ def _candidate_passages(rag, page, max_distance: float) -> tuple[list[dict], int
         for hit in hits:
             meta = hit.get("metadata") or {}
             title = str(meta.get("title") or "").strip()
-            if title in seen_titles:
+            source = str(meta.get("source_path") or meta.get("source") or "").strip()
+            key = source or title
+            if not key:
+                key = f"untitled:{len(candidate_order)}"
+            previous = candidates.get(key)
+            if previous is None:
+                candidates[key] = hit
+                candidate_order.append(key)
                 continue
-            seen_titles.add(title)
-            distance = hit.get("distance")
-            if isinstance(distance, (int, float)) and distance > max_distance:
-                excluded_far += 1
-                continue
-            independent, _why = _is_independent(hit, page)
-            if not independent:
-                excluded_self += 1
-                continue
-            passages.append(hit)
-    return passages[:_MAX_PASSAGES], excluded_self, excluded_far
+            old_distance = previous.get("distance")
+            new_distance = hit.get("distance")
+            old_rank = (
+                float(old_distance)
+                if isinstance(old_distance, (int, float)) and math.isfinite(float(old_distance))
+                else math.inf
+            )
+            new_rank = (
+                float(new_distance)
+                if isinstance(new_distance, (int, float)) and math.isfinite(float(new_distance))
+                else math.inf
+            )
+            if new_rank < old_rank:
+                candidates[key] = hit
+
+    passages: list[dict] = []
+    for key in candidate_order:
+        hit = candidates[key]
+        distance = hit.get("distance")
+        if isinstance(distance, (int, float)) and (
+            not math.isfinite(float(distance)) or distance > max_distance
+        ):
+            excluded_far += 1
+            continue
+        independent, _why = _is_independent(hit, page)
+        if not independent:
+            excluded_self += 1
+            continue
+        passages.append(hit)
+        if len(passages) >= _MAX_PASSAGES:
+            break
+    return passages, excluded_self, excluded_far
 
 
 def _judge_passage(llm, page, hit: dict) -> PassageJudgment:
