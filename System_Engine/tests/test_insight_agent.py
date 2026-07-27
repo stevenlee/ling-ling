@@ -389,6 +389,51 @@ class TestMirrorMetadata:
         assert len(mirrored) == 1
         assert mirrored[0].name.endswith("[Vault][full-insight].md")
 
+    def test_mirror_failure_reports_canonical_partial_commit(self, stub_agent, monkeypatch):
+        agent, from_llm_dir, _ = stub_agent
+
+        def fail_mirror(_path, _text):
+            raise OSError("mirror disk full")
+
+        monkeypatch.setattr("agents.insight.report_output.atomic_write_text", fail_mirror)
+
+        from agents.insight.report_output import InsightArtifactPartialCommit
+
+        with pytest.raises(InsightArtifactPartialCommit, match="still needs repair") as exc_info:
+            agent._write_and_mirror_report(
+                "Test Report",
+                "Body.",
+                "report_insight",
+                requested_cmd="insight-recency",
+            )
+
+        assert exc_info.value.canonical_path.parent == from_llm_dir
+        assert exc_info.value.canonical_path.exists()
+
+
+class TestGenerationFailureBoundary:
+    def test_error_sentinel_is_not_written_or_mirrored(self, stub_agent):
+        agent, from_llm_dir, insights_dir = stub_agent
+        agent.strategies = {
+            "recency": {
+                "name": "Recency",
+                "description": "Recent notes",
+                "pipeline": "single",
+            }
+        }
+        agent._check_skill_preconditions = lambda _rules: []
+        agent._run_single = lambda *_args: "Error: Request timed out."
+        agent._signals_meta = lambda *_args: pytest.fail("failure must not reach signals")
+
+        result = agent.generate_insight("recency")
+
+        from agents.insight_agent import InsightGenerationFailure
+
+        assert isinstance(result, InsightGenerationFailure)
+        assert result.status == "failed"
+        assert not list(from_llm_dir.iterdir())
+        assert not list(insights_dir.iterdir())
+
 
 class TestPlannerPreview:
     def test_execute_planner_mode_bypasses_existing_insight_pipelines(self, stub_agent):

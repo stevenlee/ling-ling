@@ -12,6 +12,7 @@ from core.parser import (
 )
 from core.ui import ui
 from core.utils import MtimeCache
+from services.ingest.atomic_io import atomic_write_text
 
 # Shared across all agent instances so a multi-strategy run only re-reads each
 # prompt template once per session (auto-invalidates on edit).
@@ -281,7 +282,7 @@ class BaseAgent:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M")
         filename = f"✅{report_type}-{safe_title}-{timestamp}.md"
         output_path = FROM_LLM_DIR / filename
-        output_path.write_text(full_markdown, encoding="utf-8")
+        atomic_write_text(output_path, full_markdown)
         if hasattr(self.llm, "trace_store"):
             try:
                 self.llm.trace_store.record_artifact(

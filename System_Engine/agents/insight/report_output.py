@@ -12,6 +12,20 @@ from typing import Any
 import logging
 import re
 from datetime import datetime
+from pathlib import Path
+
+from services.ingest.atomic_io import atomic_write_text
+
+
+class InsightArtifactPartialCommit(RuntimeError):
+    """Canonical report committed, but its indexable Insights mirror failed."""
+
+    def __init__(self, canonical_path: Path, mirror_error: Exception):
+        self.canonical_path = canonical_path
+        super().__init__(
+            f"Insight report committed at {canonical_path}, but the Insights mirror "
+            f"still needs repair: {mirror_error}"
+        )
 
 
 class ReportOutputMixin:
@@ -21,6 +35,33 @@ class ReportOutputMixin:
     rag: Any
     insights_dir: Any
     _write_report: Any
+
+    def _write_and_mirror_report(
+        self,
+        title: str,
+        body: str,
+        report_type: str,
+        metadata: dict | None = None,
+        *,
+        requested_cmd: str,
+        related_titles: list[str] | None = None,
+    ) -> str:
+        """Commit the canonical report, then its derived indexable mirror.
+
+        The canonical file is the commit point. A later mirror failure is
+        surfaced as a partial commit so callers never report that nothing was
+        applied.
+        """
+        canonical_path, full_markdown = self._write_report(title, body, report_type, metadata)
+        try:
+            self._mirror_to_insights(
+                full_markdown,
+                requested_cmd=requested_cmd,
+                related_titles=related_titles,
+            )
+        except Exception as exc:
+            raise InsightArtifactPartialCommit(canonical_path, exc) from exc
+        return full_markdown
 
     def _signals_meta(self, content: str, target_titles, config: dict | None = None) -> dict:
         """Signals metadata block ({} when disabled). Shared by
@@ -90,7 +131,7 @@ class ReportOutputMixin:
             requested_cmd=requested_cmd or self._cmd_from_legacy_prefix(prefix),
             related_titles=related_titles,
         )
-        insight_file.write_text(full_markdown, encoding="utf-8")
+        atomic_write_text(insight_file, full_markdown)
 
     @classmethod
     def _build_insights_filename(

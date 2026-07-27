@@ -58,6 +58,7 @@ class PlannerFlowMixin:
     strategies: dict
     _write_report: Any
     _mirror_to_insights: Any
+    _write_and_mirror_report: Any
 
     def _run_planner_preview(
         self,
@@ -190,21 +191,17 @@ class PlannerFlowMixin:
             title = "Error"
 
         report_type = "ins-plan-exe" if meta.get("planner_mode") == "execute" else "ins-plan-pre"
-        _, full_markdown = self._write_report(
+        requested_cmd = (
+            "insight-plan-execute" if report_type == "ins-plan-exe" else "insight-plan-preview"
+        )
+        return self._write_and_mirror_report(
             title,
             body,
             report_type,
             meta,
-        )
-        requested_cmd = (
-            "insight-plan-execute" if report_type == "ins-plan-exe" else "insight-plan-preview"
-        )
-        self._mirror_to_insights(
-            full_markdown,
             requested_cmd=requested_cmd,
             related_titles=target_titles,
         )
-        return full_markdown
 
     def _render_planner_preview_report(
         self,

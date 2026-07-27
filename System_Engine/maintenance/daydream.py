@@ -267,6 +267,8 @@ class DaydreamPump:
         entry = data.get("insight_daily") if isinstance(data, dict) else None
         if not isinstance(entry, dict):
             return False
+        if entry.get("last_status") == "failed":
+            return False
         try:
             return datetime.fromisoformat(entry.get("last_run_at")).date() == self._clock().date()
         except (TypeError, ValueError):

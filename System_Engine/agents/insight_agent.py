@@ -23,6 +23,32 @@ from core.config import SKILLS_DIR, WIKI_VAULT_DIR
 _WIKILINK_RE = re.compile(r"\[\[(.*?)\]\]")
 
 
+class InsightGenerationFailure(str):
+    """String-compatible failure result for insight entry points.
+
+    Existing command callers render the returned string directly, while
+    schedulers need a reliable signal that no artifact was produced.
+    """
+
+    status: str
+
+    def __new__(cls, message: str, *, status: str = "failed"):
+        value = super().__new__(cls, message)
+        value.status = status
+        return value
+
+
+def _generation_failure(content: object) -> InsightGenerationFailure | None:
+    if not isinstance(content, str) or not content.strip():
+        return InsightGenerationFailure("Insight generation returned no content.")
+    # LLMClient.answer_query historically returns this sentinel on transport
+    # exhaustion. Reject it at the artifact boundary so it cannot become a
+    # knowledge-base page.
+    if content.lstrip().startswith("Error:"):
+        return InsightGenerationFailure(content.strip())
+    return None
+
+
 class InsightAgent(
     StrategyLoadingMixin,
     PlannerFlowMixin,
@@ -107,7 +133,7 @@ class InsightAgent(
     ) -> str:
         if strategy_id not in self.strategies:
             if not self.strategies:
-                return "💧 Error: No strategies found."
+                return InsightGenerationFailure("💧 Error: No strategies found.")
             strategy_id = random.choice(list(self.strategies.keys()))
 
         config = self.strategies[strategy_id]
@@ -120,7 +146,7 @@ class InsightAgent(
             message = f"⏸️ 技能「{strategy_id}」前置條件未滿足：{reasons}"
             ui.error(message)
             logging.warning(f"Insight skill '{strategy_id}' skipped: {reasons}")
-            return message
+            return InsightGenerationFailure(message, status="skipped")
 
         pipeline = config.get("pipeline", "single")
         resolved_template = forced_template or config.get("template")
@@ -133,6 +159,11 @@ class InsightAgent(
             report_content = self._run_montecarlo(config, user_directive, resolved_template)
         else:
             report_content = self._run_single(config, user_directive, resolved_template)
+
+        failure = _generation_failure(report_content)
+        if failure is not None:
+            logging.error("Insight generation aborted before artifact write: %s", failure)
+            return failure
 
         meta = {
             "exercise_strategy": strategy_id,
@@ -147,13 +178,14 @@ class InsightAgent(
 
         report_content += self._maybe_artifact(report_content)
 
-        _, full_markdown = self._write_report(f"{config['name']}", report_content, "ins", meta)
-        self._mirror_to_insights(
-            full_markdown,
+        return self._write_and_mirror_report(
+            f"{config['name']}",
+            report_content,
+            "ins",
+            meta,
             requested_cmd=f"insight-{strategy_id}",
             related_titles=target_titles,
         )
-        return full_markdown
 
     def generate_full_insight(
         self,
@@ -175,10 +207,21 @@ class InsightAgent(
             else:
                 section_content = self._run_single(config, user_directive, resolved_template)
 
+            failure = _generation_failure(section_content)
+            if failure is not None:
+                logging.warning("Full insight skipped failed strategy %s: %s", strategy_id, failure)
+                continue
             section_results.append(f"## 📌 分析維度：{config['name']}\n\n{section_content}")
             insight_seeds.extend(self._extract_seeds_from_section(section_content, config["name"]))
 
+        if not section_results:
+            return InsightGenerationFailure("Full insight generation failed for every strategy.")
+
         cross_synthesis = self._cross_strategy_synthesis(insight_seeds, user_directive)
+        failure = _generation_failure(cross_synthesis)
+        if failure is not None:
+            logging.error("Full insight synthesis aborted before artifact write: %s", failure)
+            return failure
         sections_joined = "\n\n---\n\n".join(section_results)
 
         final_markdown = (
@@ -193,13 +236,14 @@ class InsightAgent(
 
         final_markdown += self._maybe_artifact(cross_synthesis)
 
-        _, full_markdown = self._write_report("full", final_markdown, "ins", meta)
-        self._mirror_to_insights(
-            full_markdown,
+        return self._write_and_mirror_report(
+            "full",
+            final_markdown,
+            "ins",
+            meta,
             requested_cmd="full-insight",
             related_titles=target_titles,
         )
-        return full_markdown
 
     def _run_single(
         self, config: dict, user_directive: str, resolved_template: str | None = None

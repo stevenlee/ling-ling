@@ -50,23 +50,27 @@ def run_daily_insight(llm, rag, *, occasion: str = "Scheduled") -> DailyInsightR
     # (80% broken links, refute coverage 0) and is demoted to the weekly task.
     from core.config import INSIGHT_SEED_TARGETS
     from services.seed_sampler import SeedSampler
-    from agents.insight_agent import InsightAgent
+    from agents.insight_agent import InsightAgent, InsightGenerationFailure
 
     insight_agent = InsightAgent(llm, rag)
     sampler = SeedSampler(rag, getattr(llm, "trace_store", None))
     targets = sampler.select_targets(INSIGHT_SEED_TARGETS)
     if not targets:
-        insight_agent.generate_full_insight(
+        generated = insight_agent.generate_full_insight(
             user_directive=f"{occasion} daily comprehensive reflection."
         )
+        if isinstance(generated, InsightGenerationFailure):
+            return DailyInsightResult(generated.status, str(generated))
         return DailyInsightResult("succeeded", "No seed targets; fell back to full insight.")
     links = " ".join(f"[[{t}]]" for t in targets)
     strategy = pick_rotation_strategy(insight_agent.strategies)
-    insight_agent.generate_insight(
+    generated = insight_agent.generate_insight(
         strategy,
         user_directive=f"{occasion} doc-anchored insight. {links}",
         target_titles=targets,
     )
+    if isinstance(generated, InsightGenerationFailure):
+        return DailyInsightResult(generated.status, str(generated))
     return DailyInsightResult(
         "succeeded", f"Doc-anchored insight ({strategy}) generated for: {', '.join(targets)}."
     )

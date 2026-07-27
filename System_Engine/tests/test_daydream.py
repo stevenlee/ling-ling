@@ -119,6 +119,28 @@ class TestLadder:
         assert ins == ["Daydream makeup"]
         assert pump._ledger["budget"]["insight"] == 1
 
+    def test_failed_nightly_insight_is_still_owed(self, env):
+        tmp_path, _, _, _, monkeypatch = env
+        state_file = tmp_path / "maintenance_state.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "insight_daily": {
+                        "last_run_at": DAY.isoformat(),
+                        "last_status": "failed",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(dd_mod, "has_pending_insights", lambda *a, **k: False)
+        ins = _fake_insight(monkeypatch)
+        pump = _pump(tmp_path, ran_today=None)
+
+        pump._run_step()
+
+        assert ins == ["Daydream makeup"]
+
     def test_no_makeup_before_tonights_window(self, env):
         """00:30, before DREAMING_FROM: the night hasn't happened yet, so
         nothing is owed — an early makeup would double-generate alongside the
