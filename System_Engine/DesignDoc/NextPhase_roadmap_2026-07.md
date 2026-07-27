@@ -121,8 +121,15 @@
 7. **產出頻率**：N.1 發現 7/15-18 三個夜間 insight slot 缺席，疑似被重 ingestion（Mathematics for CS 等）排擠。看重 ingestion 過後 slot 是否回歸每日一篇。
 
 **待查 bug（非趨勢、可隨時查）：**
-8. **insight 生成逾時仍落盤**（N.1 §3 小項的根因）：7/22 fable body=「Error: Request timed out.」照樣寫成檔（已隔離到 `Backups/audit-cleanup-20260724/`）。生成層應攔截失敗、不落盤——比照 entity/critique 的「失敗不出貨」。查 `daily_insight`/montecarlo pipeline 的 LLM 逾時落盤路徑。
+8. ~~**insight 生成逾時仍落盤**~~：**✅ 完成（2026-07-27）**。根因是 `LLMClient.answer_query` 的 `Error: ...` sentinel 被 insight pipeline 當正常內容，`daily_insight` 又無條件回 `succeeded`。現在 generation artifact boundary 會拒絕空內容／error sentinel、不計 signals、不寫 canonical 或 mirror；排程收到明確 `failed`，Daydream 也把失敗夜間 slot 視為仍 owed。Full insight 會跳過單一失敗 strategy，但全數失敗或 cross-synthesis 失敗時不出貨。
 9. **novelty null 2/11**：觀察窗有 2 篇 novelty 算不出（7/22 fable=退化檔已處理；7/23 montecarlo 待查 signals 為何跳過）。
+
+## 3.6 Code review hardening（2026-07-27）
+
+- **Packaging**：setuptools 改為自動發現 `System_Engine` 下所有 package；wheel 安裝 smoke test 已驗證 `agents.insight`、`core.parsing`、`services.ingest/llm/rag/scout` 與 migrations 可匯入，避免 editable install 掩蓋缺包。
+- **Evidence traceback 候選完整性**：同一來源跨 falsifier／claim query 的 hits 先聚合、保留最佳 distance，再做距離與獨立性 gate；同 title 不同來源保持獨立，NaN／Inf distance fail-closed。仍維持 dry-run，不改 Cortex。
+- **Insight artifact commit point**：canonical report 與 Insights mirror 都改同目錄原子寫入；canonical 是 commit point，mirror 若失敗會明確回報「已提交、待修 mirror」，不再把 post-commit failure 說成未套用。
+- **驗證**：`make check` exit 0（ruff clean、mypy clean、1796 passed／1 skipped）；另以實建 wheel 安裝到隔離目錄後做 nested-package import smoke test。
 
 ---
 
