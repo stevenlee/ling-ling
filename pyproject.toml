@@ -56,7 +56,9 @@ dev = [
 
 [tool.setuptools]
 package-dir = {"" = "System_Engine"}
-packages = ["core", "services", "agents", "watchers", "maintenance", "tui"]
+
+[tool.setuptools.packages.find]
+where = ["System_Engine"]
 
 # ── pytest ────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
