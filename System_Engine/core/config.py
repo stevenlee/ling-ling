@@ -417,6 +417,7 @@ class DynamicSettings:
         # form; batch bounds the nightly LLM spend, the distance gate keeps
         # weakly-related passages out of judgment.
         ("evidence_traceback", "EVIDENCE_TRACEBACK_ENABLED", bool),
+        ("evidence_traceback_apply", "EVIDENCE_TRACEBACK_APPLY", bool),
         ("evidence_traceback_batch", "EVIDENCE_TRACEBACK_BATCH", int),
         ("evidence_traceback_max_distance", "EVIDENCE_TRACEBACK_MAX_DISTANCE", float),
     )
@@ -490,6 +491,10 @@ class DynamicSettings:
         # Evidence traceback (A2): default OFF — enable with
         # `evidence_traceback: true` in Scripture.md. Dry-run only for now.
         self.EVIDENCE_TRACEBACK_ENABLED = False
+        # Apply mode (default OFF): when true the scan MUTATES claim pages
+        # (append evidence / counterpoint, gentle reinforce) instead of only
+        # reporting. Opt-in on top of the scan after reviewing dry-run hit rates.
+        self.EVIDENCE_TRACEBACK_APPLY = False
         self.EVIDENCE_TRACEBACK_BATCH = 5
         self.EVIDENCE_TRACEBACK_MAX_DISTANCE = 0.45
         # Splitter selection: env value is the default (deployment), but

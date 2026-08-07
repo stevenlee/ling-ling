@@ -58,10 +58,18 @@ class _StubRAG:
     def __init__(self, hits):
         self.hits = hits
         self.queries = []
+        self.indexed = []
 
     def query_notes(self, query, top_k=3, **kwargs):
         self.queries.append(query)
         return list(self.hits)
+
+    # Apply mode re-indexes the mutated page (consolidation-style). No-op record.
+    def add_document(self, filepath, title, text, **kwargs):
+        self.indexed.append(title)
+
+    def add_facets(self, filepath, title, facets, **kwargs):
+        return True
 
 
 class _PerQueryRAG:
@@ -96,7 +104,9 @@ def env(tmp_path, monkeypatch):
     cortex.mkdir()
     monkeypatch.setattr("core.config.settings.EVIDENCE_TRACEBACK_BATCH", 5, raising=False)
     monkeypatch.setattr("core.config.settings.EVIDENCE_TRACEBACK_MAX_DISTANCE", 0.45, raising=False)
-    return {"cortex": cortex, "out": out, "state": state}
+    # Default OFF so a dev Scripture with apply:true can't leak into dry-run tests.
+    monkeypatch.setattr("core.config.settings.EVIDENCE_TRACEBACK_APPLY", False, raising=False)
+    return {"cortex": cortex, "out": out, "state": state, "monkeypatch": monkeypatch}
 
 
 def _run(env, llm, rag, now=_NOW) -> TracebackResult:
@@ -342,3 +352,181 @@ def test_short_title_needs_exact_match_to_count_as_self_source(env):
     _claim_page(env["cortex"], "cortex-thin1", "主張 A")
     result = _run(env, _StubLLM(), _StubRAG([_hit("Doc")]))
     assert [j.title for j in result.scans[0].judgments] == ["Doc"]
+
+
+# ── apply mode (EVIDENCE_TRACEBACK_APPLY=true) ───────────────────────────
+
+from services.cortex_store import parse_cortex_page  # noqa: E402
+
+
+def _apply_on(env):
+    env["monkeypatch"].setattr("core.config.settings.EVIDENCE_TRACEBACK_APPLY", True, raising=False)
+
+
+def _thin_claim_reinforceable(env, claim_id="cortex-thin1", claim="主張 A"):
+    # last_reinforced far in the past so R<1 and a reinforce actually moves S.
+    page = _claim_page(env["cortex"], claim_id, claim)
+    page.S = 1.0
+    page.confidence = 0.5
+    page.last_reinforced_at = "2026-05-01T00:00:00"
+    save_cortex_page(page)
+    return page
+
+
+def test_apply_supports_appends_evidence_and_reinforces(env):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    rag = _StubRAG([_hit("Independent Doc")])
+
+    result = _run(env, _StubLLM(relation="supports"), rag)
+
+    reloaded = parse_cortex_page(page.path)
+    # evidence thickened 1 → 2, no longer thin; new entry is EvidenceTrace-marked.
+    assert len(reloaded.evidence) == 2
+    markers = [e["insight"] for e in reloaded.evidence]
+    assert "[EvidenceTrace] Independent Doc" in markers
+    # gentle reinforce moved S up and nudged confidence.
+    assert reloaded.S > 1.0
+    assert reloaded.confidence == 0.55
+    # re-indexed (the CLAIM page, keyed by claim_id) + report reflects apply.
+    assert "cortex-thin1" in rag.indexed
+    report = result.report_path.read_text(encoding="utf-8")
+    assert "（apply）" in report
+    assert "已套用：+1 evidence＋強化" in report
+    assert result.scans[0].applied["added_evidence"] == 1
+
+
+def test_apply_contradicts_records_counterpoint_no_reinforce(env):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before_S, before_conf = page.S, page.confidence
+
+    result = _run(env, _StubLLM(relation="contradicts"), _StubRAG([_hit("Independent Doc")]))
+
+    reloaded = parse_cortex_page(page.path)
+    assert len(reloaded.evidence) == 1  # NOT thickened
+    assert any("Independent Doc" in c for c in reloaded.counterpoints)  # tension visible
+    assert reloaded.S == before_S  # no reinforce
+    assert reloaded.confidence == before_conf  # no auto-flip / dent
+    assert result.scans[0].applied["tensions"] == 1
+    assert "記 1 筆 tension" in result.report_path.read_text(encoding="utf-8")
+
+
+def test_apply_thickened_claim_leaves_thin_pool(env):
+    # Structural idempotency: once a support apply lifts a claim to 2 evidence,
+    # it drops out of the thin pool and is never re-scanned — so it cannot be
+    # double-counted on a later night.
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+
+    first = _run(env, _StubLLM(relation="supports"), _StubRAG([_hit("Independent Doc")]))
+    assert first.scans[0].applied["added_evidence"] == 1
+    assert len(parse_cortex_page(page.path).evidence) == 2
+
+    second = _run(
+        env,
+        _StubLLM(relation="supports"),
+        _StubRAG([_hit("Independent Doc")]),
+        now=datetime(2026, 7, 26, 3, 0),
+    )
+    # No longer thin → not re-scanned; still 2 evidence, not 3.
+    assert all(s.claim_id != "cortex-thin1" for s in second.scans)
+    assert len(parse_cortex_page(page.path).evidence) == 2
+
+
+def test_apply_scan_refreshes_existing_trace_marker_in_place(env):
+    # Direct unit test of the refresh branch: a claim that STAYS thin (its one
+    # real evidence plus a prior [EvidenceTrace] entry that was later trimmed
+    # elsewhere) — re-finding the same source refreshes, never double-appends
+    # or re-reinforces.
+    from maintenance.evidence_traceback import ClaimScan, PassageJudgment, _apply_scan
+
+    page = _thin_claim_reinforceable(env)
+    page.evidence.append(
+        {
+            "insight": "[EvidenceTrace] Independent Doc",
+            "sources": ["Independent Doc"],
+            "date": "2026-07-01",
+            "summary": "舊摘要",
+        }
+    )
+    save_cortex_page(page)
+    s_before = page.S
+
+    scan = ClaimScan(claim_id=page.claim_id, claim=page.claim, falsifier=page.falsifier)
+    scan.judgments = [
+        PassageJudgment(title="Independent Doc", relation="supports", reason="新摘要")
+    ]
+    applied = _apply_scan(page, scan, _StubRAG([]), _NOW)
+
+    assert applied["added_evidence"] == 0
+    assert applied["refreshed"] == 1
+    assert applied["reinforced"] is False
+    reloaded = parse_cortex_page(page.path)
+    markers = [e["insight"] for e in reloaded.evidence]
+    assert markers.count("[EvidenceTrace] Independent Doc") == 1  # not doubled
+    assert reloaded.S == s_before  # no second reinforce
+
+
+def test_apply_neutral_leaves_page_untouched(env):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+
+    result = _run(env, _StubLLM(relation="neutral"), _StubRAG([_hit("Independent Doc")]))
+
+    assert page.path.read_bytes() == before
+    assert result.scans[0].applied == {
+        "added_evidence": 0,
+        "refreshed": 0,
+        "tensions": 0,
+        "reinforced": False,
+    }
+
+
+def test_apply_write_failure_recorded_not_silent(env, monkeypatch):
+    _apply_on(env)
+    _thin_claim_reinforceable(env, "cortex-thin1", "主張 A")
+    _thin_claim_reinforceable(env, "cortex-thin2", "主張 B")
+    monkeypatch.setattr("core.config.settings.EVIDENCE_TRACEBACK_BATCH", 2, raising=False)
+
+    def boom(page):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("maintenance.evidence_traceback.save_cortex_page", boom, raising=False)
+    result = _run(env, _StubLLM(relation="supports"), _StubRAG([_hit("Independent Doc")]))
+
+    # Both claims recorded a write error; run still completed (never aborted).
+    assert result.status == "ok"
+    assert all(s.applied.get("error") for s in result.scans)
+    assert "寫入失敗" in result.report_path.read_text(encoding="utf-8")
+
+
+def test_dry_run_default_leaves_applied_none(env):
+    # env pins APPLY False → applied stays None, page untouched.
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+    result = _run(env, _StubLLM(relation="supports"), _StubRAG([_hit("Independent Doc")]))
+    assert result.scans[0].applied is None
+    assert page.path.read_bytes() == before
+
+
+def test_apply_contradicts_rescan_does_not_stack_counterpoints(env):
+    # A contradicts leaves the claim thin (evidence unchanged), so it WILL be
+    # re-scanned. Re-finding the same contradicting source must not stack
+    # duplicate counterpoints.
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+
+    _run(env, _StubLLM(relation="contradicts"), _StubRAG([_hit("Independent Doc")]))
+    after_first = parse_cortex_page(page.path).counterpoints
+    assert len(after_first) == 1
+
+    _run(
+        env,
+        _StubLLM(relation="contradicts"),
+        _StubRAG([_hit("Independent Doc")]),
+        now=datetime(2026, 7, 26, 3, 0),
+    )
+    after_second = parse_cortex_page(page.path).counterpoints
+    assert len(after_second) == 1  # same source → not stacked

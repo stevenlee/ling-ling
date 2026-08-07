@@ -34,6 +34,7 @@ scout_language: ""
 scout_max_items: 10
 scout_fetch_content: true
 evidence_traceback: true
+evidence_traceback_apply: true
 ---
 
 # 📜 Scripture (Settings)
@@ -81,6 +82,7 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 - **scout_mirror**: If `true`（預設），日報同步鏡射一份到 `Notes/Scout/`，讓它被 RAG 索引、可被 @ling 檢索到。`fromLingLing/` 的正本不受影響。
 - **evidence_traceback**: If `true`，每日 `evidence_traceback_daily` 任務對 Cortex 薄證據主張（evidence ≤1）做 falsifier-first 佐證掃描：先查「什麼會推翻它」再查主張本身，排除自我來源後由 LLM 判定 supports/contradicts/neutral，寫 `fromLingLing/✅EvidenceTrace-YYYY-MM-DD.md`。**目前為 dry-run 形態：只出報告、不寫入任何 Cortex 狀態**；看過命中率再決定開 apply。每輪掃 `evidence_traceback_batch`（預設 5）條、輪替不重複。（新任務註冊在 daemon 啟動時——第一次啟用需重啟 daemon；之後熱生效。）
 - **evidence_traceback_batch**: 每輪掃描的主張數上限（預設 5；LLM 花費 ≈ batch × 3 次 lean 呼叫）。
+- **evidence_traceback_apply**: If `true`，掃描不只出報告，還會**寫入 Cortex**（保守）：supports→追加一筆 `[EvidenceTrace]` 獨立佐證＋單次溫和強化（GAIN_REVALIDATION）＋小幅信心；contradicts→記為 counterpoint（頁面可見、待人審，**不自動翻案、不動信心**）；neutral/失敗不動。同源再掃到會就地刷新不重複計。default `false`（先 dry-run 看命中率再開）。報告標題改「（apply）」。
 - **evidence_traceback_max_distance**: RAG 候選段落的距離閘門（預設 0.45，越小越嚴）。
 
 ### 🔪 Chunking (how documents are split into Parts)

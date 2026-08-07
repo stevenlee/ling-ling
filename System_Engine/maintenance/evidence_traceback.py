@@ -15,15 +15,32 @@ re-finding its own origin as new support, so derivative content (Cortex/,
 Insights/, own reports) and the claim's originating sources are excluded from
 candidates.
 
-DRY-RUN ONLY (current form): judgments are written to a fromLingLing/ report;
-NOTHING in Cortex state is mutated. The apply path (append evidence / record
-tension / reinforce) ships separately once dry-run hit rates have been
-reviewed. The only file this task owns is its rotation-cursor state file —
-task bookkeeping, not belief state.
+TWO MODES:
+  * DRY-RUN (default, `evidence_traceback_apply: false`): judgments go to a
+    fromLingLing/ report; NOTHING in Cortex state is mutated.
+  * APPLY (`evidence_traceback_apply: true`): after review of the dry-run hit
+    rates (2026-08-07: 18% evidential, 0 error across 128 judgments), the scan
+    additionally MUTATES the claim, conservatively:
+      - supports  → append an independent-evidence entry (keyed by an
+        [EvidenceTrace] marker so a re-scan of the same source is idempotent),
+        then a SINGLE gentle reinforce (GAIN_REVALIDATION) + small confidence
+        step per apply. Thickens the belief's evidence — the whole point.
+      - contradicts → record the passage as a COUNTERPOINT (human-visible in
+        the rendered page). NO reinforce, NO confidence change, NO auto-flip —
+        surfaced for human adjudication, not decided by the scan.
+      - neutral / unparseable / error → no mutation.
+    Mutations go through save_cortex_page + a consolidation-style re-index, all
+    inside the daemon where the maintenance scheduler serialises Cortex writers
+    (single-writer discipline). The [EvidenceTrace] provenance and the derivative
+    self-source exclusion keep this from becoming an echo chamber.
+
+The only OTHER file this task owns is its rotation-cursor state file — task
+bookkeeping, not belief state.
 
 Failure semantics (per house hardening rules): an LLM failure or unparseable
 relation is COUNTED AND SHOWN as such, never coerced into "neutral" — a
-failure is not a verdict. One claim failing never aborts the batch.
+failure is not a verdict. One claim failing (judgment OR apply) never aborts
+the batch.
 """
 
 from __future__ import annotations
@@ -42,7 +59,12 @@ from core.config import (
     FROM_LLM_DIR,
     settings,
 )
-from services.cortex_store import active_evidence, load_all_pages
+from services.cortex_store import (
+    active_evidence,
+    load_all_pages,
+    render_cortex_page,
+    save_cortex_page,
+)
 from services.ingest.atomic_io import atomic_write_text
 
 # Candidate passages actually judged per claim (post-exclusion cap): keeps the
@@ -53,6 +75,18 @@ _TOP_K = 5
 _VALID_RELATIONS = ("supports", "contradicts", "neutral")
 _DERIVATIVE_ROOTS = {"cortex", "insights", "fromlingling"}
 _SOURCE_VARIANT_RE = re.compile(r"\s+\((?:Part\s+\d+|Stitched|Synthesis)\)$", re.IGNORECASE)
+
+# Apply-mode provenance marker: A2 evidence entries are keyed by this + the
+# source title so a re-scan of the same corroborating passage refreshes in
+# place (idempotent) instead of double-counting. It also visibly distinguishes
+# traceback-sourced evidence from insight-sourced evidence in the rendered page.
+_TRACE_MARKER = "[EvidenceTrace]"
+# Confidence bump per apply that adds ≥1 independent evidence — deliberately
+# smaller than consolidation's rediscovery step (0.1) and capped below its cap
+# (0.9): a corroborating passage is weaker signal than an independent insight
+# rediscovery, so it nudges rather than climbs.
+_APPLY_CONFIDENCE_STEP = 0.05
+_APPLY_CONFIDENCE_CAP = 0.8
 
 # Control-plane JSON-extraction prompt: stays in code on purpose (the
 # content/control boundary from the prompt-system review — vault files carry
@@ -90,6 +124,8 @@ class ClaimScan:
     judgments: list[PassageJudgment] = field(default_factory=list)
     excluded_self: int = 0
     excluded_far: int = 0
+    # Apply-mode outcome (None in dry-run): what was actually written to Cortex.
+    applied: dict | None = None
 
 
 @dataclass
@@ -302,22 +338,145 @@ def _dry_run_action(scan: ClaimScan) -> str:
     return "無（維持薄證據，交由 decay）"
 
 
-def _render_report(scans: list[ClaimScan], pool_size: int, now: datetime) -> str:
+def _apply_scan(page, scan: ClaimScan, rag, now: datetime) -> dict:
+    """Mutate the claim page from its judgments (apply mode). Conservative:
+    supports thicken evidence + a single gentle reinforce; contradicts become
+    human-visible counterpoints with no confidence change. Idempotent across
+    re-scans via the [EvidenceTrace] marker. Returns an actions dict; on any
+    failure returns {"error": <str>} and leaves the page as save left it."""
+    from services.cortex_decay import GAIN_REVALIDATION, reinforce
+
+    added_evidence = 0
+    refreshed = 0
+    tensions = 0
+    existing_markers = {e.get("insight") for e in page.evidence if isinstance(e, dict)}
+    existing_counterpoints = list(page.counterpoints)
+
+    for j in scan.judgments:
+        marker = f"{_TRACE_MARKER} {j.title}"
+        if j.relation == "supports":
+            entry = {
+                "insight": marker,
+                "sources": [j.title],
+                "date": now.strftime("%Y-%m-%d"),
+                "summary": j.reason or "（追溯佐證）",
+                "method": "evidence_traceback",
+            }
+            if marker in existing_markers:
+                # Same corroborating source found again — refresh in place, no
+                # double-count and no extra reinforcement (mirrors consolidation's
+                # revision semantics).
+                for i, e in enumerate(page.evidence):
+                    if isinstance(e, dict) and e.get("insight") == marker:
+                        page.evidence[i] = entry
+                        break
+                refreshed += 1
+            else:
+                page.evidence.append(entry)
+                existing_markers.add(marker)
+                added_evidence += 1
+        elif j.relation == "contradicts":
+            cp = f"{_TRACE_MARKER} {now:%Y-%m-%d} 反例：{j.title} — {j.reason}"
+            # Dedup on the source title so a re-scan doesn't stack counterpoints.
+            if not any(j.title in existing for existing in existing_counterpoints):
+                page.counterpoints.append(cp)
+                existing_counterpoints.append(cp)
+                tensions += 1
+
+    # A single reinforce + confidence nudge per apply that added NEW independent
+    # evidence (not per passage — two supports from one scan is still one
+    # corroboration event). Refresh-only and contradicts never reinforce.
+    reinforced = False
+    if added_evidence:
+        reinforce(page, GAIN_REVALIDATION, now=now)
+        page.confidence = round(
+            min(_APPLY_CONFIDENCE_CAP, float(page.confidence) + _APPLY_CONFIDENCE_STEP), 4
+        )
+        reinforced = True
+    if added_evidence or refreshed or tensions:
+        page.updated = now.isoformat(timespec="seconds")
+
+    if not (added_evidence or refreshed or tensions):
+        return {"added_evidence": 0, "refreshed": 0, "tensions": 0, "reinforced": False}
+
+    try:
+        save_cortex_page(page)
+        if rag is not None:
+            # Consolidation-style re-index so the searchable copy tracks the
+            # mutated page. Fail-soft: a stale index never blocks the belief write.
+            try:
+                rag.add_document(page.path, page.claim_id, render_cortex_page(page))
+                rag.add_facets(page.path, page.claim_id, [page.claim])
+            except Exception as e:
+                logging.warning(f"evidence_traceback: reindex failed for {page.claim_id}: {e}")
+    except Exception as e:
+        logging.error(f"evidence_traceback: apply write failed for {page.claim_id}: {e}")
+        return {"error": str(e)[:200]}
+
+    return {
+        "added_evidence": added_evidence,
+        "refreshed": refreshed,
+        "tensions": tensions,
+        "reinforced": reinforced,
+    }
+
+
+def _applied_action(applied: dict | None) -> str:
+    if not applied:
+        return "無（維持薄證據，交由 decay）"
+    if applied.get("error"):
+        return f"⚠️ 套用失敗：{applied['error']}"
+    parts = []
+    if applied.get("added_evidence"):
+        suffix = "＋強化" if applied.get("reinforced") else ""
+        parts.append(f"+{applied['added_evidence']} evidence{suffix}")
+    if applied.get("refreshed"):
+        parts.append(f"{applied['refreshed']} 筆既有佐證刷新（不重複計）")
+    if applied.get("tensions"):
+        parts.append(f"記 {applied['tensions']} 筆 tension（counterpoint，待人審）")
+    return "已套用：" + "、".join(parts) if parts else "無（維持薄證據，交由 decay）"
+
+
+def _render_report(scans: list[ClaimScan], pool_size: int, now: datetime, *, apply: bool) -> str:
     counts = {"supports": 0, "contradicts": 0, "neutral": 0, "unparseable": 0, "error": 0}
     for scan in scans:
         for j in scan.judgments:
             counts[j.relation] = counts.get(j.relation, 0) + 1
+    if apply:
+        header = f"# 🌱 證據追溯（apply）{now:%Y-%m-%d}"
+        blurb = (
+            "> Cortex 薄證據主張的 falsifier-first 佐證掃描。**apply 模式：supports 已寫入\n"
+            "> 獨立佐證＋溫和強化、contradicts 已記為 counterpoint 待人審；contradicts 不自動翻案。**"
+        )
+        action_label = "動作"
+        applied_ev = sum((s.applied or {}).get("added_evidence", 0) for s in scans)
+        applied_tn = sum((s.applied or {}).get("tensions", 0) for s in scans)
+        applied_err = sum(1 for s in scans if (s.applied or {}).get("error"))
+        apply_line = (
+            f"- 本輪套用：+{applied_ev} evidence、{applied_tn} tension"
+            f"{f'、⚠️ {applied_err} 筆寫入失敗' if applied_err else ''}"
+        )
+    else:
+        header = f"# 🌱 證據追溯（dry-run）{now:%Y-%m-%d}"
+        blurb = (
+            "> Cortex 薄證據主張的 falsifier-first 佐證掃描。**本報告為 dry-run：未寫入任何\n"
+            "> Cortex 狀態**——「擬動作」僅記錄若開啟 apply 將會發生的事。"
+        )
+        action_label = "擬動作"
+        apply_line = None
+
     lines = [
-        f"# 🌱 證據追溯（dry-run）{now:%Y-%m-%d}",
+        header,
         "",
-        "> Cortex 薄證據主張的 falsifier-first 佐證掃描。**本報告為 dry-run：未寫入任何",
-        "> Cortex 狀態**——「擬動作」僅記錄若開啟 apply 將會發生的事。",
+        blurb,
         "",
         f"- 薄證據池：{pool_size} 條主張；本輪掃描 {len(scans)} 條",
         f"- 段落判定：supports {counts['supports']} ・ contradicts {counts['contradicts']}"
         f" ・ neutral {counts['neutral']} ・ 無法解析 {counts['unparseable']} ・ 錯誤 {counts['error']}",
-        "",
     ]
+    if apply_line:
+        lines.append(apply_line)
+    lines.append("")
     for scan in scans:
         lines.append(f"## {scan.claim[:80]}")
         lines.append(f"- claim_id：`{scan.claim_id}`")
@@ -328,7 +487,8 @@ def _render_report(scans: list[ClaimScan], pool_size: int, now: datetime) -> str
         for j in scan.judgments:
             dist = f"（distance {j.distance:.2f}）" if j.distance is not None else ""
             lines.append(f"  - [{j.relation}] {j.title} — {j.reason}{dist}")
-        lines.append(f"- 擬動作：{_dry_run_action(scan)}")
+        action = _applied_action(scan.applied) if apply else _dry_run_action(scan)
+        lines.append(f"- {action_label}：{action}")
         lines.append("")
     return "\n".join(lines)
 
@@ -342,12 +502,15 @@ def run_evidence_traceback(
     state_file: Path | None = None,
     now: datetime | None = None,
 ) -> TracebackResult:
-    """One dry-run traceback batch. Read-only against Cortex and the RAG index;
-    writes exactly two files it owns: the dated report and the rotation cursor."""
+    """One traceback batch. Judgment is read-only; when
+    ``EVIDENCE_TRACEBACK_APPLY`` is set the accepted supports/contradicts also
+    mutate the claim page (append evidence / counterpoint, gentle reinforce).
+    Always writes the dated report and the rotation cursor."""
     cortex_dir = cortex_dir or CORTEX_DIR
     out_dir = out_dir or FROM_LLM_DIR
     state_file = state_file or EVIDENCE_TRACEBACK_STATE_FILE
     now = now or datetime.now()
+    apply = bool(settings.EVIDENCE_TRACEBACK_APPLY)
 
     if rag is None:
         return TracebackResult("skipped", "Evidence traceback skipped: no RAG available.")
@@ -372,17 +535,33 @@ def run_evidence_traceback(
             excluded_far=excluded_far,
         )
         scan.judgments = [_judge_passage(llm, page, hit) for hit in passages]
+        if apply:
+            # One claim's apply failure is caught and recorded, never aborts the
+            # batch (same discipline as a failed judgment).
+            try:
+                scan.applied = _apply_scan(page, scan, rag, now)
+            except Exception as e:
+                logging.error(f"evidence_traceback: apply crashed for {page.claim_id}: {e}")
+                scan.applied = {"error": str(e)[:200]}
         scans.append(scan)
         state.setdefault("checked", {})[page.claim_id] = now.isoformat(timespec="seconds")
 
     report_path = out_dir / f"✅EvidenceTrace-{now:%Y-%m-%d}.md"
-    atomic_write_text(report_path, _render_report(scans, len(pool), now))
+    atomic_write_text(report_path, _render_report(scans, len(pool), now, apply=apply))
     atomic_write_text(state_file, json.dumps(state, ensure_ascii=False, indent=2))
 
     judged = sum(len(s.judgments) for s in scans)
     hits = sum(1 for s in scans for j in s.judgments if j.relation in ("supports", "contradicts"))
+    mode = "apply" if apply else "dry-run"
+    extra = ""
+    if apply:
+        ev = sum((s.applied or {}).get("added_evidence", 0) for s in scans)
+        tn = sum((s.applied or {}).get("tensions", 0) for s in scans)
+        errs = sum(1 for s in scans if (s.applied or {}).get("error"))
+        extra = f", applied +{ev} evidence/{tn} tension" + (f"/{errs} write-fail" if errs else "")
     summary = (
-        f"Evidence traceback (dry-run): {len(scans)} claims scanned "
-        f"({len(pool)} thin), {judged} passages judged, {hits} evidential hits → {report_path.name}"
+        f"Evidence traceback ({mode}): {len(scans)} claims scanned "
+        f"({len(pool)} thin), {judged} passages judged, {hits} evidential hits{extra} "
+        f"→ {report_path.name}"
     )
     return TracebackResult("ok", summary, report_path=report_path, scans=scans)
