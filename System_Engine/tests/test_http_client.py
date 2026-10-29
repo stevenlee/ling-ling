@@ -66,3 +66,35 @@ def test_get_merges_default_ua_and_caller_headers_win(monkeypatch):
 
     client.get("http://x", source="fpo", headers={"User-Agent": "Mozilla/5.0 fake"})
     assert captured["headers"]["User-Agent"] == "Mozilla/5.0 fake"
+
+
+def test_post_form_throttles_and_propagates_http_failure(monkeypatch):
+    import pytest
+    import requests
+
+    calls = []
+    throttled = []
+    failure = requests.exceptions.HTTPError("429")
+
+    def fail():
+        raise failure
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return types.SimpleNamespace(raise_for_status=fail)
+
+    monkeypatch.setattr(hcmod.requests, "post", fake_post)
+    client = PoliteHttpClient()
+    monkeypatch.setattr(client, "throttle", throttled.append)
+    with pytest.raises(requests.exceptions.HTTPError):
+        client.post(
+            "https://news.google.com/rpc",
+            source="news.google.com",
+            data={"f.req": "payload"},
+            headers={"User-Agent": "test"},
+        )
+    assert throttled == ["news.google.com"]
+    assert len(calls) == 1
+    assert calls[0][1]["data"] == {"f.req": "payload"}
+    assert calls[0][1]["headers"]["User-Agent"] == "test"
+    assert calls[0][1]["timeout"] == 15

@@ -144,3 +144,25 @@
 
 ## 4. 一句話總結
 本波把 **insight 生成 → synthesis 品質閘 → 自省弧線** 三條品質迴路都硬化了；下一階段先**觀察趨勢**驗證成效,再往**最深的 Cortex 結構缺口**（薄證據累積、M3 接通 Cortex、裁決過鬆）推進,房務平行填空。
+
+## 2026-10-29 Scout 財經來源切換
+
+- Yahoo Finance `news/rssindex` 持續 404，改用 Google News 美國英文版搜尋
+  `economy OR finance`（`hl=en-US&gl=US&ceid=US:en`），每天最多 10 則。
+  來源語言改英文，日報輸出語言仍遵循原設定。
+- RSS 解析仍使用既有 feed parser；正文抓取先取得 Google News 的 signature/timestamp，
+  經 batchexecute 解析為媒體原網址，再走既有正文擷取。HTTP redirect 直接指向媒體時
+  也可處理。報告使用原網址，去重 key 保留原 feed GUID。
+- Google 解析參數缺失、RPC/格式錯誤或未取得有效媒體網址時 fail-soft，回報既有的
+  缺正文標記；不把 Google 中轉／同意頁當正文。解析使用非官方介面，未來格式變動
+  可能需維護；媒體的付費牆或拒絕抓取仍會降級為標題／摘要。
+- 實測 RSS HTTP 200、100 則條目；前三則原網址解析 3/3 成功，California State
+  Portal 與 Daily Northwestern 正文擷取成功，Reuters 未取得正文，保留降級行為。
+- 新增解析成功、參數缺失、RPC timeout、錯誤 payload／非媒體 URL、HTTP redirect
+  的 hermetic 回歸測試；`make check` exit 0（ruff/mypy clean、1817 passed、
+  1 skipped；1 個既有 Chroma deprecation warning）。
+- 啟用：Scout.md 目標隨下次執行讀取；daemon 需重啟以載入新的 Python 解析程式。
+- daemon 重啟後手動 Scout 實跑成功：四來源成功、25 則新項目；Google News 10/10
+  原網址解析成功，7 則取得實質內容。Reuters／Army.mil 缺正文有標示，Brookings
+  訂閱提示仍被當內容。後續可改善正文充分性判定，以及搜尋混入報價頁／非市場財經
+  內容的篩選；本次維持 `economy OR finance` 搜尋範圍。

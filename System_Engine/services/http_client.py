@@ -89,3 +89,23 @@ class PoliteHttpClient:
         return retry_call(
             _get, retries=retries, is_retryable=_is_retryable, delay_fn=_delay, jitter=0
         )
+
+    def post(
+        self,
+        url: str,
+        *,
+        source: str,
+        data: dict[str, str],
+        headers: dict[str, str] | None = None,
+        timeout: int = 15,
+    ) -> requests.Response:
+        """Throttled single-attempt form POST; callers may fail softly."""
+        self.throttle(source)
+        response = requests.post(
+            url,
+            data=data,
+            headers={"User-Agent": self.user_agent, **(headers or {})},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return response

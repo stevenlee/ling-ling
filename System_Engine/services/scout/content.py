@@ -15,6 +15,7 @@ import requests
 
 from services.http_client import PoliteHttpClient
 from services.scout.models import CrawledItem
+from services.scout.google_news import is_google_news_url, resolve_article_url
 
 MAX_CONTENT_CHARS = 8000
 
@@ -58,6 +59,13 @@ def fetch_item_content(client: PoliteHttpClient, item: CrawledItem) -> str:
     if item.content:
         return item.content[:MAX_CONTENT_CHARS]
 
+    if is_google_news_url(item.url):
+        try:
+            item.url = resolve_article_url(client, item.url, dict(BROWSER_HEADERS))
+        except Exception as e:
+            logging.warning("Scout: Google News 原文網址解析失敗 %s: %s", item.url, e)
+            return ""
+
     url = normalize_fetch_url(item.url)
     source = (urlparse(url).hostname or "item").lower()
     try:
@@ -66,6 +74,9 @@ def fetch_item_content(client: PoliteHttpClient, item: CrawledItem) -> str:
         )
     except requests.exceptions.RequestException as e:
         logging.info(f"Scout: content fetch failed for {item.url}: {e}")
+        return ""
+
+    if is_google_news_url(getattr(response, "url", url)):
         return ""
 
     content_type = getattr(response, "headers", {}).get("Content-Type", "")

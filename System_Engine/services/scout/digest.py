@@ -117,7 +117,10 @@ def run_scout_digest(
                 domain = (urlparse(item.url).hostname or "").lower()
                 if domain and not state.domain_blocked(domain, now=now):
                     item.content = fetch_item_content(client, item)
-                    state.record_content_fetch(domain, ok=bool(item.content), now=now)
+                    # A Google wrapper may resolve to a publisher; failures belong
+                    # to that publisher, not every item in the Google feed.
+                    fetched_domain = (urlparse(item.url).hostname or domain).lower()
+                    state.record_content_fetch(fetched_domain, ok=bool(item.content), now=now)
                 item.content_missing = not item.content
             summary = _summarize_item(llm, r, item, language)
             if summary:

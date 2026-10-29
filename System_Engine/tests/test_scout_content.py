@@ -75,3 +75,93 @@ def test_network_error_and_non_html_return_empty():
     assert fetch_item_content(boom, _item()) == ""
     pdf = FakeClient(text="%PDF-1.7", content_type="application/pdf")
     assert fetch_item_content(pdf, _item()) == ""
+
+
+def test_google_news_resolves_before_fetching_body():
+    import json
+
+    wrapper = "https://news.google.com/rss/articles/CBMiabc?oc=5"
+    publisher = "https://publisher.example/economy"
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, **kwargs):
+            self.calls.append(url)
+            text = (
+                '<div data-n-a-sg="signature" data-n-a-ts="123"></div>'
+                if url == wrapper
+                else "<article><p>Actual economic reporting.</p></article>"
+            )
+            return types.SimpleNamespace(url=url, text=text, headers={"Content-Type": "text/html"})
+
+        def post(self, url, **kwargs):
+            inner = json.loads(json.loads(kwargs["data"]["f.req"])[0][0][1])
+            assert inner[0] == "garturlreq" and inner[2:] == ["CBMiabc", 123, "signature"]
+            return types.SimpleNamespace(
+                text=")]}'\n\n123\n"
+                + json.dumps(
+                    [["wrb.fr", "Fbv4je", json.dumps(["garturlres", publisher])], ["di", 1]]
+                )
+            )
+
+    client = Client()
+    item = _item(wrapper)
+    assert fetch_item_content(client, item) == "Actual economic reporting."
+    assert item.url == publisher
+    assert item.dedupe_key == wrapper
+    assert client.calls == [wrapper, publisher]
+
+
+def test_google_news_missing_signature_does_not_extract_landing_page():
+    client = FakeClient(text="<main>Google News consent boilerplate</main>")
+    item = _item("https://news.google.com/rss/articles/CBMiabc")
+    assert fetch_item_content(client, item) == ""
+    assert len(client.calls) == 1
+
+
+def test_google_news_rpc_failure_is_fail_soft():
+    class Client(FakeClient):
+        def post(self, *args, **kwargs):
+            raise requests.exceptions.Timeout("timeout")
+
+    client = Client(text='<div data-n-a-sg="sig" data-n-a-ts="123"></div>')
+    assert fetch_item_content(client, _item("https://news.google.com/rss/articles/CBMiabc")) == ""
+
+
+def test_google_news_invalid_rpc_results_are_not_articles():
+    import json
+
+    for payload in [
+        None,
+        json.dumps(["garturlres", "https://consent.google.com/"]),
+        json.dumps(["garturlres", "javascript:alert(1)"]),
+        "malformed",
+    ]:
+
+        class Client(FakeClient):
+            def post(self, *args, **kwargs):
+                return types.SimpleNamespace(
+                    text=")]}'\n\n" + json.dumps([["wrb.fr", "Fbv4je", payload]])
+                )
+
+        client = Client(text='<div data-n-a-sg="sig" data-n-a-ts="123"></div>')
+        assert (
+            fetch_item_content(client, _item("https://news.google.com/rss/articles/CBMiabc")) == ""
+        )
+
+
+def test_google_news_http_redirect_to_publisher():
+    class Client(FakeClient):
+        def get(self, url, **kwargs):
+            response = super().get(url, **kwargs)
+            response.url = "https://publisher.example/article"
+            return response
+
+    item = _item("https://news.google.com/rss/articles/CBMiabc")
+    assert (
+        fetch_item_content(Client(text="<article>Publisher body</article>"), item)
+        == "Publisher body"
+    )
+    assert item.url == "https://publisher.example/article"

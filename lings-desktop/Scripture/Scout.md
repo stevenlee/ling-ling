@@ -12,7 +12,7 @@ Scout 每天出門一次，把下表的目標爬回來、整理成
 
 | url                                     | parser          | cadence | max_items |
 | --------------------------------------- | --------------- | ------- | --------- |
-| https://finance.yahoo.com/news/rssindex |                 | daily   | 10        |
+| https://news.google.com/rss/search?q=economy%20OR%20finance&hl=en-US&gl=US&ceid=US:en | feed            | daily   | 10        |
 | https://news.ycombinator.com/newest     | hackernews      | daily   | 15        |
 | https://arxiv.org/list/cs.AI/recent     | arxiv           | daily   | 10        |
 | https://github.com/trending             | github_trending | daily   | 10        |
@@ -43,3 +43,7 @@ Scout 每天出門一次，把下表的目標爬回來、整理成
 - 每條新項目會抓內文給 LLM 逐條分析（`scout_fetch_content: false` 可關掉，
   改用標題＋列表摘錄）。
 - 某個目標抓取失敗時，日報底部「🧹 抓取狀況」會註明原因，其他目標照常。
+
+- 財經來源採 Google News 美國英文版，搜尋 `economy OR finance`；這是新聞來源語言，
+  日報語言仍依上方 `language` 設定。文章先解析為原始媒體網址再抓正文；解析或正文
+  抓取失敗會標示僅依摘要分析，不將 Google 中轉頁當作正文。
