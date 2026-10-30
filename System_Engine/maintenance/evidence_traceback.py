@@ -55,6 +55,7 @@ from pathlib import Path
 
 from core.config import (
     CORTEX_DIR,
+    CORTEX_INDEX_REPAIR_DIR,
     EVIDENCE_TRACEBACK_STATE_FILE,
     FROM_LLM_DIR,
     settings,
@@ -62,10 +63,15 @@ from core.config import (
 from services.cortex_store import (
     active_evidence,
     load_all_pages,
-    render_cortex_page,
     save_cortex_page,
 )
 from services.ingest.atomic_io import atomic_write_text
+from services.llm_client import JSONCompletionParseError
+from maintenance.cortex_index_repair import (
+    enqueue_index_repair,
+    repair_index_slot,
+    repair_pending_indexes,
+)
 
 # Candidate passages actually judged per claim (post-exclusion cap): keeps the
 # nightly LLM spend bounded at batch × _MAX_PASSAGES lean calls.
@@ -124,6 +130,8 @@ class ClaimScan:
     judgments: list[PassageJudgment] = field(default_factory=list)
     excluded_self: int = 0
     excluded_far: int = 0
+    excluded_unknown: int = 0
+    retrieval_errors: list[str] = field(default_factory=list)
     # Apply-mode outcome (None in dry-run): what was actually written to Cortex.
     applied: dict | None = None
 
@@ -223,10 +231,40 @@ def _source_family(hit: dict) -> str:
     return name.casefold()
 
 
-def _candidate_passages(rag, page, max_distance: float) -> tuple[list[dict], int, int]:
+@dataclass
+class PassageCandidates:
+    passages: list[dict] = field(default_factory=list)
+    excluded_self: int = 0
+    excluded_far: int = 0
+    excluded_unknown: int = 0
+    errors: list[str] = field(default_factory=list)
+
+
+def _passage_distance(hit: dict) -> float | None:
+    """Use measured passage distance, never BM25/facet placeholder zeroes."""
+    if "matched_facet" in hit:
+        return None  # facet distance measures a different text than this passage
+    breakdown = hit.get("retrieval_breakdown")
+    if "retrieval_breakdown" in hit:
+        if not isinstance(breakdown, dict):
+            return None
+        if "facet_deref" in (breakdown.get("passed_layers") or []):
+            return None
+        value = breakdown.get("vector_distance")
+    else:
+        # Legacy/direct vector providers expose only distance. The production
+        # RAGManager always supplies a breakdown, including None for BM25-only.
+        value = hit.get("distance")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    distance = float(value)
+    return distance if math.isfinite(distance) and distance >= 0 else None
+
+
+def _candidate_passages(rag, page, max_distance: float) -> PassageCandidates:
     """Falsifier-first retrieval: the falsifier query runs FIRST and its hits
     rank ahead of claim-text hits at equal footing (stress test before
-    corroboration). Returns (passages, excluded_self, excluded_far)."""
+    corroboration). Missing distances and retrieval errors remain explicit."""
     queries = []
     if page.falsifier.strip():
         queries.append(page.falsifier.strip()[:500])
@@ -234,15 +272,16 @@ def _candidate_passages(rag, page, max_distance: float) -> tuple[list[dict], int
 
     candidates: dict[str, dict] = {}
     candidate_order: list[str] = []
-    excluded_self = 0
-    excluded_far = 0
+    result = PassageCandidates()
     for query in queries:
         try:
-            hits = rag.query_notes(query, top_k=_TOP_K) or []
+            hits = rag.query_notes(query, top_k=_TOP_K, raise_on_error=True) or []
         except Exception as e:
             logging.warning(f"evidence_traceback: retrieval failed for {page.claim_id}: {e}")
+            result.errors.append(str(e)[:200])
             continue
-        for hit in hits:
+        for raw_hit in hits:
+            hit = {**raw_hit, "distance": _passage_distance(raw_hit)}
             key = _source_family(hit)
             if not key:
                 key = f"untitled:{len(candidate_order)}"
@@ -266,23 +305,23 @@ def _candidate_passages(rag, page, max_distance: float) -> tuple[list[dict], int
             if new_rank < old_rank:
                 candidates[key] = hit
 
-    passages: list[dict] = []
     for key in candidate_order:
         hit = candidates[key]
         distance = hit.get("distance")
-        if isinstance(distance, (int, float)) and (
-            not math.isfinite(float(distance)) or distance > max_distance
-        ):
-            excluded_far += 1
+        if distance is None:
+            result.excluded_unknown += 1
+            continue
+        if distance > max_distance:
+            result.excluded_far += 1
             continue
         independent, _why = _is_independent(hit, page)
         if not independent:
-            excluded_self += 1
+            result.excluded_self += 1
             continue
-        passages.append(hit)
-        if len(passages) >= _MAX_PASSAGES:
+        result.passages.append(hit)
+        if len(result.passages) >= _MAX_PASSAGES:
             break
-    return passages, excluded_self, excluded_far
+    return result
 
 
 def _judge_passage(llm, page, hit: dict) -> PassageJudgment:
@@ -298,6 +337,8 @@ def _judge_passage(llm, page, hit: dict) -> PassageJudgment:
     try:
         parsed = llm._complete_json(
             kind="object",
+            raise_on_miss=True,
+            propagate_errors=True,
             system_prompt=_SYSTEM,
             user_msg=user_msg,
             temperature=0.1,
@@ -305,6 +346,10 @@ def _judge_passage(llm, page, hit: dict) -> PassageJudgment:
                 "stage": "evidence_traceback",
                 "metadata": {"claim_id": page.claim_id, "passage_title": title},
             },
+        )
+    except JSONCompletionParseError as e:
+        return PassageJudgment(
+            title=title, relation="unparseable", reason=str(e)[:200], distance=distance
         )
     except Exception as e:
         logging.warning(f"evidence_traceback: judgment failed for {page.claim_id}: {e}")
@@ -329,7 +374,15 @@ def _judge_passage(llm, page, hit: dict) -> PassageJudgment:
     return PassageJudgment(title=title, relation=relation, reason=reason, distance=distance)
 
 
+def _scan_incomplete(scan: ClaimScan) -> bool:
+    return bool(scan.retrieval_errors) or any(
+        j.relation in ("error", "unparseable") for j in scan.judgments
+    )
+
+
 def _dry_run_action(scan: ClaimScan) -> str:
+    if _scan_incomplete(scan):
+        return "判讀未完成，本輪不套用"
     relations = {j.relation for j in scan.judgments}
     if "contradicts" in relations:
         return "記 tension（falsifier 情境有跡可循，主張待壓力複核）"
@@ -338,12 +391,15 @@ def _dry_run_action(scan: ClaimScan) -> str:
     return "無（維持薄證據，交由 decay）"
 
 
-def _apply_scan(page, scan: ClaimScan, rag, now: datetime) -> dict:
+def _apply_scan(
+    page, scan: ClaimScan, rag, now: datetime, *, repair_dir: Path | None = None
+) -> dict:
     """Mutate the claim page from its judgments (apply mode). Conservative:
     supports thicken evidence + a single gentle reinforce; contradicts become
     human-visible counterpoints with no confidence change. Idempotent across
     re-scans via the [EvidenceTrace] marker. Returns an actions dict; on any
-    failure returns {"error": <str>} and leaves the page as save left it."""
+    pre-commit failure returns {"error": <str>}. Post-commit index failure
+    keeps the applied counts and a durable intent, never claims rollback."""
     from services.cortex_decay import GAIN_REVALIDATION, reinforce
 
     added_evidence = 0
@@ -399,31 +455,36 @@ def _apply_scan(page, scan: ClaimScan, rag, now: datetime) -> dict:
     if not (added_evidence or refreshed or tensions):
         return {"added_evidence": 0, "refreshed": 0, "tensions": 0, "reinforced": False}
 
+    repair_dir = repair_dir or CORTEX_INDEX_REPAIR_DIR
     try:
+        # Write-ahead intent closes the crash gap between the vault commit and
+        # the DB call. If it cannot persist, do not commit the belief mutation.
+        slot = enqueue_index_repair(page, repair_dir, page.path.parent)
         save_cortex_page(page)
-        if rag is not None:
-            # Consolidation-style re-index so the searchable copy tracks the
-            # mutated page. Fail-soft: a stale index never blocks the belief write.
-            try:
-                rag.add_document(page.path, page.claim_id, render_cortex_page(page))
-                rag.add_facets(page.path, page.claim_id, [page.claim])
-            except Exception as e:
-                logging.warning(f"evidence_traceback: reindex failed for {page.claim_id}: {e}")
     except Exception as e:
         logging.error(f"evidence_traceback: apply write failed for {page.claim_id}: {e}")
         return {"error": str(e)[:200]}
 
-    return {
+    applied: dict = {
         "added_evidence": added_evidence,
         "refreshed": refreshed,
         "tensions": tensions,
         "reinforced": reinforced,
     }
+    if rag is None:
+        status, error = "waiting", "尚無 RAG，保留索引意圖"
+    else:
+        status, error = repair_index_slot(slot, rag, page.path.parent, now)
+    if status != "repaired":
+        applied.update(index_pending=True, index_error=error or "等待索引追補")
+    return applied
 
 
 def _applied_action(applied: dict | None) -> str:
     if not applied:
         return "無（維持薄證據，交由 decay）"
+    if applied.get("deferred"):
+        return "判讀未完成，本輪未套用"
     if applied.get("error"):
         return f"⚠️ 套用失敗：{applied['error']}"
     parts = []
@@ -434,10 +495,20 @@ def _applied_action(applied: dict | None) -> str:
         parts.append(f"{applied['refreshed']} 筆既有佐證刷新（不重複計）")
     if applied.get("tensions"):
         parts.append(f"記 {applied['tensions']} 筆 tension（counterpoint，待人審）")
+    if applied.get("index_pending"):
+        parts.append(f"Cortex 已生效但待索引：{applied.get('index_error', '')}")
     return "已套用：" + "、".join(parts) if parts else "無（維持薄證據，交由 decay）"
 
 
-def _render_report(scans: list[ClaimScan], pool_size: int, now: datetime, *, apply: bool) -> str:
+def _render_report(
+    scans: list[ClaimScan],
+    pool_size: int,
+    now: datetime,
+    *,
+    apply: bool,
+    repair_summary: str = "",
+    repair_errors: list[str] | None = None,
+) -> str:
     counts = {"supports": 0, "contradicts": 0, "neutral": 0, "unparseable": 0, "error": 0}
     for scan in scans:
         for j in scan.judgments:
@@ -476,14 +547,21 @@ def _render_report(scans: list[ClaimScan], pool_size: int, now: datetime, *, app
     ]
     if apply_line:
         lines.append(apply_line)
+    if repair_summary:
+        lines.append(f"- {repair_summary}")
+    for error in repair_errors or []:
+        lines.append(f"- 索引追補失敗：{error}")
     lines.append("")
     for scan in scans:
         lines.append(f"## {scan.claim[:80]}")
         lines.append(f"- claim_id：`{scan.claim_id}`")
         lines.append(f"- falsifier：{scan.falsifier or '（未陳述）'}")
         lines.append(
-            f"- 候選段落 {len(scan.judgments)}（排除自我來源 {scan.excluded_self}、距離過遠 {scan.excluded_far}）"
+            f"- 候選段落 {len(scan.judgments)}（排除自我來源 {scan.excluded_self}、距離過遠 {scan.excluded_far}、"
+            f"缺少有效正文距離 {scan.excluded_unknown}）"
         )
+        for error in scan.retrieval_errors:
+            lines.append(f"- 檢索失敗：{error}")
         for j in scan.judgments:
             dist = f"（distance {j.distance:.2f}）" if j.distance is not None else ""
             lines.append(f"  - [{j.relation}] {j.title} — {j.reason}{dist}")
@@ -500,6 +578,7 @@ def run_evidence_traceback(
     cortex_dir: Path | None = None,
     out_dir: Path | None = None,
     state_file: Path | None = None,
+    repair_dir: Path | None = None,
     now: datetime | None = None,
 ) -> TracebackResult:
     """One traceback batch. Judgment is read-only; when
@@ -511,43 +590,83 @@ def run_evidence_traceback(
     state_file = state_file or EVIDENCE_TRACEBACK_STATE_FILE
     now = now or datetime.now()
     apply = bool(settings.EVIDENCE_TRACEBACK_APPLY)
+    repair_dir = repair_dir or CORTEX_INDEX_REPAIR_DIR
 
     if rag is None:
         return TracebackResult("skipped", "Evidence traceback skipped: no RAG available.")
 
+    # Recovery is independent of thin-pool membership, including empty pools.
+    repairs = repair_pending_indexes(rag, cortex_dir, repair_dir, now) if apply else None
     pages = load_all_pages(cortex_dir)
     state = _load_state(state_file)
     pool = _thin_pool(pages)
     batch = _select_thin_claims(pool, state, settings.EVIDENCE_TRACEBACK_BATCH)
     if not batch:
+        if repairs and (repairs.attempted or repairs.pending):
+            report_path = out_dir / f"✅EvidenceTrace-{now:%Y-%m-%d}.md"
+            atomic_write_text(
+                report_path,
+                _render_report(
+                    [],
+                    len(pool),
+                    now,
+                    apply=apply,
+                    repair_summary=repairs.summary,
+                    repair_errors=repairs.errors,
+                ),
+            )
+            return TracebackResult(
+                "failed" if repairs.pending else "ok", repairs.summary, report_path=report_path
+            )
         return TracebackResult("ok", "Evidence traceback: no thin-evidence claims to scan.")
 
     scans: list[ClaimScan] = []
     for page in batch:
-        passages, excluded_self, excluded_far = _candidate_passages(
-            rag, page, settings.EVIDENCE_TRACEBACK_MAX_DISTANCE
-        )
+        candidates = _candidate_passages(rag, page, settings.EVIDENCE_TRACEBACK_MAX_DISTANCE)
         scan = ClaimScan(
             claim_id=page.claim_id,
             claim=page.claim,
             falsifier=page.falsifier,
-            excluded_self=excluded_self,
-            excluded_far=excluded_far,
+            excluded_self=candidates.excluded_self,
+            excluded_far=candidates.excluded_far,
+            excluded_unknown=candidates.excluded_unknown,
+            retrieval_errors=candidates.errors,
         )
-        scan.judgments = [_judge_passage(llm, page, hit) for hit in passages]
-        if apply:
+        scan.judgments = [_judge_passage(llm, page, hit) for hit in candidates.passages]
+        if apply and _scan_incomplete(scan):
+            scan.applied = {"deferred": True}
+        elif apply:
             # One claim's apply failure is caught and recorded, never aborts the
             # batch (same discipline as a failed judgment).
             try:
-                scan.applied = _apply_scan(page, scan, rag, now)
+                scan.applied = _apply_scan(page, scan, rag, now, repair_dir=repair_dir)
             except Exception as e:
                 logging.error(f"evidence_traceback: apply crashed for {page.claim_id}: {e}")
                 scan.applied = {"error": str(e)[:200]}
         scans.append(scan)
+        # This cursor records attempts, not success. Rotate failed claims too:
+        # daily scheduling bounds retries and prevents one poison claim starving
+        # the pool. Failure stays visible in the report and task status.
         state.setdefault("checked", {})[page.claim_id] = now.isoformat(timespec="seconds")
 
     report_path = out_dir / f"✅EvidenceTrace-{now:%Y-%m-%d}.md"
-    atomic_write_text(report_path, _render_report(scans, len(pool), now, apply=apply))
+    repair_summary = repairs.summary if repairs else ""
+    pending_indexes = len(list(repair_dir.glob("*.json"))) if apply else 0
+    if apply:
+        repair_summary = (
+            f"索引追補：完成 {repairs.repaired if repairs else 0}、待處理 {pending_indexes}"
+        )
+    atomic_write_text(
+        report_path,
+        _render_report(
+            scans,
+            len(pool),
+            now,
+            apply=apply,
+            repair_summary=repair_summary,
+            repair_errors=repairs.errors if repairs else None,
+        ),
+    )
     atomic_write_text(state_file, json.dumps(state, ensure_ascii=False, indent=2))
 
     judged = sum(len(s.judgments) for s in scans)
@@ -559,9 +678,16 @@ def run_evidence_traceback(
         tn = sum((s.applied or {}).get("tensions", 0) for s in scans)
         errs = sum(1 for s in scans if (s.applied or {}).get("error"))
         extra = f", applied +{ev} evidence/{tn} tension" + (f"/{errs} write-fail" if errs else "")
+    failed_scans = sum(1 for s in scans if _scan_incomplete(s) or (s.applied or {}).get("error"))
     summary = (
         f"Evidence traceback ({mode}): {len(scans)} claims scanned "
-        f"({len(pool)} thin), {judged} passages judged, {hits} evidential hits{extra} "
+        f"({len(pool)} thin), {judged} passages judged, {hits} evidential hits{extra}, "
+        f"判讀或套用未完成 {failed_scans} 條，待索引 {pending_indexes} 條 "
         f"→ {report_path.name}"
     )
-    return TracebackResult("ok", summary, report_path=report_path, scans=scans)
+    return TracebackResult(
+        "failed" if failed_scans or pending_indexes else "ok",
+        summary,
+        report_path=report_path,
+        scans=scans,
+    )

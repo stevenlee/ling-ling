@@ -233,3 +233,41 @@ def test_task_acquires_and_releases_when_idle(tmp_path):
     scheduler._run_task(task, datetime(2026, 6, 13, 3, 0))
     assert calls == [1]
     assert global_busy_state.is_busy() is False  # acquired then released
+
+
+def test_failed_result_is_failed_in_trace_and_state_and_releases_lock(tmp_path):
+    import sqlite3
+
+    from services.trace_store import TraceStore
+
+    store = TraceStore(tmp_path / "trace.sqlite")
+
+    class LLM:
+        def trace_run(self, **kwargs):
+            return store.run(**kwargs)
+
+    task = MaintenanceTask(
+        name="evidence_traceback_daily",
+        daily=True,
+        action=lambda: MaintenanceResult("failed", "1 incomplete claim(s); report saved"),
+    )
+    scheduler = MaintenanceScheduler(
+        tmp_path,
+        LLM(),
+        rag=None,
+        tasks=[task],
+        state_file=tmp_path / "state.json",
+        enabled=True,
+    )
+    now = datetime(2026, 10, 29, 3)
+    assert not global_busy_state.is_busy()
+    assert scheduler.run_due_once(now) == [task.name]
+    assert not global_busy_state.is_busy()
+    assert scheduler.state[task.name]["last_status"] == "failed"
+    assert "report saved" in scheduler.state[task.name]["last_summary"]
+    with sqlite3.connect(store.db_path) as conn:
+        status, error = conn.execute("SELECT status, error FROM runs").fetchone()
+    assert status == "failed" and "incomplete" in error
+    # Daily failures remain bounded; they are eligible again tomorrow.
+    assert scheduler.run_due_once(now + timedelta(hours=1)) == []
+    assert scheduler.run_due_once(now + timedelta(days=1)) == [task.name]

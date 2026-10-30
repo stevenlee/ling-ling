@@ -134,3 +134,36 @@ def test_stamps_json_attempt_in_trace_metadata():
     m1 = c._calls["kwargs"][1]["trace_context"]["metadata"]
     assert m0 == {"k": "v", "json_attempt": 1}
     assert m1 == {"k": "v", "json_attempt": 2}
+
+
+def test_strict_json_does_not_reroll_exhausted_transport():
+    import pytest
+
+    failure = ConnectionError("already retried")
+    c = _client([failure, '{"ok":1}'])
+    with pytest.raises(ConnectionError) as caught:
+        c._complete_json(
+            kind="object",
+            system_prompt="s",
+            user_msg="u",
+            propagate_errors=True,
+            raise_on_miss=True,
+        )
+    assert caught.value is failure
+    assert c._calls["n"] == 1
+
+
+def test_strict_json_content_miss_has_distinct_exception():
+    import pytest
+    from services.llm_client import JSONCompletionParseError
+
+    c = _client(["no json", "still no json"])
+    with pytest.raises(JSONCompletionParseError):
+        c._complete_json(
+            kind="object",
+            system_prompt="s",
+            user_msg="u",
+            propagate_errors=True,
+            raise_on_miss=True,
+        )
+    assert c._calls["n"] == 2

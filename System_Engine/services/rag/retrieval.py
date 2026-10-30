@@ -101,7 +101,7 @@ def gather_vector_candidates(
             c["embedding"] = embeddings[i]
         by_id[cid] = c
         candidate_info[cid] = _fresh_info(
-            vector_distance=distances[i] if i < len(distances) else 0.0,
+            vector_distance=distances[i] if i < len(distances) else None,
             vector_rank=i + 1,
             layers=["vector"],
         )
@@ -133,7 +133,7 @@ def gather_vector_candidates(
                     c["embedding"] = v_embs[i]
                 by_id[cid] = c
                 candidate_info[cid] = _fresh_info(
-                    vector_distance=v_dists[i] if i < len(v_dists) else 0.0,
+                    vector_distance=v_dists[i] if i < len(v_dists) else None,
                     vector_rank=None,
                     layers=["vector_xlingual"],
                 )

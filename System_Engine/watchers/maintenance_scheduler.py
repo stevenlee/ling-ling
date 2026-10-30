@@ -255,8 +255,7 @@ class MaintenanceScheduler(threading.Thread):
         def evidence_traceback() -> MaintenanceResult:
             # A2: falsifier-first corroboration scan over thin-evidence Cortex
             # claims. Master switch is the hot-reloadable `evidence_traceback`
-            # knob; DRY-RUN reporting only (no Cortex mutation) until the hit
-            # rates have been reviewed.
+            # knob; apply is independently gated after dry-run review.
             if not settings.EVIDENCE_TRACEBACK_ENABLED:
                 return MaintenanceResult(
                     "skipped", "Evidence traceback disabled (evidence_traceback: false)."
@@ -578,6 +577,11 @@ class MaintenanceScheduler(threading.Thread):
             )
             with run_context:
                 result = task.action()
+                # TraceStore marks a context as failed only on an exception.
+                # Preserve a fail-soft task's report while reflecting its
+                # explicit failure in BOTH trace and scheduler state.
+                if result.status == "failed":
+                    raise RuntimeError(result.summary)
             status = result.status
             summary = result.summary
             logging.info("MaintenanceScheduler: task %s finished: %s", task.name, summary)

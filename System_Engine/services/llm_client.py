@@ -48,6 +48,10 @@ from services.ingest.entity_quality import assess_entity_body
 from services.llm.request_gate import PriorityRequestGate
 
 
+class JSONCompletionParseError(ValueError):
+    """A completion returned content, but bounded JSON parsing did not succeed."""
+
+
 # ─── Constants ────────────────────────────────────────────────────────
 
 # User-message field labels, keyed by the localized-content suffix (".zh"/".ja")
@@ -623,6 +627,7 @@ class LLMClient:
         *,
         kind: str = "object",
         raise_on_miss: bool = False,
+        propagate_errors: bool = False,
         json_attempts: int = 2,
         **complete_kwargs,
     ):
@@ -646,6 +651,11 @@ class LLMClient:
         parse miss (mirrors the LingLens extraction rule). Per-attempt
         exceptions are caught and re-rolled.
 
+        ``propagate_errors=True`` re-raises exhausted transport/internal errors
+        immediately instead of consuming a content re-roll. Strict callers can
+        combine it with ``raise_on_miss`` to distinguish unavailable transport
+        from JSONCompletionParseError without changing legacy callers.
+
         Callers must pass system_prompt/user_msg as keywords. Bespoke retry
         logic with stricter accept conditions (e.g. `_assess_falsifiability_once`,
         which re-rolls until the score itself parses) stays as-is.
@@ -656,26 +666,33 @@ class LLMClient:
             raise ValueError("json_attempts must be at least 1")
         base_trace = dict(complete_kwargs.pop("trace_context", {}) or {})
         base_meta = dict(base_trace.get("metadata") or {})
-        for attempt in range(json_attempts):
-            trace = {**base_trace, "metadata": {**base_meta, "json_attempt": attempt + 1}}
+
+        def complete(attempt):
+            trace = {**base_trace, "metadata": {**base_meta, "json_attempt": attempt}}
             try:
                 raw = self._complete_text(trace_context=trace, **complete_kwargs)
             except Exception as e:
+                if propagate_errors:
+                    raise
                 logging.warning(
-                    f"_complete_json({kind}) call failed "
-                    f"(attempt {attempt + 1}/{json_attempts}): {e}"
+                    f"_complete_json({kind}) call failed (attempt {attempt}/{json_attempts}): {e}"
                 )
-                continue
+                return None
             parsed = parse(raw)
-            if parsed:
-                return parsed
-            if is_empty_json_literal(raw, kind):
-                return empty  # whole reply IS [] / {} — genuine empty, not a parse miss
+            if parsed or is_empty_json_literal(raw, kind):
+                return parsed  # a literal [] / {} is valid, not a parse miss
             logging.warning(
-                f"_complete_json({kind}) parse miss (attempt {attempt + 1}/{json_attempts})"
+                f"_complete_json({kind}) parse miss (attempt {attempt}/{json_attempts})"
             )
+            return None
+
+        result = reroll(complete, accept=lambda parsed: parsed is not None, attempts=json_attempts)
+        if result is not None:
+            return result
         if raise_on_miss:
-            raise ValueError(f"No parseable JSON {kind} after {json_attempts} attempts")
+            raise JSONCompletionParseError(
+                f"No parseable JSON {kind} after {json_attempts} attempts"
+            )
         return empty
 
     _LANG_NAMES = {

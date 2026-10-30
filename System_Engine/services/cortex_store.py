@@ -25,6 +25,7 @@ import yaml
 
 from core.parser import parse_markdown_metadata
 from core.vault_utils import sanitize_filename
+from services.ingest.atomic_io import atomic_write_text
 
 # Stable section headers — the deterministic parser's anchors. Never
 # reword without a schema_version bump and a migration.
@@ -212,13 +213,14 @@ def _section_map(body: str) -> dict[str, str]:
     return sections
 
 
-def parse_cortex_page(path: Path) -> CortexPage | None:
-    """Parse one Cortex page. Returns None (with a warning) on bad files."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except Exception as e:
-        logging.warning(f"CortexStore: cannot read {path.name}: {e}")
-        return None
+def parse_cortex_page(path: Path, *, text: str | None = None) -> CortexPage | None:
+    """Parse one page or an already-read snapshot; None on invalid content."""
+    if text is None:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception as e:
+            logging.warning(f"CortexStore: cannot read {path.name}: {e}")
+            return None
 
     meta = parse_markdown_metadata(text)
     if not meta.get("claim_id"):
@@ -276,12 +278,8 @@ def parse_cortex_page(path: Path) -> CortexPage | None:
 
 
 def save_cortex_page(page: CortexPage) -> None:
-    """Atomic write (temp + rename), per engineering conventions."""
-    page.path.parent.mkdir(parents=True, exist_ok=True)
-    rendered = render_cortex_page(page)
-    tmp = page.path.with_name(page.path.name + ".tmp")
-    tmp.write_text(rendered, encoding="utf-8")
-    tmp.replace(page.path)
+    """Durable atomic replace with a unique same-directory temporary file."""
+    atomic_write_text(page.path, render_cortex_page(page))
 
 
 def load_all_pages(cortex_dir: Path) -> list[CortexPage]:

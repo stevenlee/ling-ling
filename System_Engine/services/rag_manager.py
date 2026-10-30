@@ -235,13 +235,19 @@ class RAGManager:
 
             # doc_id is the sha256 of the vault-relative path, so re-ingesting a
             # file always hits the same doc_id and clears its own chunks.
-            self.delete_document(doc_id)
+            if strict:
+                self.delete_document(doc_id, strict=True)
+            else:
+                self.delete_document(doc_id)
             # Legacy cleanup, SCOPED: chunks indexed before doc_id existed were
             # keyed by title only. Delete just those — a blanket
             # delete-by-title would also wipe an unrelated document that happens
             # to share this title (audit A2). ChromaDB has no "field absent"
             # filter, so fetch by title and keep only the doc_id-less rows.
-            self._delete_legacy_title_chunks(title)
+            if strict:
+                self._delete_legacy_title_chunks(title, strict=True)
+            else:
+                self._delete_legacy_title_chunks(title)
 
             try:
                 rel_path = Path(filepath).resolve().relative_to(WIKI_VAULT_DIR.resolve())
@@ -383,6 +389,7 @@ class RAGManager:
         max_per_doc: int | None = None,
         cross_lingual: bool | None = None,
         extra_queries: list[str] | None = None,
+        raise_on_error: bool = False,
     ) -> list[dict]:
         """Query RAG returning structured dict lists.
 
@@ -393,6 +400,8 @@ class RAGManager:
         Each stage is independently togglable; the ``None`` defaults respect
         the corresponding ``*_ENABLED`` env.
 
+        - ``raise_on_error``: propagate retrieval failures after tracing them,
+          so strict maintenance callers can distinguish an outage from no hits.
         - ``diversity`` (0.0–1.0): MMR weight. 0 = relevance-only.
         - ``rerank``: cross-encoder re-scoring. Best precision win.
         - ``hybrid``: BM25 + vector fused via RRF. Catches proper nouns
@@ -577,6 +586,8 @@ class RAGManager:
                 status="failed",
                 error=str(e),
             )
+            if raise_on_error:
+                raise
             return []
 
     # Ranking helpers live in services/rag/retrieval.py (P2e); kept as thin
@@ -595,7 +606,13 @@ class RAGManager:
 
     @retry_on_db_lock()
     def add_facets(
-        self, filepath: Path, title: str, facets: list[str], tags: list[str] | None = None
+        self,
+        filepath: Path,
+        title: str,
+        facets: list[str],
+        tags: list[str] | None = None,
+        *,
+        strict: bool = False,
     ) -> bool:
         """Index LLM-generated facet sentences (thesis / key points) as
         retrieval pointers for a document.
@@ -607,7 +624,8 @@ class RAGManager:
         are dropped first, so re-ingestion stays idempotent.
 
         Fail-open by design (facets are a retrieval bonus), but the outcome
-        is RETURNED: False on a swallowed failure. Callers that must not
+        is RETURNED: False on a swallowed failure. ``strict=True`` propagates
+        cleanup/upsert failures for durable repair callers. Callers that must not
         mark work as done on failure (facet backfill) check it — an Ollama
         embedding error here once let the backfill log "+4 facets" and
         permanently retire a page whose upsert had actually failed.
@@ -617,7 +635,10 @@ class RAGManager:
             return True
         try:
             doc_id = self._get_doc_id(filepath)
-            self._delete_facets(doc_id)
+            if strict:
+                self._delete_facets(doc_id, strict=True)
+            else:
+                self._delete_facets(doc_id)
 
             timestamp = datetime.now().isoformat()
             norm_tags = TagManager.normalize_list(tags)
@@ -646,16 +667,18 @@ class RAGManager:
             return True
         except Exception as e:
             logging.error(f"Failed to add facets for '{title}': {e}")
+            if strict:
+                raise
             return False
 
     @retry_on_db_lock()
-    def remove_facets(self, filepath: Path) -> None:
+    def remove_facets(self, filepath: Path, *, strict: bool = False) -> None:
         """Public facet removal for one document (dormant Cortex pages
         leave the facet index but keep their chunks and their file)."""
-        self._delete_facets(self._get_doc_id(filepath))
+        self._delete_facets(self._get_doc_id(filepath), strict=strict)
         self._bm25.mark_dirty()
 
-    def _delete_facets(self, doc_id: str) -> None:
+    def _delete_facets(self, doc_id: str, *, strict: bool = False) -> None:
         """Remove existing facet entries for one doc (python-side filter —
         legacy chunks have no `role` key, and Chroma's $ne semantics on
         missing keys are unreliable)."""
@@ -670,6 +693,8 @@ class RAGManager:
                 self.collection.delete(ids=facet_ids)
         except Exception as e:
             logging.debug(f"Facet cleanup failed for {doc_id[:8]}: {e}")
+            if strict:
+                raise
 
     def sample_document_embeddings(self, limit: int = 300) -> list[list[float]]:
         """Up to `limit` non-facet chunk embeddings, for corpus-diversity
@@ -1004,7 +1029,7 @@ class RAGManager:
             "titles": sorted(orphan_titles),
         }
 
-    def _delete_legacy_title_chunks(self, title: str) -> None:
+    def _delete_legacy_title_chunks(self, title: str, *, strict: bool = False) -> None:
         """Delete only the doc_id-less (pre-doc_id era) chunks for `title`.
 
         Scoped legacy cleanup for add_document: same-title chunks that DO carry
@@ -1018,6 +1043,8 @@ class RAGManager:
             rows = self.collection.get(where={"title": title})
         except Exception as e:
             logging.debug(f"legacy title cleanup fetch failed for '{title}': {e}")
+            if strict:
+                raise
             return
         ids = rows.get("ids") or []
         metas = rows.get("metadatas") or []
@@ -1030,9 +1057,11 @@ class RAGManager:
                 )
             except Exception as e:
                 logging.debug(f"legacy title cleanup delete failed for '{title}': {e}")
+                if strict:
+                    raise
 
     @retry_on_db_lock()
-    def delete_document(self, doc_id_or_title: str | Path):
+    def delete_document(self, doc_id_or_title: str | Path, *, strict: bool = False):
         """Delete all chunks associated with a specific document (by doc_id, path, or title)."""
         doc_id = None
         title = None
@@ -1056,6 +1085,8 @@ class RAGManager:
                 logging.info(f"Deleted document chunks with doc_id '{doc_id}' from RAG")
             except Exception as e:
                 logging.debug(f"Failed to delete by doc_id '{doc_id}': {e}")
+                if strict:
+                    raise
 
         if title and title != doc_id:
             try:
@@ -1064,6 +1095,8 @@ class RAGManager:
             except Exception as e:
                 if "not found" not in str(e).lower():
                     logging.error(f"Failed to delete document chunks with title '{title}': {e}")
+                if strict:
+                    raise
 
         self._bm25.mark_dirty()
 

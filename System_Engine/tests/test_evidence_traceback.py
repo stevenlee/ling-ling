@@ -102,6 +102,9 @@ def env(tmp_path, monkeypatch):
     out = tmp_path / "fromLingLing"
     state = tmp_path / "Database" / "evidence_traceback_state.json"
     cortex.mkdir()
+    monkeypatch.setattr(
+        "maintenance.evidence_traceback.CORTEX_INDEX_REPAIR_DIR", tmp_path / "repairs"
+    )
     monkeypatch.setattr("core.config.settings.EVIDENCE_TRACEBACK_BATCH", 5, raising=False)
     monkeypatch.setattr("core.config.settings.EVIDENCE_TRACEBACK_MAX_DISTANCE", 0.45, raising=False)
     # Default OFF so a dev Scripture with apply:true can't leak into dry-run tests.
@@ -290,7 +293,7 @@ def test_non_finite_distance_is_excluded(env):
     result = _run(env, _StubLLM(), _StubRAG([_hit("NaN Doc", distance=float("nan"))]))
 
     assert result.scans[0].judgments == []
-    assert result.scans[0].excluded_far == 1
+    assert result.scans[0].excluded_unknown == 1
 
 
 def test_contradicts_maps_to_tension_action(env):
@@ -303,7 +306,8 @@ def test_llm_failure_is_error_not_verdict_and_run_continues(env):
     _claim_page(env["cortex"], "cortex-thin1", "主張 A", created="2026-06-01T00:00:00")
     _claim_page(env["cortex"], "cortex-thin2", "主張 B", created="2026-06-02T00:00:00")
     result = _run(env, _StubLLM(raise_exc=RuntimeError("boom")), _StubRAG([_hit("Fresh Doc")]))
-    assert result.status == "ok"  # one bad judgment never aborts the batch
+    # Failure is visible even though every claim is still processed.
+    assert result.status == "failed"
     assert len(result.scans) == 2
     relations = [j.relation for s in result.scans for j in s.judgments]
     assert relations == ["error", "error"]  # never coerced to neutral
@@ -496,8 +500,8 @@ def test_apply_write_failure_recorded_not_silent(env, monkeypatch):
     monkeypatch.setattr("maintenance.evidence_traceback.save_cortex_page", boom, raising=False)
     result = _run(env, _StubLLM(relation="supports"), _StubRAG([_hit("Independent Doc")]))
 
-    # Both claims recorded a write error; run still completed (never aborted).
-    assert result.status == "ok"
+    # Both claims are processed, but neither write failure is a healthy result.
+    assert result.status == "failed"
     assert all(s.applied.get("error") for s in result.scans)
     assert "寫入失敗" in result.report_path.read_text(encoding="utf-8")
 
@@ -530,3 +534,253 @@ def test_apply_contradicts_rescan_does_not_stack_counterpoints(env):
     )
     after_second = parse_cortex_page(page.path).counterpoints
     assert len(after_second) == 1  # same source → not stacked
+
+
+def _real_json_client(replies):
+    from services.llm_client import LLMClient
+
+    client = LLMClient.__new__(LLMClient)
+    calls = []
+    pending = iter(replies)
+
+    def complete(**kwargs):
+        calls.append(kwargs)
+        response = next(pending)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    client._complete_text = complete
+    return client, calls
+
+
+def test_exhausted_transport_is_error_without_content_retry(env):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+    # _complete_text has already exhausted its transport retry budget.
+    llm, calls = _real_json_client([ConnectionError("provider down")])
+    result = _run(env, llm, _StubRAG([_hit("Independent Doc")]))
+    assert len(calls) == 1
+    assert result.status == "failed"
+    assert result.scans[0].judgments[0].relation == "error"
+    assert page.path.read_bytes() == before
+    report = result.report_path.read_text(encoding="utf-8")
+    assert "錯誤 1" in report and "無法解析 0" in report
+    assert "判讀未完成，本輪未套用" in report
+
+
+def test_content_parse_failure_remains_unparseable_and_bounded(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    llm, calls = _real_json_client(["not json", "still not json"])
+    result = _run(env, llm, _StubRAG([_hit("Independent Doc")]))
+    assert len(calls) == 2
+    assert [c["trace_context"]["metadata"]["json_attempt"] for c in calls] == [1, 2]
+    assert result.status == "failed"
+    assert result.scans[0].judgments[0].relation == "unparseable"
+    assert "錯誤 0" in result.report_path.read_text(encoding="utf-8")
+
+
+def test_content_retry_recovers_but_transport_does_not_reroll(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    llm, calls = _real_json_client(["not json", '{"relation":"neutral"}'])
+    result = _run(env, llm, _StubRAG([_hit("Independent Doc")]))
+    assert result.status == "ok" and len(calls) == 2
+    llm, calls = _real_json_client(["not json", ConnectionError("down")])
+    result = _run(env, llm, _StubRAG([_hit("Independent Doc")]))
+    assert result.status == "failed" and len(calls) == 2
+    assert result.scans[0].judgments[0].relation == "error"
+
+
+def test_partial_claim_failure_does_not_undo_completed_claim(env):
+    _apply_on(env)
+    first = _thin_claim_reinforceable(env, "cortex-1", "主張 A")
+    second = _thin_claim_reinforceable(env, "cortex-2", "主張 B")
+    before = second.path.read_bytes()
+    llm, calls = _real_json_client(['{"relation":"supports"}', ConnectionError("down")])
+    result = _run(env, llm, _StubRAG([_hit("Independent Doc")]))
+    assert result.status == "failed" and len(calls) == 2
+    assert len(parse_cortex_page(first.path).evidence) == 2
+    assert second.path.read_bytes() == before
+    assert "判讀或套用未完成 1 條" in result.summary
+    # Cursor means last attempted: failures rotate, avoiding starvation.
+    state = json.loads(env["state"].read_text(encoding="utf-8"))
+    assert set(state["checked"]) == {"cortex-1", "cortex-2"}
+
+
+def test_incomplete_claim_does_not_apply_partial_supports(env):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+    llm, _ = _real_json_client(['{"relation":"supports"}', ConnectionError("down")])
+    result = _run(env, llm, _StubRAG([_hit("Independent A"), _hit("Independent B")]))
+    assert result.status == "failed"
+    assert page.path.read_bytes() == before
+    assert result.scans[0].applied == {"deferred": True}
+
+
+def test_failed_falsifier_retrieval_is_visible_and_blocks_apply(env):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+
+    class RAG(_StubRAG):
+        def query_notes(self, query, **kwargs):
+            assert kwargs["raise_on_error"] is True
+            if query == page.falsifier:
+                raise OSError("index unavailable")
+            return self.hits
+
+    result = _run(env, _StubLLM(), RAG([_hit("Independent Doc")]))
+    assert result.status == "failed"
+    assert result.scans[0].retrieval_errors == ["index unavailable"]
+    assert page.path.read_bytes() == before
+    assert "檢索失敗：index unavailable" in result.report_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("distance", [None, True, "0.1", -0.1, float("inf"), float("nan")])
+def test_missing_or_invalid_distance_cannot_write_evidence(env, distance):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+    llm = _StubLLM()
+    result = _run(env, llm, _StubRAG([_hit("Independent Doc", distance=distance)]))
+    assert llm.calls == []
+    assert result.scans[0].excluded_unknown == 1
+    assert page.path.read_bytes() == before
+    assert "缺少有效正文距離 1" in result.report_path.read_text(encoding="utf-8")
+
+
+def test_bm25_zero_placeholder_cannot_override_measured_source(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A", falsifier="反例")
+    bm25 = _hit("Same Doc", text="lexical-only", distance=0.0)
+    bm25["retrieval_breakdown"] = {"vector_distance": None, "passed_layers": ["bm25"]}
+    vector = _hit("Same Doc", text="measured passage", distance=0.2)
+    vector["retrieval_breakdown"] = {"vector_distance": 0.2, "passed_layers": ["vector"]}
+    llm = _StubLLM()
+    rag = _PerQueryRAG({"反例": [bm25], "主張 A": [vector]})
+    result = _run(env, llm, rag)
+    assert result.scans[0].judgments[0].distance == 0.2
+    assert "measured passage" in llm.calls[0]["user_msg"]
+    assert "lexical-only" not in llm.calls[0]["user_msg"]
+
+
+def test_bm25_only_is_excluded_even_with_zero_distance(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    hit = _hit("Independent Doc", distance=0.0)
+    hit["retrieval_breakdown"] = {"vector_distance": None, "passed_layers": ["bm25"]}
+    llm = _StubLLM()
+    result = _run(env, llm, _StubRAG([hit]))
+    assert llm.calls == []
+    assert result.scans[0].excluded_unknown == 1
+
+
+def test_facet_distance_does_not_measure_parent_passage(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    hit = _hit("Independent Doc", distance=0.0)
+    hit["matched_facet"] = "a nearby summary, not the fetched parent"
+    hit["retrieval_breakdown"] = {
+        "vector_distance": 0.0,
+        "passed_layers": ["vector", "facet_deref"],
+    }
+    llm = _StubLLM()
+    result = _run(env, llm, _StubRAG([hit]))
+    assert llm.calls == []
+    assert result.scans[0].excluded_unknown == 1
+
+
+def test_measured_zero_is_valid_but_measured_far_cannot_use_placeholder(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    exact = _hit("Exact Doc", distance=0.0)
+    exact["retrieval_breakdown"] = {"vector_distance": 0.0, "passed_layers": ["vector"]}
+    far = _hit("Far Doc", distance=0.0)
+    far["retrieval_breakdown"] = {"vector_distance": 0.8, "passed_layers": ["vector"]}
+    result = _run(env, _StubLLM(), _StubRAG([exact, far]))
+    assert [j.title for j in result.scans[0].judgments] == ["Exact Doc"]
+    assert result.scans[0].excluded_far == 1
+
+
+def _hybrid_rag(monkeypatch, *, missing_distances=False, retrieval_error=False):
+    from services import rag_manager as module
+    from services.rag_manager import RAGManager
+
+    monkeypatch.setattr(module, "RERANKER_ENABLED", False)
+    monkeypatch.setattr(module, "HYBRID_RETRIEVAL_ENABLED", True)
+    monkeypatch.setattr(module, "CROSS_LINGUAL_ENABLED", False)
+    monkeypatch.setattr(module, "RETRIEVAL_MAX_PER_DOC", 0)
+
+    class Collection:
+        def query(self, **kwargs):
+            if retrieval_error:
+                raise OSError("index offline")
+            result = {
+                "ids": [["vector"]],
+                "documents": [["measured vector body"]],
+                "metadatas": [[{"title": "Vector Doc", "source_path": "pages/vector.md"}]],
+            }
+            if not missing_distances:
+                result["distances"] = [[0.2]]
+            return result
+
+        def get(self, **kwargs):
+            return {
+                "ids": ["bm25"],
+                "documents": ["lexical body with placeholder distance"],
+                "metadatas": [{"title": "BM25 Doc", "source_path": "pages/bm25.md"}],
+            }
+
+    class BM25:
+        def query(self, *args):
+            return [("bm25", 20.0)]
+
+    rag = RAGManager.__new__(RAGManager)
+    rag.collection = Collection()
+    rag._bm25 = BM25()
+    rag.translator = None
+    rag.trace_store = None
+    return rag
+
+
+def test_real_hybrid_retrieval_placeholder_is_rejected_at_a2(env, monkeypatch):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    rag = _hybrid_rag(monkeypatch)
+    hits = rag.query_notes("query", top_k=5)
+    lexical = next(h for h in hits if h["id"] == "bm25")
+    assert lexical["distance"] == 0.0  # legacy field retained for other consumers
+    assert lexical["retrieval_breakdown"]["vector_distance"] is None
+    llm = _StubLLM()
+    result = _run(env, llm, rag)
+    assert [j.title for j in result.scans[0].judgments] == ["Vector Doc"]
+    assert result.scans[0].excluded_unknown == 1
+    assert "measured vector body" in llm.calls[0]["user_msg"]
+
+
+def test_missing_chroma_distance_does_not_become_measured_zero(env, monkeypatch):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    rag = _hybrid_rag(monkeypatch, missing_distances=True)
+    llm = _StubLLM()
+    result = _run(env, llm, rag)
+    assert llm.calls == []
+    assert result.scans[0].excluded_unknown == 2
+
+
+def test_real_rag_error_is_not_silently_an_empty_success(env, monkeypatch):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    rag = _hybrid_rag(monkeypatch, retrieval_error=True)
+    assert rag.query_notes("legacy caller") == []
+    with pytest.raises(OSError, match="index offline"):
+        rag.query_notes("strict caller", raise_on_error=True)
+    result = _run(env, _StubLLM(), rag)
+    assert result.status == "failed"
+    assert result.scans[0].retrieval_errors == ["index offline", "index offline"]
+
+
+@pytest.mark.parametrize("breakdown", [None, "corrupt", {}, {"passed_layers": ["bm25"]}])
+def test_invalid_breakdown_cannot_fall_back_to_zero(env, breakdown):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    hit = _hit("Independent Doc", distance=0.0)
+    hit["retrieval_breakdown"] = breakdown
+    llm = _StubLLM()
+    result = _run(env, llm, _StubRAG([hit]))
+    assert llm.calls == []
+    assert result.scans[0].excluded_unknown == 1
