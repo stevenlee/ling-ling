@@ -5,7 +5,7 @@
   - `show <id>`         → full rationale + unified diff for one proposal
   - `generate`          → run M1→M2→M3 now: assess → diagnose → queue proposals
   - `approve <id>`      → apply a reviewed proposal (backs up the original)
-  - `reject <id>`       → discard a proposal
+  - `reject <id> [reason]` → discard a proposal and remember its review reason
 
 The whole point of M3 is that the system can propose changes to its own
 prompts/templates, but a human stays in the loop: generation only queues,
@@ -37,7 +37,7 @@ from services.improvement_store import (
 )
 
 _APPROVE_RE = re.compile(r"approve[:\s]+([\w\-.]+)", re.IGNORECASE)
-_REJECT_RE = re.compile(r"reject[:\s]+([\w\-.]+)", re.IGNORECASE)
+_REJECT_RE = re.compile(r"reject[:\s]+([\w\-.]+)(?:[ \t]+([^\n]+))?", re.IGNORECASE)
 _SHOW_RE = re.compile(r"show[:\s]+([\w\-.]+)", re.IGNORECASE)
 _ALLOWED = [TEMPLATES_DIR, PERSONAS_DIR, GUIDELINES_DIR]
 
@@ -46,11 +46,26 @@ class ImproveAgent(BaseAgent):
     def execute(self, context: dict) -> str:
         directive = (context.get("user_directive") or "").strip()
 
-        if m := _APPROVE_RE.search(directive):
+        # A rejection reason may mention "approve <id>" as ordinary text.
+        # Route by the first subcommand, never a later word inside its reason.
+        matches = [
+            (m.start(), name, m)
+            for name, pattern in (
+                ("approve", _APPROVE_RE),
+                ("reject", _REJECT_RE),
+                ("show", _SHOW_RE),
+            )
+            if (m := pattern.search(directive))
+        ]
+        command = min(matches, key=lambda item: item[0]) if matches else None
+        if command and command[1] == "approve":
+            m = command[2]
             body, title = self._approve(m.group(1)), f"Improve-approve-{m.group(1)}"
-        elif m := _REJECT_RE.search(directive):
-            body, title = self._reject(m.group(1)), f"Improve-reject-{m.group(1)}"
-        elif m := _SHOW_RE.search(directive):
+        elif command and command[1] == "reject":
+            m = command[2]
+            body, title = self._reject(m.group(1), m.group(2) or ""), f"Improve-reject-{m.group(1)}"
+        elif command:
+            m = command[2]
             body, title = self._show(m.group(1)), f"Improve-show-{m.group(1)}"
         elif re.search(r"\bgenerate\b", directive, re.IGNORECASE):
             body, title = self._generate(), "Improve-generate"
@@ -73,7 +88,7 @@ class ImproveAgent(BaseAgent):
             "# 🛠️ 自我改善提案（待審）",
             "",
             "> 提案不會自動套用。檢視 → `@ling-improve approve <id>` 生效（原檔自動備份）"
-            "／`reject <id>` 退回。",
+            "／`reject <id> [理由]` 退回並記住理由。",
             "",
         ]
         for p in props:
@@ -125,10 +140,14 @@ class ImproveAgent(BaseAgent):
         )
         return f"# {head}：`{pid}`\n\n{res['message']}{extra}"
 
-    def _reject(self, pid: str) -> str:
+    def _reject(self, pid: str, reason: str = "") -> str:
         res = reject_proposal(
-            pid, pending_dir=IMPROVEMENTS_PENDING_DIR, rejected_dir=IMPROVEMENTS_REJECTED_DIR
+            pid,
+            pending_dir=IMPROVEMENTS_PENDING_DIR,
+            rejected_dir=IMPROVEMENTS_REJECTED_DIR,
+            reason=reason,
         )
+        (ui.success if res["ok"] else ui.error)(res["message"])
         return f"# 🗑️ 退回 `{pid}`\n\n{res['message']}"
 
     def _generate(self) -> str:

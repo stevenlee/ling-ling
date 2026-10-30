@@ -26,6 +26,8 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from services.improvement_review import prompt_contract_error, valid_proposal
+
 
 def _sha(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
@@ -80,7 +82,9 @@ def make_proposal(
 def save_proposal(proposal: dict, pending_dir: Path) -> Path:
     pending_dir.mkdir(parents=True, exist_ok=True)
     path = pending_dir / f"{proposal['id']}.json"
-    path.write_text(json.dumps(proposal, ensure_ascii=False, indent=2), encoding="utf-8")
+    if path.exists():
+        raise FileExistsError(f"提案 ID 已存在，不覆寫：{proposal['id']}")
+    _atomic_write_text(path, json.dumps(proposal, ensure_ascii=False, indent=2))
     return path
 
 
@@ -90,7 +94,11 @@ def list_proposals(pending_dir: Path) -> list[dict]:
     out = []
     for p in sorted(pending_dir.glob("*.json")):
         try:
-            out.append(json.loads(p.read_text(encoding="utf-8")))
+            proposal = json.loads(p.read_text(encoding="utf-8"))
+            if not valid_proposal(proposal):
+                logging.warning("improvement_store: invalid proposal record: %s", p.name)
+                continue
+            out.append(proposal)
         except Exception as e:
             logging.warning(f"improvement_store: skipping unreadable {p.name}: {e}")
     return out
@@ -101,9 +109,13 @@ def get_proposal(proposal_id: str, pending_dir: Path) -> dict | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
+        proposal = json.loads(path.read_text(encoding="utf-8"))
+        if valid_proposal(proposal):
+            return proposal
+        logging.warning("improvement_store: invalid proposal record: %s", path.name)
+    except Exception as e:
+        logging.warning("improvement_store: unreadable proposal %s: %s", path.name, e)
+    return None
 
 
 def _under_allowlist(target: Path, allowed_dirs: list[Path]) -> bool:
@@ -161,6 +173,9 @@ def approve_proposal(
     revised = prop.get("revised_content") or ""
     if not revised.strip():
         return {"ok": False, "message": "提案的修訂內容是空的,拒絕套用。"}
+    contract_error = prompt_contract_error(prop["target_path"], current, revised)
+    if contract_error:
+        return {"ok": False, "message": contract_error}
 
     # Everything before the target replace is preparation: any failure here
     # leaves the live prompt untouched.
@@ -202,23 +217,36 @@ def approve_proposal(
     }
 
 
-def reject_proposal(proposal_id: str, *, pending_dir: Path, rejected_dir: Path) -> dict:
+def reject_proposal(
+    proposal_id: str, *, pending_dir: Path, rejected_dir: Path, reason: str = ""
+) -> dict:
     prop = get_proposal(proposal_id, pending_dir)
     if not prop:
         return {"ok": False, "message": f"找不到提案 `{proposal_id}`。"}
+    previous = get_proposal(proposal_id, rejected_dir)
+    record = {**prop, "rejected_at": datetime.now().isoformat(timespec="seconds")}
+    if previous and previous.get("original_sha") == prop.get("original_sha"):
+        if previous.get("rejected_reason"):
+            record["rejected_reason"] = previous["rejected_reason"]
+    if reason.strip():
+        record["rejected_reason"] = reason.strip()
     try:
-        rejected_dir.mkdir(parents=True, exist_ok=True)
-        (rejected_dir / f"{proposal_id}.json").write_text(
-            json.dumps(
-                {**prop, "rejected_at": datetime.now().isoformat(timespec="seconds")},
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
+        _atomic_write_text(
+            rejected_dir / f"{proposal_id}.json",
+            json.dumps(record, ensure_ascii=False, indent=2),
         )
+    except Exception as e:
+        return {"ok": False, "message": f"退回紀錄未寫入，提案保留待審：{e}"}
+
+    # Commit point: the durable rejection exists. Queue cleanup may still fail.
+    try:
         (pending_dir / f"{proposal_id}.json").unlink(missing_ok=True)
     except Exception as e:
-        return {"ok": False, "message": f"退回時發生錯誤：{e}"}
+        return {
+            "ok": True,
+            "cleanup_required": True,
+            "message": f"已退回提案 `{proposal_id}`，但待審副本未清除：{e}",
+        }
     return {"ok": True, "message": f"已退回提案 `{proposal_id}`。"}
 
 

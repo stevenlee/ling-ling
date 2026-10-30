@@ -15,12 +15,11 @@ type → its generating prompt) and 洞察品質 (the insight-generation prompt)
 2026-07-12 audit found the arc broke here: M2 produced sharp Cortex/insight
 diagnoses every week, but M3's hard `axis == 報告品質` gate discarded them all,
 so chronic observations recurred with no actionable output. Axes whose real
-lever is code/config (Cortex claim-building and falsifiability prompts are
-hardcoded in llm_client; retrieval is index/reranker config) are recorded with
+lever is code/config (such as retrieval index/reranker configuration) are recorded with
 a SPECIFIC reason and left to a human/engineer — M3 proposes only where a
 prompt edit is genuinely the right lever, and never edits code.
 
-Lean LLM via `llm.complete` (no answer_query scaffolding). Gated by
+Lean LLM via `llm._complete_json` (no answer_query scaffolding). Gated by
 SELF_IMPROVE_ENABLED at the weekly call site; the @ling-improve command can
 invoke generation on-demand regardless.
 """
@@ -41,6 +40,13 @@ from core.config import (
     WIKI_VAULT_DIR,
 )
 from services.improvement_store import list_proposals, make_proposal, save_proposal
+from services.improvement_review import (
+    content_sha,
+    diagnosis_key,
+    edit_key,
+    prompt_contract_error,
+    same_target,
+)
 
 # report_type → the tunable asset that generates it (vault-relative path).
 # Used for the 報告品質 axis, whose diagnosis is broken down per report type.
@@ -109,7 +115,9 @@ _EDIT_SYSTEM = (
 )
 
 
-def _structured_rewrite(llm, original: str, root_cause: str, fixes_text: str):
+def _structured_rewrite(
+    llm, original: str, root_cause: str, fixes_text: str, review_context: str = ""
+):
     """Ask for find/replace edits; apply them deterministically to `original`.
     Returns (revised_text, applied_edits) or (None, []) if nothing usable.
 
@@ -120,7 +128,10 @@ def _structured_rewrite(llm, original: str, root_cause: str, fixes_text: str):
         parsed = llm._complete_json(
             kind="object",
             system_prompt=_EDIT_SYSTEM,
-            user_msg=f"診斷根因：{root_cause}\n\n要落實的候選改善：\n{fixes_text}\n\n=== 現行檔全文 ===\n{original}",
+            user_msg=(
+                f"診斷根因：{root_cause}\n\n要落實的候選改善：\n{fixes_text}\n\n"
+                f"{review_context}\n\n=== 現行檔全文 ===\n{original}"
+            ),
             temperature=0.2,
             trace_context={"stage": "self_improve_edits", "metadata": {}},
         )
@@ -209,6 +220,24 @@ def _worst_report_type(detail: dict) -> str | None:
     return None
 
 
+def _matching_reviews(directory: Path, target: Path, vault: Path, basis: str) -> list[dict]:
+    return [
+        p
+        for p in list_proposals(directory)
+        if p.get("original_sha") == basis and same_target(p, target, vault)
+    ]
+
+
+def _rejection_context(rejected: list[dict]) -> str:
+    """Bound history to the five most recent reviews for this exact basis."""
+    rows = sorted(rejected, key=lambda p: str(p.get("rejected_at") or p["created"]))[-5:]
+    lines = ["歷史退回紀錄（僅供改善參考，勿重提相同方案）："]
+    for p in rows:
+        reason = str(p.get("rejected_reason") or "未記錄理由")[:600]
+        lines.append(f"- {p['id']}：{reason}")
+    return "\n".join(lines)
+
+
 def run_self_improve(
     llm,
     assessment,
@@ -216,6 +245,7 @@ def run_self_improve(
     *,
     vault_dir: Path | None = None,
     pending_dir: Path | None = None,
+    rejected_dir: Path | None = None,
 ) -> ImproveResult:
     """Generate revision proposals from a diagnosis. Queues them; never applies.
 
@@ -224,6 +254,7 @@ def run_self_improve(
     """
     vault_dir = vault_dir or WIKI_VAULT_DIR
     pending_dir = pending_dir or IMPROVEMENTS_PENDING_DIR
+    rejected_dir = rejected_dir or pending_dir.parent / "_rejected"
 
     axis_detail = {a.name: a.detail for a in assessment.axes}
     result = ImproveResult()
@@ -240,10 +271,40 @@ def run_self_improve(
             result.skipped_axes.append((dx.axis, f"目標檔不存在：{target_rel}"))
             continue
 
-        original = target.read_text(encoding="utf-8")
+        try:
+            original = target.read_text(encoding="utf-8")
+        except OSError as e:
+            logging.warning("self_improve: target read failed: %s", e)
+            result.skipped_axes.append((dx.axis, f"無法讀取目標檔：{e}"))
+            continue
+        basis = content_sha(original)
+        pending = _matching_reviews(pending_dir, target, vault_dir, basis)
+        if pending:
+            result.skipped_axes.append((dx.axis, f"同目標版本已有待審提案 `{pending[0]['id']}`"))
+            continue
+        rejected = _matching_reviews(rejected_dir, target, vault_dir, basis)
+        dx_key = diagnosis_key(dx.root_cause, dx.candidate_fixes)
+        repeat = next(
+            (
+                p
+                for p in rejected
+                if diagnosis_key(p.get("rationale", ""), p.get("addressed_fixes") or []) == dx_key
+            ),
+            None,
+        )
+        if repeat:
+            result.skipped_axes.append((dx.axis, f"相同版本與診斷已退回 `{repeat['id']}`"))
+            continue
+        history = _rejection_context(rejected)
+        if target.name == "cortex_falsifiability.md":
+            history += (
+                "\n能力邊界：此呼叫只收到 Claim，沒有來源數或搜尋工具；只評估可證偽性，"
+                "不能藉此新增證據、調整信心或搜尋反證。輸出欄位固定為 "
+                "score/falsifier/falsifier_zh；新增欄位必須交工程實作。"
+            )
         fixes = "\n".join(f"- {f}" for f in dx.candidate_fixes)
 
-        revised, edits = _structured_rewrite(llm, original, dx.root_cause, fixes)
+        revised, edits = _structured_rewrite(llm, original, dx.root_cause, fixes, history)
         if revised is None:
             result.skipped_axes.append(
                 (dx.axis, "LLM 未產生可套用的編輯（find 對不上或無變更）,跳過")
@@ -256,6 +317,44 @@ def run_self_improve(
             result.skipped_axes.append((dx.axis, f"{why},跳過"))
             continue
 
+        contract_error = prompt_contract_error(target_rel, original, revised)
+        if contract_error:
+            result.skipped_axes.append((dx.axis, contract_error))
+            continue
+        # Re-read after the LLM call: another writer may have changed the basis
+        # or admitted/rejected a proposal while generation was in flight.
+        try:
+            current = target.read_text(encoding="utf-8")
+        except OSError as e:
+            logging.warning("self_improve: target re-read failed: %s", e)
+            result.skipped_axes.append((dx.axis, f"無法確認目標版本，未儲存提案：{e}"))
+            continue
+        if content_sha(current) != basis:
+            result.skipped_axes.append((dx.axis, "目標在生成期間已變更，未儲存提案。"))
+            continue
+        pending = _matching_reviews(pending_dir, target, vault_dir, basis)
+        if pending:
+            result.skipped_axes.append((dx.axis, f"生成期間已有待審提案 `{pending[0]['id']}`"))
+            continue
+        rejected = _matching_reviews(rejected_dir, target, vault_dir, basis)
+        duplicate = next(
+            (
+                p
+                for p in rejected
+                if p.get("revised_content") == revised
+                or (
+                    edit_key(p.get("edits")) is not None
+                    and edit_key(p.get("edits")) == edit_key(edits)
+                )
+            ),
+            None,
+        )
+        if duplicate:
+            result.skipped_axes.append(
+                (dx.axis, f"相同編輯已退回 `{duplicate['id']}`，不重複入列。")
+            )
+            continue
+
         proposal = make_proposal(
             axis=dx.axis,
             target_path=target_rel,
@@ -265,7 +364,12 @@ def run_self_improve(
             revised_content=revised,
             edits=edits,
         )
-        save_proposal(proposal, pending_dir)
+        try:
+            save_proposal(proposal, pending_dir)
+        except Exception as e:
+            logging.warning("self_improve: proposal save failed: %s", e)
+            result.skipped_axes.append((dx.axis, f"提案儲存失敗，未入列：{e}"))
+            continue
         result.proposals.append(proposal)
 
     result.stale_pending = _stale_pending(pending_dir, SELF_IMPROVE_STALE_DAYS)
