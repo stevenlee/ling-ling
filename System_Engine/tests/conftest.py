@@ -53,3 +53,15 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "live_llm" in item.keywords:
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_default_trace_store(tmp_path, monkeypatch):
+    """LLMClient constructors must not initialize or write the live trace DB.
+
+    Explicit per-test db_path values remain unchanged. Patch the symbol read
+    by TraceStore.__init__, including when called through LLMClient aliases.
+    """
+    from services import trace_store
+
+    monkeypatch.setattr(trace_store, "DATABASE_DIR", tmp_path / "trace-db")
