@@ -1151,18 +1151,37 @@ class IngestionPipeline:
         critique_section = outcome["section"]
         critique_verdict = outcome["verdict"]
 
-        # Verdict → publication status. Only a parsed "keep" earns
-        # #PerfectPitch; an explicit revise/reject — or a critique that ran
-        # but carried no parseable verdict — ships as #NeedsReview so a
-        # known-suspect synthesis stops masquerading as clean. When critique
-        # is disabled (no section) there is no signal either way.
-        if critique_verdict in ("revise", "reject") or (
-            critique_section and critique_verdict is None
+        # Legacy/double outcomes lack the explicit status. At this consumer
+        # boundary an enabled but empty review is incomplete, never a pass.
+        critique_status = outcome.get("critique_status")
+        if not critique_status:
+            if not SYNTHESIS_CRITIQUE_ENABLED:
+                critique_status = "disabled"
+            elif critique_verdict in ("keep", "revise", "reject"):
+                critique_status = "succeeded"
+            else:
+                critique_status = "unparseable" if critique_section else "error"
+        if (
+            critique_status not in ("disabled", "succeeded", "unparseable", "error")
+            or (SYNTHESIS_CRITIQUE_ENABLED and critique_status == "disabled")
+            or (
+                critique_status == "succeeded"
+                and critique_verdict not in ("keep", "revise", "reject")
+            )
         ):
-            status_tag = "#NeedsReview"
+            critique_status = "error"
+        if critique_status == "succeeded":
+            effective_verdict = critique_verdict
         else:
-            status_tag = "#PerfectPitch"
-        effective_verdict = critique_verdict or ("unparseable" if critique_section else None)
+            effective_verdict = (
+                critique_status if critique_status in ("unparseable", "error") else None
+            )
+        # Explicitly disabled critique keeps the legacy publication behavior.
+        status_tag = (
+            "#PerfectPitch"
+            if critique_status == "disabled" or effective_verdict == "keep"
+            else "#NeedsReview"
+        )
 
         # Retry budget is spent by this point: a still-standing revise/reject
         # must be visible where the reader starts, not buried in the critique
@@ -1175,6 +1194,7 @@ class IngestionPipeline:
                 "revise": "修訂 (revise)",
                 "reject": "拒絕 (reject)",
                 "unparseable": "無法解析判定",
+                "error": "審查未完成",
             }.get(verdict_key, verdict_key)
             findings = [
                 line.strip()
@@ -1183,8 +1203,12 @@ class IngestionPipeline:
             ][:3]
             warning_lines = [
                 f"> [!warning] 🔔 品質警示（critique 判定：{verdict_zh}）",
-                "> 品質審查發現未解決的缺陷，本文可能含有事實錯誤；"
-                "請對照文末「🔍 Quality Critique」逐項核對後再引用。",
+                (
+                    "> 品質審查未完成，本文尚未通過審查；請對照來源人工核對後再引用。"
+                    if effective_verdict == "error"
+                    else "> 品質審查發現未解決的缺陷，本文可能含有事實錯誤；"
+                    "請對照文末「🔍 Quality Critique」逐項核對後再引用。"
+                ),
             ]
             warning_lines.extend(f"> {finding}" for finding in findings)
             warning_block = "\n".join(warning_lines) + "\n\n"
@@ -1233,7 +1257,14 @@ class IngestionPipeline:
             "synthesis_pipeline": "structured-digest-v1",
             "digest_schema": "part-digest-v1",
             "quality_checker": "deterministic-markdown-v1",
+            "critique_status": critique_status,
         }
+        if outcome.get("critique_error"):
+            final_meta["critique_error"] = outcome["critique_error"]
+        if outcome.get("critique_status_history"):
+            final_meta["critique_status_history"] = outcome["critique_status_history"]
+        if any(outcome.get("critique_error_history") or []):
+            final_meta["critique_error_history"] = outcome["critique_error_history"]
         final_meta.update(self._template_stamp(syn_template))
         combined_fixes = self._dedupe_quality_fixes((synthesis_fixes or []) + (final_fixes or []))
         combined_fixes, syn_warnings = self._split_quality_warnings(combined_fixes)

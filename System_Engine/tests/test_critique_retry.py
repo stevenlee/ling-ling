@@ -31,7 +31,10 @@ class _RetryStubLLM:
         return self.synthesis_texts.pop(0)
 
     def critique_text(self, candidate, sources, focus=None):
-        return self.critiques.pop(0)
+        result = self.critiques.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 def _make_pipe(llm):
@@ -153,14 +156,16 @@ def test_unparseable_persists_ships_but_stays_visible(monkeypatch):
     assert out["verdict_history"] == [None, None]
 
 
-def test_no_verdict_no_section_does_not_retry(monkeypatch):
-    # Critique that produced NO section (disabled / empty / failed) = nothing to
-    # gate against → verdict None but NO retry (distinct from ran-but-unparseable).
+def test_empty_critique_is_error_without_regeneration(monkeypatch):
+    # Empty enabled review is incomplete, not disabled. Do not regenerate an
+    # entire synthesis when the reviewer has no usable response.
     monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
     monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_MAX_RETRIES", 1)
-    llm = _RetryStubLLM(["text v1"], [""])  # empty critique → section "", verdict None
+    llm = _RetryStubLLM(["text v1"], [""])
     out = _run(_make_pipe(llm))
 
+    assert out["critique_status"] == "error"
+    assert "審查未完成" in out["section"]
     assert out["verdict"] is None
     assert out["attempts"] == 1
     assert len(llm.synthesis_calls) == 1
@@ -343,11 +348,12 @@ class _WriteStubLLM:
     model = "stub-model"
 
 
-def _write_synthesis(tmp_path, monkeypatch, outcome):
+def _write_synthesis(tmp_path, monkeypatch, outcome, *, enabled=True, recorded=None):
     from services.ingest.part_state import PartState
 
     monkeypatch.setattr("services.ingestion_pipeline.PAGES_DIR", tmp_path / "pages")
-    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", enabled)
+    monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", False)
     monkeypatch.setattr(
         "services.learning_artifacts.maybe_artifact_section",
         lambda *a, **k: "",
@@ -357,6 +363,14 @@ def _write_synthesis(tmp_path, monkeypatch, outcome):
     pipe.llm = _WriteStubLLM()
     pipe.rag = MagicMock()
     pipe._synthesize_with_critique_retry = lambda *a, **k: outcome
+    if recorded is not None:
+
+        def record(path, kind, title, metadata, quality_verdict=None):
+            recorded.append(
+                {"kind": kind, "metadata": metadata, "quality_verdict": quality_verdict}
+            )
+
+        pipe._record_artifact = record
 
     path = pipe._write_synthesis(
         base_title="Doc",
@@ -421,9 +435,8 @@ def test_unparseable_verdict_with_critique_text_needs_review(tmp_path, monkeypat
     assert "[!warning]" in text
 
 
-def test_no_critique_section_keeps_perfect_pitch(tmp_path, monkeypatch):
-    # Critique disabled / failed silently: no signal either way.
-    text = _write_synthesis(tmp_path, monkeypatch, _outcome(None, ""))
+def test_disabled_critique_keeps_legacy_publication_behavior(tmp_path, monkeypatch):
+    text = _write_synthesis(tmp_path, monkeypatch, _outcome(None, ""), enabled=False)
 
     assert "#PerfectPitch" in text
     assert "quality_verdict" not in text
@@ -471,3 +484,150 @@ def test_prompt_with_feedback_inserts_block_before_task(llm_client):
     marker = "Previous attempt was critiqued. Address these findings:\n[major] fix X"
     assert marker in prompt
     assert prompt.index(marker) < prompt.index("Task:\n")
+
+
+@pytest.mark.parametrize(
+    "response", [ConnectionError("offline"), "Critique failed: timeout", "", None, 42]
+)
+def test_enabled_review_failure_publishes_needs_review_and_traces_error(
+    tmp_path, monkeypatch, response
+):
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_MAX_RETRIES", 3)
+    llm = _RetryStubLLM(["candidate"], [response])
+    outcome = _run(_make_pipe(llm))
+    assert len(llm.synthesis_calls) == 1
+    assert outcome["attempts"] == 1 and outcome["verdict"] is None
+    assert outcome["critique_status"] == "error"
+    assert outcome["critique_error"]
+    assert outcome["verdict_history"] == [None]
+    assert outcome["critique_status_history"] == ["error"]
+    recorded = []
+    text = _write_synthesis(tmp_path, monkeypatch, outcome, recorded=recorded)
+    assert "#NeedsReview" in text and "#PerfectPitch" not in text
+    assert "quality_verdict: error" in text and "critique_status: error" in text
+    assert "審查未完成" in text
+    assert "發現未解決的缺陷" not in text  # failure is not a content judgment
+    assert text.index("[!warning]") < text.index("## 📝 Executive Summary")
+    assert recorded[0]["quality_verdict"] == "error"
+    assert recorded[0]["metadata"]["critique_status"] == "error"
+
+
+def test_legacy_empty_outcome_cannot_silently_pass_enabled_gate(tmp_path, monkeypatch):
+    text = _write_synthesis(tmp_path, monkeypatch, _outcome(None, ""))
+    assert "#NeedsReview" in text and "#PerfectPitch" not in text
+    assert "quality_verdict: error" in text and "審查未完成" in text
+
+
+@pytest.mark.parametrize("first", ["revise", "reject", None])
+def test_retry_outage_keeps_original_and_stops_regeneration(monkeypatch, first):
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_MAX_RETRIES", 3)
+    original = _verdict(first) if first else "Findings without a verdict."
+    llm = _RetryStubLLM(
+        ["reviewed original", "unreviewed retry"], [original, ConnectionError("down")]
+    )
+    result = _run(_make_pipe(llm))
+    assert result["text"] == "reviewed original"
+    assert result["verdict"] == first
+    assert len(llm.synthesis_calls) == 2
+    assert result["attempts"] == 2
+    assert result["critique_status"] == ("succeeded" if first else "unparseable")
+    assert result["critique_status_history"][-1] == "error"
+    assert "down" in result["critique_error_history"][-1]
+    assert result["section"].endswith(original + "\n\n")
+
+
+def test_disabled_gate_is_explicit_and_does_not_call_reviewer(tmp_path, monkeypatch):
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", False)
+    llm = _RetryStubLLM(["candidate"], [])
+    result = _run(_make_pipe(llm))
+    assert result["critique_status"] == "disabled"
+    assert result["section"] == "" and result["verdict"] is None
+    text = _write_synthesis(tmp_path, monkeypatch, result, enabled=False)
+    assert "critique_status: disabled" in text
+    assert "quality_verdict" not in text
+    assert "#PerfectPitch" in text and "[!warning]" not in text
+
+
+def test_real_client_exhausted_empty_content_is_error_without_synthesis_retry(monkeypatch):
+    from services.llm_client import LLMClient
+
+    client = LLMClient.__new__(LLMClient)
+    calls = []
+    client._get_lang_hint = lambda: "English"
+    client._build_system_prompt = lambda *a, **k: ("fixed critique", {})
+    client.format_digest_for_prompt = lambda d: "source"
+    client.generate_synthesis = lambda *a, **k: "candidate"
+
+    def empty(*a, **kwargs):
+        calls.append(kwargs)
+        return ""
+
+    client._complete_text = empty
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_MAX_RETRIES", 3)
+    result = _run(_make_pipe(client))
+    assert len(calls) == 3  # existing bounded content rerolls, no whole-page regeneration
+    assert [c["trace_context"]["metadata"]["content_attempt"] for c in calls] == [1, 2, 3]
+    assert result["attempts"] == 1 and result["critique_status"] == "error"
+
+
+def test_real_client_transport_failure_does_not_multiply_content_retries(monkeypatch):
+    from services.llm_client import LLMClient
+
+    client = LLMClient.__new__(LLMClient)
+    calls = []
+    client._get_lang_hint = lambda: "English"
+    client._build_system_prompt = lambda *a, **k: ("fixed critique", {})
+    client.format_digest_for_prompt = lambda d: "source"
+    client.generate_synthesis = lambda *a, **k: "candidate"
+
+    def failed(*a, **kwargs):
+        calls.append(kwargs)
+        raise ConnectionError("transport already exhausted")
+
+    client._complete_text = failed
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+    result = _run(_make_pipe(client))
+    assert len(calls) == 1
+    assert result["critique_status"] == "error" and result["verdict"] is None
+
+
+def test_llm_fixture_trace_store_is_under_tmp_path(llm_client, tmp_path):
+    assert llm_client.trace_store.db_path.is_relative_to(tmp_path)
+
+
+def test_source_formatting_error_is_visible_and_does_not_call_reviewer():
+    from services.ingest.critique_loop import SynthesisCritiqueLoop
+
+    class BrokenSources:
+        def format_digest_for_prompt(self, digest):
+            raise ValueError("bad digest")
+
+        def critique_text(self, **kwargs):
+            raise AssertionError("reviewer must not be called without sources")
+
+    result = SynthesisCritiqueLoop(BrokenSources()).critique_result(
+        "Doc",
+        "candidate",
+        ["bad"],
+        enabled=True,
+    )
+    assert result["critique_status"] == "error"
+    assert result["verdict"] is None and "bad digest" in result["critique_error"]
+
+
+def test_retry_error_history_is_preserved_in_published_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_MAX_RETRIES", 2)
+    llm = _RetryStubLLM(["original", "retry"], [_verdict("revise"), ConnectionError("offline")])
+    outcome = _run(_make_pipe(llm))
+    recorded = []
+    text = _write_synthesis(tmp_path, monkeypatch, outcome, recorded=recorded)
+    assert "quality_verdict: revise" in text and "#NeedsReview" in text
+    assert "critique_error_history:" in text
+    metadata = recorded[0]["metadata"]
+    assert metadata["critique_status"] == "succeeded"  # selected original was reviewed
+    assert metadata["critique_status_history"] == ["succeeded", "error"]
+    assert "offline" in metadata["critique_error_history"][-1]

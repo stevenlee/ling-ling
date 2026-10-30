@@ -381,7 +381,8 @@ class TestRunSynthesisCritique:
         pipe = IngestionPipeline.__new__(IngestionPipeline)
         pipe.llm = _StubLLM(critique_response="ignored")
         section, verdict = pipe._run_synthesis_critique("X", "candidate", [])
-        assert (section, verdict) == ("", None)
+        assert verdict is None
+        assert "審查未完成" in section
         assert pipe.llm.last_call is None
 
     def test_empty_candidate_skips(self, monkeypatch):
@@ -389,7 +390,8 @@ class TestRunSynthesisCritique:
         pipe = IngestionPipeline.__new__(IngestionPipeline)
         pipe.llm = _StubLLM(critique_response="ignored")
         section, verdict = pipe._run_synthesis_critique("X", "   ", ["d1"])
-        assert (section, verdict) == ("", None)
+        assert verdict is None
+        assert "審查未完成" in section
 
     def test_success_path(self, monkeypatch):
         monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
@@ -414,15 +416,17 @@ class TestRunSynthesisCritique:
         pipe = IngestionPipeline.__new__(IngestionPipeline)
         pipe.llm = _StubLLM(raise_exc=RuntimeError("network down"))
         section, verdict = pipe._run_synthesis_critique("X", "candidate", ["d1"])
-        assert (section, verdict) == ("", None)
+        assert verdict is None
+        assert "審查未完成" in section
 
     def test_failure_marker_response_is_skipped(self, monkeypatch):
-        """LLMClient.critique_text returns 'Critique failed: ...' on error — treat as no critique."""
+        """LLMClient.critique_text returns 'Critique failed: ...' on error — keep the failure visible."""
         monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
         pipe = IngestionPipeline.__new__(IngestionPipeline)
         pipe.llm = _StubLLM(critique_response="Critique failed: bad gateway")
         section, verdict = pipe._run_synthesis_critique("X", "candidate", ["d1"])
-        assert (section, verdict) == ("", None)
+        assert verdict is None
+        assert "審查未完成" in section
 
 
 if __name__ == "__main__":

@@ -97,6 +97,9 @@ def _axis_metric(ax: "Axis") -> dict:
     keep = (
         "rate",
         "error_rate",
+        "gate_error",
+        "unparseable",
+        "content_bad",
         "pass_rate",
         "dogmatic",
         "thin_evidence",
@@ -198,26 +201,31 @@ def _axis_report_quality(trace_store, window_days: int, obs: list) -> Axis:
     # but keep it distinguishable from content revise/reject so the diagnosis
     # aims at the critique parser, not the generating prompt.
     unparseable = sum(1 for _, v in verdicts if v == "unparseable")
-    bad = content_bad + unparseable
+    gate_error = sum(1 for _, v in verdicts if v == "error")
+    bad = content_bad + unparseable + gate_error
     rate = bad / total
     # Per-type breakdown. `bad` here stays CONTENT-only (revise/reject) because
     # M3's worst-type → prompt-rewrite lever must target a prompt-fixable type;
     # `unparseable` (a parser/gate issue) is tracked in its own field.
-    by_type = defaultdict(lambda: [0, 0, 0])  # type → [content_bad, total, unparseable]
+    by_type = defaultdict(lambda: [0, 0, 0, 0])  # content_bad, total, unparseable, gate_error
     for t, v in verdicts:
         by_type[t][1] += 1
         if v in ("revise", "reject"):
             by_type[t][0] += 1
         elif v == "unparseable":
             by_type[t][2] += 1
+        elif v == "error":
+            by_type[t][3] += 1
     ax.detail = {
         "total": total,
-        "bad": bad,  # total failures (content + unparseable) — drives rate/lamp
+        "bad": bad,  # content + parse + operational failures — drives rate/lamp
         "content_bad": content_bad,
+        "gate_error": gate_error,
         "unparseable": unparseable,
         "rate": rate,
         "by_type": {
-            t: {"bad": b, "total": n, "unparseable": u} for t, (b, n, u) in by_type.items()
+            t: {"bad": b, "total": n, "unparseable": u, "gate_error": e}
+            for t, (b, n, u, e) in by_type.items()
         },
     }
     ax.lamp = (
@@ -226,13 +234,15 @@ def _axis_report_quality(trace_store, window_days: int, obs: list) -> Axis:
     parts = [f"{total} 份有評分；revise/reject {content_bad}"]
     if unparseable:
         parts.append(f"unparseable {unparseable}（品質閘未落地）")
+    if gate_error:
+        parts.append(f"審查未完成 {gate_error}（呼叫／輸入失敗）")
     ax.summary = "；".join(parts) + f"（未通過 {rate:.0%}）。"
     if ax.lamp != GREEN:
         worst = sorted(
             by_type.items(),
-            key=lambda kv: -((kv[1][0] + kv[1][2]) / kv[1][1] if kv[1][1] else 0),
+            key=lambda kv: -((kv[1][0] + kv[1][2] + kv[1][3]) / kv[1][1] if kv[1][1] else 0),
         )
-        for t, (b, n, u) in worst:
+        for t, (b, n, u, e) in worst:
             if n and b and b / n >= _VERDICT_REVISE_YELLOW:
                 obs.append(
                     f"報告型別 `{t}`：{n} 份中 {b} 份被判 revise/reject — 檢視其 prompt/template。"
@@ -241,6 +251,10 @@ def _axis_report_quality(trace_store, window_days: int, obs: list) -> Axis:
                 obs.append(
                     f"報告型別 `{t}`：{n} 份中 {u} 份 verdict 無法解析（品質閘失效）"
                     f"— 檢查 critique parser／模型輸出格式，非 prompt。"
+                )
+            if n and e and e / n >= _VERDICT_REVISE_YELLOW:
+                obs.append(
+                    f"報告型別 `{t}`：{n} 份中 {e} 份審查未完成 — 檢查 provider／連線／輸入，非生成 prompt。"
                 )
     return ax
 

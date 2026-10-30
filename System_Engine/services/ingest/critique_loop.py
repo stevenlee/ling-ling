@@ -78,8 +78,10 @@ def _needs_retry(result: dict) -> bool:
     line), so the synthesis would otherwise ship UNGATED. Retrying gives the gate
     another chance at a readable verdict; if it never parses, the synthesis still
     ships but is recorded/counted as unparseable (visible), never silently
-    "passed". A None verdict with NO section means critique is off/failed —
-    nothing to gate against, so don't retry."""
+    "passed". Operational errors never trigger whole-synthesis regeneration;
+    they stay visible as incomplete reviews rather than verdicts."""
+    if result.get("critique_status") in ("error", "disabled"):
+        return False
     v = result.get("verdict")
     return v in ("revise", "reject") or (v is None and bool(result.get("section")))
 
@@ -114,7 +116,8 @@ class SynthesisCritiqueLoop:
         An explicit revise/reject verdict triggers up to ``max_retries``
         regenerations with the critique findings fed back. A retry is adopted
         only when its verdict ranks strictly higher (keep > revise > reject >
-        unparseable); an unparseable first verdict never triggers a retry.
+        unparseable). Missing verdicts can retry; operational failures stop
+        regeneration and preserve the best already-reviewed candidate.
         Worst case adds one synthesis + one critique call per retry (local
         model).
 
@@ -137,12 +140,14 @@ class SynthesisCritiqueLoop:
             text, fixes = run_markdown_quality_checks(text, strip_frontmatter=True)
             # Critique runs against the same digests the synthesis was
             # generated from — so any drift away from the sources surfaces.
-            section, verdict = self.critique_once(base_title, text, part_digests, enabled=enabled)
-            return {"text": text, "fixes": fixes, "section": section, "verdict": verdict}
+            critique = self.critique_result(base_title, text, part_digests, enabled=enabled)
+            return {"text": text, "fixes": fixes, **critique}
 
         current = attempt(None)
         attempts = 1
         history = [current["verdict"]]
+        status_history = [current["critique_status"]]
+        error_history = [current["critique_error"]]
 
         retries_left = max_retries
         while _needs_retry(current) and retries_left > 0:
@@ -151,6 +156,13 @@ class SynthesisCritiqueLoop:
             retry = attempt(feedback)
             attempts += 1
             history.append(retry["verdict"])
+            status_history.append(retry["critique_status"])
+            error_history.append(retry["critique_error"])
+            if retry["critique_status"] == "error":
+                logging.warning(
+                    "Critique retry for %s failed; retaining the prior candidate.", base_title
+                )
+                break
             if _VERDICT_RANK[retry["verdict"]] > _VERDICT_RANK[current["verdict"]]:
                 current = retry
             else:
@@ -161,6 +173,8 @@ class SynthesisCritiqueLoop:
 
         current["attempts"] = attempts
         current["verdict_history"] = history
+        current["critique_status_history"] = status_history
+        current["critique_error_history"] = error_history
         return current
 
     def critique_once(
@@ -171,22 +185,39 @@ class SynthesisCritiqueLoop:
         *,
         enabled: bool,
     ) -> tuple[str, str | None]:
-        """Critique the synthesis against its part digests. Fail-soft.
+        """Compatibility view; failed enabled reviews carry a visible section."""
+        result = self.critique_result(base_title, synthesis_text, part_digests, enabled=enabled)
+        return result["section"], result["verdict"]
 
-        Returns (body_section, verdict). `body_section` is the empty string
-        when critique is disabled or fails, so the caller can splice it in
-        unconditionally. `verdict` is one of "keep" / "revise" / "reject"
-        if parseable, else None — None means "the critique text carried no
-        parseable verdict", which is treated as no-retry (distinct from a
-        genuine "revise").
-        """
+    def critique_result(
+        self,
+        base_title: str,
+        synthesis_text: str,
+        part_digests: list,
+        *,
+        enabled: bool,
+    ) -> dict:
+        """Distinguish an intentional disabled gate from an incomplete review."""
+
+        def outcome(status, section="", verdict=None, error=""):
+            return {
+                "critique_status": status,
+                "section": section,
+                "verdict": verdict,
+                "critique_error": error,
+            }
+
+        def failed(reason):
+            detail = " ".join(str(reason).split())[:300]
+            section = f"{CRITIQUE_HEADER}\n\n> 審查未完成：{detail}\n\n"
+            return outcome("error", section=section, error=detail)
+
         if not enabled:
-            return "", None
-        if not part_digests or not synthesis_text.strip():
-            return "", None
-
-        sources = "\n\n".join(self.llm.format_digest_for_prompt(d) for d in part_digests)
+            return outcome("disabled")
+        if not part_digests or not isinstance(synthesis_text, str) or not synthesis_text.strip():
+            return failed("缺少來源摘要或候選內容，無法執行審查。")
         try:
+            sources = "\n\n".join(self.llm.format_digest_for_prompt(d) for d in part_digests)
             critique = self.llm.critique_text(
                 candidate=synthesis_text,
                 sources=sources,
@@ -194,11 +225,12 @@ class SynthesisCritiqueLoop:
             )
         except Exception as e:
             logging.warning(f"Critique failed for {base_title}: {e}")
-            return "", None
+            return failed(f"呼叫失敗：{e}")
 
-        if not critique or not critique.strip() or critique.startswith("Critique failed"):
-            return "", None
-
+        if not isinstance(critique, str) or not critique.strip():
+            return failed("審查未回傳有效文字。")
+        if critique.lstrip().startswith("Critique failed"):
+            return failed(critique)
         verdict = parse_verdict(critique)
         section = f"{CRITIQUE_HEADER}\n\n{critique.strip()}\n\n"
-        return section, verdict
+        return outcome("succeeded" if verdict else "unparseable", section, verdict)
