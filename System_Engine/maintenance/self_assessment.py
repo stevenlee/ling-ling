@@ -42,6 +42,7 @@ from core.config import (
     RETRIEVAL_BENCH_MIN_PASS_RATE,
     SELF_ASSESSMENT_HISTORY_FILE,
     SELF_ASSESSMENT_HISTORY_MAX,
+    settings,
 )
 from core.parser import parse_markdown_metadata
 
@@ -340,6 +341,10 @@ def _axis_cortex(cortex_dir: Path, ledger_file: Path, obs: list) -> Axis:
         "falsified": n_fals,
         "adjudication_strict": strict,
     }
+    snapshot = getattr(report, "snapshot", {})
+    ax.detail.update(snapshot)
+    ax.detail["a2_enabled"] = bool(settings.EVIDENCE_TRACEBACK_ENABLED)
+    ax.detail["a2_apply"] = bool(settings.EVIDENCE_TRACEBACK_APPLY)
     # Dogmatic (confident + unfalsifiable) is the echo-chamber fuel → weigh it.
     ax.lamp = RED if n_dog else YELLOW if (n_contra or n_thin) else GREEN
     ax.summary = (
@@ -348,8 +353,16 @@ def _axis_cortex(cortex_dir: Path, ledger_file: Path, obs: list) -> Axis:
     )
     if n_dog:
         obs.append(f"Cortex 有 {n_dog} 條教條主張（高信心+低可證偽）— 同溫層燃料，考慮針對性證偽。")
-    if n_thin:
-        obs.append(f"Cortex 有 {n_thin} 條薄證據主張（≤1 來源）— 可在 seed 選擇時補強。")
+    if "by_status" in snapshot:
+        active = snapshot["by_status"].get("active", {})
+        active_thin = active.get("thin", 0)
+        ax.summary += f" active {active.get('total', 0)} 條，其中薄證據 {active_thin} 條。"
+        if active_thin:
+            obs.append(
+                f"Cortex active 中有 {active_thin} 條薄證據主張；應與 inactive 存量分開評估補證需求。"
+            )
+    elif n_thin:
+        obs.append(f"Cortex 有 {n_thin} 條薄證據主張；缺少狀態分布，尚不能判斷 active 補證需求。")
     return ax
 
 

@@ -392,3 +392,52 @@ def test_semantic_entropy_axis_yellow_on_sustained_decline(tmp_path):
     ax = _axis(r, "語義熵")
     assert ax.lamp == YELLOW
     assert any("連續" in o and "下降" in o for o in r.observations)
+
+
+def test_report_quality_counts_review_errors_separately_from_content(tmp_path):
+    artifacts = [
+        {"artifact_type": "synthesis", "quality_verdict": verdict}
+        for verdict in ("keep", "error", "unparseable", "error")
+    ]
+    result = run_self_assessment(FakeTrace(artifacts=artifacts), **_paths(tmp_path))
+    axis = _axis(result, "報告品質")
+    assert axis.lamp == RED
+    assert axis.detail["gate_error"] == 2
+    assert axis.detail["unparseable"] == 1
+    assert axis.detail["content_bad"] == 0
+    assert axis.detail["bad"] == 3 and axis.detail["rate"] == 0.75
+    assert axis.detail["by_type"]["synthesis"]["bad"] == 0
+    assert axis.detail["by_type"]["synthesis"]["gate_error"] == 2
+    assert any("provider／連線／輸入" in o for o in result.observations)
+    assert not any("檢視其 prompt/template" in o for o in result.observations)
+
+
+def test_cortex_snapshot_separates_status_and_a2_provenance(tmp_path, monkeypatch):
+    import maintenance.self_assessment as sa
+    from services.cortex_store import CortexPage, save_cortex_page
+
+    monkeypatch.setattr(sa.settings, "EVIDENCE_TRACEBACK_ENABLED", True)
+    monkeypatch.setattr(sa.settings, "EVIDENCE_TRACEBACK_APPLY", True)
+    root = _paths(tmp_path)["cortex_dir"]
+    for cid, status, evidence in (
+        ("a", "active", [{"insight": "[EvidenceTrace] current"}, {"insight": "original"}]),
+        ("b", "active", [{"insight": "[EvidenceTrace] old", "superseded_by": "new"}]),
+        ("c", "dormant", [{"insight": "[EvidenceTrace] retained"}]),
+        ("d", "falsified", []),
+    ):
+        for entry in evidence:
+            entry.update(date="2026-10-29", summary="test", sources=[])
+        save_cortex_page(
+            CortexPage(
+                claim_id=cid, path=root / f"{cid}.md", claim=cid, status=status, evidence=evidence
+            )
+        )
+    ax = _axis(run_self_assessment(FakeTrace(), **_paths(tmp_path)), "Cortex 信念")
+    assert ax.detail["by_status"] == {
+        "active": {"total": 2, "thin": 1, "a2_pages": 1, "a2_evidence": 1},
+        "dormant": {"total": 1, "thin": 1, "a2_pages": 1, "a2_evidence": 1},
+        "falsified": {"total": 1, "thin": 1, "a2_pages": 0, "a2_evidence": 0},
+    }
+    assert ax.detail["thin_evidence"] == 2  # existing tension bucket excludes falsified
+    assert ax.detail["active_thin_examples"] == ["b"]
+    assert ax.detail["a2_enabled"] is True and ax.detail["a2_apply"] is True

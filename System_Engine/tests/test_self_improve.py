@@ -541,3 +541,23 @@ def test_rejection_record_arriving_during_generation_blocks_duplicate(tmp_path):
         pending_dir=tmp_path / "_pending",
     )
     assert res.proposals == [] and "相同編輯已退回" in str(res.skipped_axes)
+
+
+def test_insufficient_diagnosis_cannot_trigger_prompt_rewrite(tmp_path):
+    vault, _ = _vault(tmp_path)
+    llm = FakeLLM(edits=[{"find": "Score the claim.", "replace": "Search for sources."}])
+    dx = Diagnosis(
+        axis="Cortex 信念",
+        lamp=RED,
+        root_cause="unsupported",
+        candidate_fixes=["search for two sources"],
+        proposal_eligible=False,
+    )
+    pending = tmp_path / "_pending"
+    result = run_self_improve(
+        llm, _assessment(), DiagnosisResult(diagnoses=[dx]), vault_dir=vault, pending_dir=pending
+    )
+    assert llm.calls == 0
+    assert result.proposals == []
+    assert any("診斷證據不足" in reason for _, reason in result.skipped_axes)
+    assert not list(pending.glob("*.json"))

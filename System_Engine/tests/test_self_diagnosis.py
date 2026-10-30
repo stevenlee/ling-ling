@@ -58,7 +58,10 @@ def test_diagnoses_only_flagged_axes(tmp_path):
     # only the 2 non-green axes get an LLM call
     assert set(filter(None, llm.calls)) == {"檢索品質", "Cortex 信念"}
     assert len(r.diagnoses) == 2
-    assert all(d.candidate_fixes for d in r.diagnoses)
+    assert r.diagnoses[0].candidate_fixes
+    assert not r.diagnoses[1].proposal_eligible
+    assert r.diagnoses[1].hypothesis == "rc"
+    assert r.diagnoses[1].candidate_fixes == []
     assert r.report_path is not None
 
 
@@ -87,3 +90,155 @@ def test_per_axis_failopen(tmp_path):
     assert r.status == "succeeded"
     assert r.diagnoses[0].root_cause == ""
     assert r.report_path is None
+
+
+def test_cortex_context_uses_assessment_snapshot_without_rescan(tmp_path, monkeypatch):
+    from maintenance.self_diagnosis import _ctx_cortex
+    import services.cortex_tensions as ct
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("M2 must not rescan another snapshot")
+
+    monkeypatch.setattr(ct, "scan_tensions", forbidden)
+    ctx = _ctx_cortex(
+        {
+            "total_pages": 12,
+            "thin_evidence": 10,
+            "by_status": {
+                "active": {"total": 3, "thin": 1, "a2_pages": 2, "a2_evidence": 4},
+                "dormant": {"total": 9, "thin": 9, "a2_pages": 1, "a2_evidence": 1},
+            },
+            "a2_enabled": True,
+            "a2_apply": False,
+            "active_thin_examples": ["snapshot claim"],
+            "dogmatic_examples": [{"claim": "dogma", "status": "dormant"}],
+        },
+        tmp_path,
+    )
+    assert "active 補證需求為 1/3" in ctx
+    assert "2 條主張／4 筆證據" in ctx
+    assert "A2 排程啟用：是" in ctx and "A2 寫回設定：否" in ctx
+    assert "非近期增厚次數或因果成效" in ctx
+    assert "snapshot claim" in ctx and "[dormant]：dogma" in ctx
+
+
+def test_legacy_cortex_context_does_not_invent_missing_a2_metrics(tmp_path):
+    from maintenance.self_diagnosis import _ctx_cortex
+
+    ctx = _ctx_cortex({"total_pages": 10, "thin_evidence": 8}, tmp_path)
+    assert "視為未知" in ctx
+    assert "A2 排程啟用：未知" in ctx and "A2 寫回設定：未知" in ctx
+
+
+def test_report_context_distinguishes_execution_failure_from_content():
+    from maintenance.self_diagnosis import _ctx_report_quality
+
+    ctx = _ctx_report_quality(
+        {
+            "total": 4,
+            "content_bad": 1,
+            "gate_error": 2,
+            "unparseable": 1,
+            "rate": 1,
+            "by_type": {"Synthesis": {"total": 4, "bad": 1, "gate_error": 2, "unparseable": 1}},
+        }
+    )
+    assert "1 份 revise/reject" in ctx
+    assert "2 份審查未完成" in ctx
+    assert "不能當成內容差" in ctx and "非內容 verdict" in ctx
+
+
+def test_cortex_overconfident_causal_claim_is_held_as_unverified(tmp_path):
+    # Regression for the real 2026-10-30 M2 output: global thin counts were
+    # used to assert A2 failure despite the explicit active/inactive split.
+    llm = FakeLLM(
+        ret={
+            "root_cause": "A2 驗證機制陷入低質量循環，97/122 薄證據證明無法增厚。",
+            "candidate_fixes": ["修改 A2 Prompt 強制搜尋至少兩個獨立來源"],
+            "confidence": 0.99,
+            "needs": "",
+            "proposal_eligible": True,
+        }
+    )
+    assessment = _assessment(
+        [
+            Axis(
+                "Cortex 信念",
+                RED,
+                "thin",
+                detail={
+                    "total_pages": 122,
+                    "thin_evidence": 97,
+                    "by_status": {
+                        "active": {"total": 19, "thin": 12, "a2_pages": 7, "a2_evidence": 8}
+                    },
+                    "a2_enabled": True,
+                    "a2_apply": True,
+                },
+            )
+        ]
+    )
+    result = run_self_diagnosis(llm, assessment, **_paths(tmp_path))
+    dx = result.diagnoses[0]
+    assert dx.proposal_eligible is False
+    assert dx.confidence == 0 and dx.candidate_fixes == []
+    assert "低質量循環" in dx.hypothesis
+    assert "低質量循環" not in dx.root_cause
+    assert "尚未確認根因" in dx.root_cause
+    assert "固定 cohort" in dx.needs
+    assert len(dx.investigation_steps) == 3
+    body = result.report_path.read_text(encoding="utf-8")
+    assert "模型未驗證假設" in body and "未送入 M3" in body
+    assert "信心 99%" not in body and "強制搜尋" not in body
+    assert "查證項目（尚未執行）" in body
+    assert "能力邊界" in dx.context and "沒有搜尋工具" in dx.context
+    assert "A2 已只選 active" in dx.context
+
+
+def test_legacy_cortex_metrics_also_require_causal_evidence(tmp_path):
+    result = run_self_diagnosis(
+        FakeLLM(),
+        _assessment(
+            [
+                Axis("Cortex 信念", RED, "old snapshot", detail={"thin_evidence": 10}),
+                Axis("檢索品質", RED, "low", detail={"pass_rate": 0.5}),
+            ]
+        ),
+        **_paths(tmp_path),
+    )
+    cortex, retrieval = result.diagnoses
+    assert not cortex.proposal_eligible and cortex.candidate_fixes == []
+    assert retrieval.proposal_eligible and retrieval.candidate_fixes
+
+
+def test_cortex_provider_failure_does_not_become_a_diagnosis(tmp_path):
+    result = run_self_diagnosis(
+        FakeLLM(boom=True),
+        _assessment([Axis("Cortex 信念", RED, "thin", detail={})]),
+        **_paths(tmp_path),
+    )
+    assert result.diagnoses[0].root_cause == ""
+    assert result.diagnoses[0].hypothesis == ""
+    assert result.report_path is None
+
+
+def test_malformed_confidence_does_not_leak_partial_fixes(tmp_path):
+    llm = FakeLLM(
+        ret={
+            "root_cause": "unverified",
+            "candidate_fixes": ["change prompt"],
+            "confidence": "not a number",
+        }
+    )
+    result = run_self_diagnosis(
+        llm,
+        _assessment(
+            [
+                Axis("Cortex 信念", RED, "thin", detail={}),
+                Axis("報告品質", RED, "bad", detail={}),
+            ]
+        ),
+        **_paths(tmp_path),
+    )
+    assert all(not dx.candidate_fixes and not dx.proposal_eligible for dx in result.diagnoses)
+    assert result.report_path is None

@@ -33,6 +33,7 @@ class TensionReport:
     thin_evidence: list[CortexPage] = field(default_factory=list)
     falsified: list[CortexPage] = field(default_factory=list)
     total_pages: int = 0
+    snapshot: dict = field(default_factory=dict)
 
     @property
     def any(self) -> bool:
@@ -49,6 +50,20 @@ def scan_tensions(cortex_dir: Path | None = None) -> TensionReport:
     pages = load_all_pages(cortex_dir)
     by_id = {p.claim_id: p for p in pages}
     report = TensionReport(total_pages=len(pages))
+
+    # All diagnostics derive from the same page snapshots as the tension buckets.
+    by_status: dict[str, dict] = {}
+    for page in pages:
+        row = by_status.setdefault(
+            page.status, {"total": 0, "thin": 0, "a2_pages": 0, "a2_evidence": 0}
+        )
+        evidence = active_evidence(page)
+        a2 = sum(str(e.get("insight", "")).startswith("[EvidenceTrace] ") for e in evidence)
+        row["total"] += 1
+        row["thin"] += int(len(evidence) <= CORTEX_TENSION_THIN_EVIDENCE_MAX)
+        row["a2_pages"] += int(a2 > 0)
+        row["a2_evidence"] += a2
+    report.snapshot = {"by_status": by_status}
 
     seen_pairs: set[frozenset] = set()
     for p in pages:
@@ -82,4 +97,10 @@ def scan_tensions(cortex_dir: Path | None = None) -> TensionReport:
         if _evidence_count(p) <= CORTEX_TENSION_THIN_EVIDENCE_MAX:
             report.thin_evidence.append(p)
 
+    report.snapshot["dogmatic_examples"] = [
+        {"claim": p.claim.strip()[:90], "status": p.status} for p in report.dogmatic[:4]
+    ]
+    report.snapshot["active_thin_examples"] = [
+        p.claim.strip()[:90] for p in report.thin_evidence if p.status == "active"
+    ][:4]
     return report

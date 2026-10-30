@@ -55,6 +55,9 @@ class Diagnosis:
     confidence: float = 0.0
     needs: str = ""
     context: str = ""  # the data we showed the LLM (for auditability)
+    hypothesis: str = ""
+    investigation_steps: list[str] = field(default_factory=list)
+    proposal_eligible: bool = True
 
 
 @dataclass
@@ -74,7 +77,8 @@ def _ctx_report_quality(d: dict) -> str:
         (d.get("by_type") or {}).items(),
         key=lambda kv: (
             -(
-                (kv[1]["bad"] + kv[1].get("unparseable", 0)) / kv[1]["total"]
+                (kv[1]["bad"] + kv[1].get("unparseable", 0) + kv[1].get("gate_error", 0))
+                / kv[1]["total"]
                 if kv[1]["total"]
                 else 0
             )
@@ -86,13 +90,16 @@ def _ctx_report_quality(d: dict) -> str:
             if u
             else ""
         )
+        if c.get("gate_error", 0):
+            extra += f"、{c['gate_error']} 份審查未完成（呼叫／執行失敗，不能當成內容差）"
         rows.append(f"  - 報告型別 `{t}`：{c['total']} 份中 {c['bad']} 份 revise/reject{extra}")
     # content_bad falls back to `bad` for pre-split history snapshots.
     content_bad = d.get("content_bad", d.get("bad", 0))
     up = d.get("unparseable", 0)
+    gate_txt = f"、{d.get('gate_error', 0)} 份審查未完成（需查執行錯誤，非內容 verdict）"
     up_txt = f"、{up} 份 verdict 無法解析（品質閘失效）" if up else ""
     return (
-        f"整體 {d.get('total', 0)} 份有評分,其中 {content_bad} 份 revise/reject{up_txt}"
+        f"整體 {d.get('total', 0)} 份納入品質統計,其中 {content_bad} 份 revise/reject{up_txt}{gate_txt}"
         f"（未通過率 {d.get('rate', 0):.0%}）。各型別:\n" + "\n".join(rows)
     )
 
@@ -126,18 +133,43 @@ def _ctx_cortex(d: dict, cortex_dir: Path) -> str:
         f"教條 {d.get('dogmatic', 0)}（高信心+低可證偽）、薄證據 {d.get('thin_evidence', 0)}（≤1 來源）、"
         f"已證偽 {d.get('falsified', 0)}。"
     ]
-    try:
-        from services.cortex_tensions import scan_tensions
-
-        rep = scan_tensions(cortex_dir)
-        if rep.dogmatic:
-            lines.append("教條主張範例:")
-            lines += [f"  - {p.claim.strip()[:90]}" for p in rep.dogmatic[:4]]
-        if rep.thin_evidence:
-            lines.append("薄證據主張範例:")
-            lines += [f"  - {p.claim.strip()[:90]}" for p in rep.thin_evidence[:4]]
-    except Exception as e:
-        logging.debug(f"self_diagnosis: cortex context scan failed: {e}")
+    # Never rescan here: examples and totals must describe the M1 snapshot.
+    by_status = d.get("by_status")
+    if isinstance(by_status, dict):
+        lines.append("同次掃描的狀態分布（thin 為目前有效證據數不超過門檻）：")
+        for status, row in sorted(by_status.items()):
+            lines.append(
+                f"  - {status}: {row['total']} 條，薄證據 {row['thin']} 條，"
+                f"保留 A2 補證 {row['a2_pages']} 條主張／{row['a2_evidence']} 筆證據。"
+            )
+        active = by_status.get("active", {})
+        lines.append(
+            f"active 補證需求為 {active.get('thin', 0)}/{active.get('total', 0)}；"
+            "inactive 存量不可混作 active 薄證據率。"
+        )
+    else:
+        lines.append("舊評估未提供狀態分布及 A2 補證統計，視為未知，不可推定為零。")
+    for key, label in (("a2_enabled", "A2 排程啟用"), ("a2_apply", "A2 寫回設定")):
+        value = d.get(key)
+        lines.append(
+            f"{label}：{('是' if value else '否') if isinstance(value, bool) else '未知'}。"
+        )
+    lines.append(
+        "能力邊界：A2 的程式先檢索段落，裁決呼叫只判斷已提供段落，沒有搜尋工具；"
+        "改裁決 prompt 不會新增來源。A2 已只選 active 薄證據主張。"
+        "Cortex 可證偽性評分只收到 Claim，沒有來源數或搜尋工具；"
+        "修改該評分 prompt 不會補證、改排程或新增反證檢索。"
+        "本資料沒有逐次 A2 任務結果、固定 cohort 前後比較或評分輸入／輸出樣本，"
+        "因此無法確認 A2 成效與 prompt 缺陷的根因。"
+    )
+    lines.append(
+        "設定不等於執行成功；A2 計數是目前仍有效的補證紀錄，非近期增厚次數或因果成效。"
+        "不可因薄證據存量或矛盾為零而推定驗證／證偽機制不存在；需任務報告及失敗訊號佐證。"
+    )
+    for sample in d.get("dogmatic_examples", []):
+        lines.append(f"教條範例 [{sample['status']}]：{sample['claim']}")
+    for claim in d.get("active_thin_examples", []):
+        lines.append(f"active 薄證據範例：{claim}")
     return "\n".join(lines)
 
 
@@ -163,6 +195,26 @@ def _gather_context(axis_name: str, detail: dict, cortex_dir: Path) -> str:
     if axis_name == "洞察品質":
         return _ctx_insight(detail)
     return ""
+
+
+def _hold_cortex_inference(dx: Diagnosis) -> None:
+    """Aggregate M1 metrics cannot establish a prompt-level causal defect.
+
+    Keep model output as an explicitly unverified hypothesis. Only a future
+    contract carrying reviewed execution/claim samples may relax this gate;
+    model confidence or extra JSON fields cannot authorize M3 edits.
+    """
+    dx.hypothesis = dx.root_cause
+    dx.root_cause = "尚未確認根因：目前只有 Cortex 存量、狀態與有效補證紀錄，不能據此歸因 A2 成效或 prompt 缺陷。"
+    dx.confidence = 0.0
+    dx.candidate_fixes = []
+    dx.proposal_eligible = False
+    dx.needs = "需逐次 A2 任務的候選／判讀／失敗紀錄、固定 cohort 前後比較，以及可證偽性評分的實際輸入輸出；本次資料未提供。"
+    dx.investigation_steps = [
+        "核對 A2 任務報告與 trace，分清無候選、距離排除、neutral、解析／呼叫失敗與成功補證。",
+        "以固定 claim cohort 對照新增證據、狀態遷移及人工編輯，再評估 A2 的增厚效果。",
+        "抽查教條主張的 Claim 與原始評分輸出，確認是否存在可重現的評分缺陷，再決定 prompt 或程式修正。",
+    ]
 
 
 def run_self_diagnosis(
@@ -210,9 +262,14 @@ def run_self_diagnosis(
                 )
                 dx.confidence = float(parsed.get("confidence") or 0.0)
                 dx.needs = str(parsed.get("needs") or "").strip()
+                if ax.name == "Cortex 信念":
+                    _hold_cortex_inference(dx)
         except Exception as e:
             logging.warning(f"self_diagnosis: axis {ax.name} diagnosis failed: {e}")
             dx.root_cause = ""
+            dx.candidate_fixes = []
+            dx.confidence = 0.0
+            dx.proposal_eligible = False
         diagnoses.append(dx)
 
     landed = [d for d in diagnoses if d.root_cause or d.candidate_fixes]
@@ -256,9 +313,28 @@ def _write_report(report_dir: Path, result: DiagnosisResult) -> Path | None:
             lines += [
                 f"## {d.lamp} {d.axis}{chronic}",
                 "",
-                f"**根因**（信心 {d.confidence:.0%}）：{d.root_cause or '—'}",
+                (
+                    f"**判定**：{d.root_cause}"
+                    if not d.proposal_eligible
+                    else f"**根因**（信心 {d.confidence:.0%}）：{d.root_cause or '—'}"
+                ),
                 "",
             ]
+            if not d.proposal_eligible:
+                lines += ["> ⓘ 證據不足，未送入 M3 prompt 修訂。", ""]
+            if d.hypothesis:
+                lines += [
+                    "<details><summary>模型未驗證假設（不可當成事實或修訂依據）</summary>",
+                    "",
+                    d.hypothesis,
+                    "",
+                    "</details>",
+                    "",
+                ]
+            if d.investigation_steps:
+                lines += ["**查證項目（尚未執行）**："]
+                lines += [f"{i}. {step}" for i, step in enumerate(d.investigation_steps, 1)]
+                lines.append("")
             if d.candidate_fixes:
                 lines.append("**候選改善（尚未套用）**：")
                 lines += [f"{i}. {fx}" for i, fx in enumerate(d.candidate_fixes, 1)]

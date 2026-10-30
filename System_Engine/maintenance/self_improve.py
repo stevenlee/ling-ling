@@ -260,6 +260,9 @@ def run_self_improve(
     result = ImproveResult()
 
     for dx in diagnosis_result.diagnoses:
+        if not getattr(dx, "proposal_eligible", True):
+            result.skipped_axes.append((dx.axis, "診斷證據不足，須先查證，不能據此修訂 prompt。"))
+            continue
         if not dx.candidate_fixes:
             continue
         target_rel, skip_reason = _resolve_target(dx.axis, axis_detail.get(dx.axis, {}))
