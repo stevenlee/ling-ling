@@ -166,3 +166,280 @@
   原網址解析成功，7 則取得實質內容。Reuters／Army.mil 缺正文有標示，Brookings
   訂閱提示仍被當內容。後續可改善正文充分性判定，以及搜尋混入報價頁／非市場財經
   內容的篩選；本次維持 `economy OR finance` 搜尋範圍。
+
+## 2026-10-29 A2 apply 成效稽核與失敗／距離契約修正
+
+### 稽核結果（8/8–10/29）
+
+- 保存 67 份 apply 報告，335 claim-scans／87 不同 claim、559 次段落判讀：
+  supports 28、contradicts 0、neutral 451、unparseable 80（14.3%）、報告 error 0。
+  28 筆 evidence 對應 24 條增厚主張，全部仍可對回 Cortex，未見重複 marker 或
+  同一 claim 多次新增。7 條目前 active、8 fading、9 dormant；17 條在 decay
+  ledger 中可確認增厚後降級。active 共 16 條，thin 9／thick 7。
+- 8/8 pool=54 → 10/29 pool=9 不是固定 cohort，不能直接歸因 A2；舊 claim
+  大量淡出。期間無 apply counterpoint 樣本，無法以 live 結果驗收反證寫入。
+- 10/15 的 13 unparseable 實為 13 claim/passage × 2 JSON attempts 共 26 筆
+  `Connection error`，任務 trace 卻為 succeeded。其餘 67 unparseable 因 trace
+  retention 無法還原，不能推定相同根因。期間有 16 日缺報，缺報本身不等於
+  排程失敗。559 筆距離皆顯示 0.00；BM25-only 候選以 0.0 佔位的契約缺口
+  可由程式確認，但報告未保留 provenance，不能推定全部判讀都來自 BM25。
+
+### 本次修正契約
+
+- `_complete_json` 新增 opt-in `propagate_errors`，A2 與 `raise_on_miss` 一起使用：
+  transport 由既有 `_complete_text` 重試，耗盡後直接成 error，不疊加 content
+  retry；內容解析失敗由 bounded `reroll` 重試，耗盡以
+  `JSONCompletionParseError` 表達 unparseable。其他呼叫端保留原有預設契約。
+- 任一 claim 的檢索／判讀不完整時不 apply（避免反例檢索失敗卻只依支持票強化）；
+  同批完整 claim 仍可完成。任何 claim 判讀／檢索／寫入失敗，整輪回 failed，
+  保存報告與明確摘要，scheduler state 和 SQLite run trace 同步反映失敗。
+- `checked` cursor 仍記「最後嘗試」並輪替失敗 claim，不宣稱成功。daily 排程
+  不在同日立即重跑，避免 outage／poison claim 耗盡預算或餓死其他 claim；下次
+  輪到時重試。RAG `raise_on_error=True` 讓 A2 能區分檢索失敗與有效空集合，
+  一般 RAG caller 的 fail-soft 預設不變。
+- A2 依 `retrieval_breakdown.vector_distance` 使用實測正文距離，BM25-only、
+  facet 代換後的正文距離未知、missing/malformed/NaN/Inf/負值不送裁決，也不
+  套用；另列「缺少有效正文距離」計數。legacy 直接向量 provider 仍可用有效
+  `distance`。真正量測為 0 可接受，但 lexical 佔位 0 不能勝過同源的實測
+  候選。Chroma 未回傳距離時的 breakdown 改為 None，其他 caller 的 legacy
+  distance 欄位保留。這是保守收窄，可能降低候選數；後續若需救回 lexical／facet
+  候選，應計算 query-to-passage 距離，而非放寬 0.45 門檻。
+- 舊測試對「失敗仍 ok」的斷言隨上述狀態契約更新；不再將處理完一批等同成功。
+  另補真實 `_complete_json` 的 transport／parse 路徑、部分成功不回滾、未完整
+  claim 不套用、實際 hybrid RAG→A2 gate，以及 scheduler trace/state/busy-lock
+  釋放與每日頻率的 hermetic 回歸測試。
+
+### 還欠什麼
+
+- Cortex 寫入後 RAG re-index 失敗仍只有 warning，需另做持久化追補；本次不宣稱
+  報告「0 寫入失敗」能證明索引完全健康。
+- 抽查 supports 是否僅為跨域類比／局部支持，以及累積 contradicts apply 樣本。
+- daemon 需重啟載入新程式；不重寫歷史日報，不回滾既有 evidence，不改強化幅度。
+- 驗證：`make check` exit 0；ruff clean、mypy 166 source files 無錯誤；
+  1843 passed、1 skipped，1 個既有 Chroma deprecation warning。`git diff --check` clean。
+
+## 2026-10-29 M3 防重複、退回記憶與 prompt 契約守衛
+
+### 唯讀盤點
+
+- pending 15 筆（agent_insight 3、cortex_falsifiability 12），最老 7/27，至 10/29
+  為 94 個日曆日；13 筆至少 14 個日曆日。applied 2、rejected 4。
+- 15 筆 original_sha 仍符合各自 target，沒有逐字相同的 edit fingerprint；主要
+  問題為相同 target／相同 basis 不斷產生功能重疊的競爭方案，非單純檔名重複。
+- Cortex 4 筆再次新增 consumer 不讀取的 JSON 欄位；另有要求來源數／搜尋反證的
+  編輯，但該呼叫只收到 Claim、沒有搜尋工具。既有 rejected 有 2 筆手動保存
+  rejected_reason，生成端卻未讀取；正式 reject 命令原先也不接受理由。
+
+### 本次離線實作
+
+- M3 生成前以 canonical target＋原文 SHA 比對 pending，有相同版本待審即跳過，
+  不呼叫 LLM。同輪多 axis 對應同 target 也共用一個待審 slot。儲存前再讀 target
+  和佇列，避免生成期間的編輯／新提案被忽略。舊版本 pending 不會永久阻擋新版。
+- `_rejected` 同 target／同 basis 的 rationale＋fixes 相同時生成前跳過；其他
+  診斷會參考最近 5 筆退回理由，再於生成後比對 revised content／find-replace。
+  edit 比對不含 why、統一 CRLF，但保留編輯順序與有意義的空白；不使用模糊
+  相似度直接否決。目標 basis 改變後可重新評估，沒有永久封鎖。
+- `@ling-improve reject <id> [理由]` 會保存 rejected_reason，無理由與舊紀錄仍
+  可用。退回紀錄先原子落盤，再清 pending；清除失敗回報「已退回、待清理」，
+  重試時不遺失原理由。路由以第一個 subcommand 為準，避免理由裡的
+  `approve <id>` 誤觸批准。
+- Cortex prompt 的 JSON key 守衛同時放在生成與 approve 消費端：禁止新增程式
+  不讀的欄位或刪除必要欄位；既有待審提案也需通過守衛。生成 context 明示只有
+  Claim、無搜尋／來源數，不能靠 prompt 新增證據或調整信心。
+- pending 改同目錄唯一 temp＋fsync 原子寫入，既有 ID 拒絕覆寫；讀取端驗證
+  proposal 形狀與 original_sha，損壞資料留原檔並 logging.warning，不永久占住
+  target。讀檔／儲存失敗逐 axis 可見並繼續其他項目。
+
+### 驗證與後續
+
+- M3 聚焦測試 42 passed；完整 `make check` exit 0，ruff clean、mypy 167 source
+  files 無錯誤、1867 passed／1 skipped，1 個既有 Chroma deprecation warning。
+  `git diff --check` clean。測試只用 tmp_path 與 FakeLLM，未呼叫外部模型。
+- 本次不重啟 daemon、不操作 live generate/approve/reject、不變更既有 15 筆
+  待審提案／prompt。新 Python 行為須待合適時間重啟載入。
+- 待做：人工整併／審閱既有競爭提案，以及 M2 的 active/inactive 分層與 A2 成效
+  上下文；本輪未實作 M2 指標調整。A2 re-index 持久化追補亦仍為獨立待辦。
+
+## 2026-10-29 Synthesis 審查失敗不得誤標通過
+
+### 稽核與問題
+
+- 8/8 後未找到新完成的 synthesis；保留期內的 trace 也無 critique_text／synthesis
+  artifact，因此沒有足夠新樣本裁決長期品質趨勢。8/7 AI Political Compass 仍是
+  模型未寫判定段的 unparseable，維持 NeedsReview；不猜測或回寫歷史 verdict。
+- 記憶體替身確認：啟用 critique 後若回例外、`Critique failed` sentinel 或空內容，
+  舊介面回空 section＋None，與 disabled 相同，出版分支因而可能標 PerfectPitch。
+
+### 修正後契約
+
+- SynthesisCritiqueLoop 明確傳遞 critique_status：disabled／succeeded／unparseable／
+  error，並帶 critique_error、每次 attempt 的 status/error history。tuple adapter
+  保留給舊呼叫端；啟用但失敗時改回可見的「審查未完成」section，verdict 仍為 None。
+- 啟用但審查失敗、空／非字串內容、缺少來源或 candidate 時，成品保留但標 NeedsReview，
+  頁首警示「審查未完成」，metadata／artifact 的 quality_verdict 記為 error 狀態，
+  不假造 keep／revise／reject，也不誤列為模型格式 unparseable。消費端遇到缺失或
+  不一致的 outcome status 亦採相同保守判定。明確 disabled 保留原有出版行為，
+  另記 critique_status=disabled，沒有 quality_verdict。
+- 連線／呼叫失敗只使用既有 transport 重試，不因此重生整篇。若第一版已取得有效
+  判定，但重生版本的審查失敗，保留原本較佳版本並停止後續整篇重試；失敗保存在
+  history，不覆寫原本的內容判定。模型漏判定段的 bounded retry 與既有排序規則保留。
+- M1 將 error 納入品質閘失敗率，另列 gate_error，與 content_bad／unparseable 分開；
+  by_type.bad 仍只計 revise/reject，避免 M3 把 provider／輸入錯誤當成生成 prompt 問題。
+  趨勢 snapshot 同時保留這三種計數。
+- 測試契約同步更新：僅 disabled 可回完全空審查；原本「失敗等同關閉」的斷言改為
+  可見未完成，另補真正 disabled 的回歸案例。測試預設 TraceStore 導向 tmp_path，
+  避免 LLMClient fixture 初始化 live SQLite；明確指定的測試 DB 不受影響。
+
+### 驗證與交接
+
+- `make check` exit 0：ruff clean、mypy 167 source files 無錯誤；1883 passed、
+  1 skipped、1 個既有 Chroma deprecation warning。`git diff --check` clean。
+- 覆蓋例外／sentinel／空與非字串回應、真實 LLMClient 的 bounded 空內容重試、
+  transport 不疊加 content retry、重生後審查失敗保留原版、出版標記、artifact、M1。
+- 本次未重啟 daemon、未觸發 live ingestion／LLM、未改既有頁面；待長時間工作完成後
+  再安排重啟與新成品驗證。既有 A2／M3 未提交變更保留，A2 re-index 追補仍待實作。
+
+## 2026-10-29 A2 vault commit 後索引失敗的持久化追補
+
+### 行為與 commit point
+
+- 新增 `maintenance/cortex_index_repair.py`。A2 apply 在存 Cortex 前先原子落盤索引意圖，
+  位於 `Database/cortex_index_repairs/<relative-path-hash>.json`。意圖無法持久化即不
+  提交頁面；Cortex 原子 replace 是信念變更的 commit point。Cortex store 同步改用
+  既有 unique temp＋fsync 原子寫入工具，避免固定 temp 碰撞。
+- commit 後正文／facet 索引或 intent 清除失敗，保留實際 added_evidence／reinforced
+  結果，回報「Cortex 已生效但待索引」，不謊稱未套用。intent 在索引前先持久化
+  attempt／next_retry_at，失敗寫 last_error；不重做證據判讀、append 或 reinforce。
+- 現有 A2 daily task 的 apply 模式先追補，再選 thin pool。因此主張增厚後退出
+  thin pool、甚至整個 pool 為空，仍可跨重啟恢復；沒有新增 thread／timer 或 LLM
+  呼叫。整段沿用 scheduler 的 idle_required／try_set_busy ownership；測試確認
+  使用者忙碌時不執行，追補執行時 busy lock 已持有。
+- 追補只讀當下同一次頁面 snapshot，解析器新增可注入已讀 text 的介面；重新索引
+  最新正文與 claim，不寫回 Cortex。寫入期間內容再改動即保留意圖；basis 改變重設
+  retry budget。最新狀態為 dormant／falsified 時移除 facets，避免錯誤復活。
+- 頁面已刪除則取消意圖，不以舊 snapshot 重建；RAG 刪除仍由既有 VaultWatcher／
+  orphan sweep 擁有。損壞 intent 可由 path hash 對回現存頁面重建；無法對回者保留
+  原檔並在報告／log 顯示，不消耗 embedding 批次額度、不阻擋其他有效工作。
+- RAG 的正文、legacy 清理、facet 清理／upsert／移除新增或沿用 strict opt-in，
+  讓失敗能向追補端傳遞；其他呼叫端預設 fail-soft。repair 正文使用 force=True，
+  不會因先前部分 upsert 已寫 content_hash 就誤以為整頁完成。
+
+### 頻率、觀察與限制
+
+- `CORTEX_INDEX_REPAIR_BATCH` 預設 5；`CORTEX_INDEX_REPAIR_BACKOFF_SECONDS` 預設
+  3600、`CORTEX_INDEX_REPAIR_MAX_BACKOFF_SECONDS` 預設 86400，皆由 env 設定。
+  失敗採持久化指數退避，最多到設定上限，實際重試時機仍受每日 A2 排程限制。
+  舊待辦優先，attempt 更新 slot 時間後讓其他未嘗試工作先走；不讓單筆故障壟斷。
+- 仍有待索引意圖時，A2 result／scheduler state／trace 為 failed；報告列完成數、
+  待處理數與失敗原因。dry-run 不處理或清除索引意圖；master switch／apply 關閉
+  時不會透過此機制變異 RAG。
+- write-ahead intent 若先落盤、vault 尚未 commit 就 crash，下次只索引當下真正
+  存在的頁面，不將未提交的證據 snapshot 寫回。cleanup crash 可能重做索引，但
+  strict cleanup＋deterministic IDs 維持冪等，不會再次強化信念。
+- 本機制保護新 A2 apply；部署前沒有 intent 的歷史索引缺漏需另行唯讀對帳，
+  不宣稱已追溯修復。重啟與 live 驗收仍等使用者的長時間工作結束。
+
+### 驗證
+
+- `make check` exit 0：ruff clean、mypy 168 source files 無錯誤；1911 passed、
+  1 skipped、1 個既有 Chroma deprecation warning；`git diff --check` clean。
+- 新增 28 個 hermetic 案例，涵蓋 intent／vault／索引／清除各 commit 階段的故障，
+  跨呼叫恢復、空 thin pool、最新人工修改、刪頁、dormant、破損／越界 slot、
+  退避／公平性／上限、busy lock，以及實際 RAG strict failure 接縫。
+- 本次未重啟 daemon、未呼叫 live LLM 或修改 live Cortex／ChromaDB；與前述
+  A2／M3／synthesis 修正一起保留在功能分支，等待獨立邏輯 commit 的交付授權。
+
+## 2026-10-29 M1／M2 診斷依據的狀態與來源分離
+
+- Cortex tension scan 在同一批頁面快照中產生 `by_status`：各狀態主張數、薄證據數、
+  保留 A2 補證的主張數及證據筆數；只計 `active_evidence`，排除 superseded。
+  A2 來源以現有 `[EvidenceTrace] ` provenance marker 辨認，包含 inactive 的歷史留存，
+  不宣稱為近期增厚次數或因果成效。既有 tension buckets 與燈號判準不變。
+- M1 增列 active 薄證據需求與當下 A2 enabled／apply 設定；設定不代表任務執行成功。
+  M2 直接使用 M1 的分布與有界範例，不再重新掃描另一時間點的 vault；舊 assessment
+  缺少新欄位時明示未知。明確要求 inactive 存量與 active 比率分開，不能從薄證據多或
+  矛盾為零推論驗證／證偽機制不存在；執行成效仍需任務報告及失敗訊號佐證。
+- M2 報告品質上下文加入 `gate_error`，與 revise/reject 及 unparseable 分列，
+  避免把審查呼叫失敗當成內容品質差而提議改寫生成 prompt。
+- 新增 4 個 hermetic 回歸案例：跨狀態及 superseded 補證計數、禁止 M2 重掃、
+  舊評估未知值、審查執行失敗分類。首輪新 fixture 缺少必填 evidence 欄位，已修正。
+- 最終 `make check` exit 0：ruff clean、mypy 168 source files 無錯誤；
+  **1915 passed、1 skipped、1 個既有 Chroma deprecation warning**；`git diff --check` clean。
+- 未重啟 daemon、未呼叫 live LLM、未修改 live vault／DB；尚未 commit 或 push。
+  實際排程輸出與 live 效果驗收仍待允許重啟後進行。
+
+## 2026-10-30 重啟後實際驗證（尚未全數驗收）
+
+- 重新執行 `make check` exit 0：ruff clean、mypy 168 source files 無錯誤；
+  1915 passed、1 skipped、1 個既有 Chroma warning。修改的核心模組可在新程序完整匯入。
+- maintenance state 的 00:42 A2 失敗為找不到新增 `CORTEX_INDEX_REPAIR_DIR`；發生在
+  PID 檔 08:25 更新之前，符合舊程序已載入 config、晚載入新 maintenance module 的
+  時序。不將新程序可匯入等同 A2 live 修復驗收；尚無本次重啟後的新 A2 執行樣本。
+- 透過正常 prompt queue 執行 `@ling-improve-verify-20261030.md`，daemon 在
+  08:28:28–08:29:24 跑完 M1→M2→M3。run `run_c3163e4e599b4e3087a786ffe12231ac`
+  succeeded，兩次 self_diagnosis 呼叫 succeeded，最後 busy=false，命令已歸檔。
+- M1／M2 context 確認載入新碼：全庫 122／薄證據 97；active 19／thin 12、
+  dormant 89／thin 78、fading 14／thin 7；有效 A2 補證分別 7／8、10／11、7／9
+  （主張／證據）。M3 同 basis 防重複生效，pending 前後皆 15 筆，沒有新提案或套用。
+- **M2 推論品質未通過**：即使 context 明示母體差異與禁止因果推定，模型仍以全庫
+  97/122 斷言 A2 陷入低質量循環，並建議修改 prompt 強制搜尋多來源。現有輸入不足以
+  支持此因果結論，且呼叫沒有搜尋工具。這輪只確認 context 傳遞正確，不能宣稱診斷
+  誤判已解決。後續需補任務能力／實際執行訊號及可驗證的診斷輸出限制，再離線與實跑。
+- A2 尚無手動 daemon 命令入口；未修改每日排程 state、另開寫入程序或故意製造
+  索引故障。新 A2 與索引追補仍待正常排程驗收。Synthesis 亦待自然新成品。
+- 報告：`fromLingLing/✅sys-eval-20261030.md`、`✅sys-diag-20261030.md`、
+  `✅ins-improve-Improve-generate-20261030-0829.md`。本次未 commit／push。
+
+## 2026-10-30 M2 Cortex 因果推論與 M3 消費端守衛
+
+- 上輪實跑證明 context 提醒不足以阻止模型的因果誤判。本次不依賴模型自報信心或
+  遵守文字限制：目前 Cortex 軸只有彙總存量／狀態／補證計數，程式固定將模型因果
+  輸出保存為 `hypothesis`，主判定為「尚未確認根因」，清空 candidate_fixes、信心
+  不作成立根因呈現，並設 `proposal_eligible=False`。模型 JSON 不能自行解除此限制。
+- 報告分列判定、折疊的未驗證假設、資料缺口與尚未執行的查證項目。查證包含逐次
+  A2 候選／裁決／失敗紀錄、固定 cohort 的補證與狀態遷移，以及實際 Claim／評分樣本。
+  這些查證未自動執行，不宣稱已有因果證據。
+- context 明示能力：A2 程式會檢索且已只選 active thin；裁決呼叫本身沒有搜尋工具。
+  可證偽性評分只收到 Claim，改其 prompt 無法補證、調排程或新增反證檢索。
+- M3 在找目標或呼叫改寫 LLM 前檢查 proposal_eligible，即使誤保留 fixes 也不能
+  產生提案。其他軸與既有 Diagnosis 呼叫的預設介面保留；目前正常 Cortex M2 輸出
+  會暫停自動產生 prompt 提案，未來必須另定含可覆核樣本的輸入契約才能放行。
+  原有待審提案未清除或套用。這是明確的行為收窄，並非只改報告措辭。
+- 解析途中異常（如非法 confidence）會清掉部分 fixes 並禁止入 M3，避免先解析到
+  的建議在失敗後流出。provider 失敗仍不會偽裝成有效診斷。
+- 新增 5 個 hermetic 測試，重播實跑的 97/122 因果誤判與搜尋建議、模型 99% 信心／
+  自報放行、舊資料缺口、provider 與 malformed confidence 失敗，以及 M3 消費端拒絕。
+  原「全部 flagged 軸都有 fixes」測試同步改為 Cortex 保留假設但禁止 fixes，其他軸不變。
+- 最終 `make check` exit 0：ruff clean、mypy 168 source files 無錯誤；
+  **1920 passed、1 skipped、1 個既有 Chroma warning**；`git diff --check` clean。
+- 本次未重啟 daemon、未再發 live generate、未 commit／push。當前 daemon 已快取舊
+  Python module，需下次重啟載入新守衛再驗收；A2 正常排程與新 synthesis 仍待樣本。
+
+### 2026-10-30 08:35 新守衛實跑驗收
+
+- 使用者確認再次重啟後，透過正常 prompt queue 執行
+  `@ling-improve-verify-m2-gate-20261030.md`，08:34:38–08:35:28 完成。
+  run `run_2e71fd4edd70462bbf5c1dbd5bf75f50` succeeded、兩次 self_diagnosis
+  呼叫 succeeded，最後 busy=false。
+- 模型仍提出 A2 閉環／無法增厚的無充分依據因果推論，但報告只在「模型未驗證
+  假設」折疊區保存；主判定顯示「尚未確認根因」，另列查證項目及資料缺口。
+  因此驗收的是程式端隔離與 M3 守衛，不是宣稱模型推論已正確。
+- M3 明示 Cortex 軸「診斷證據不足，須先查證，不能據此修訂 prompt」，未產生
+  改寫呼叫或新提案。pending 15 筆，前後逐檔位元組比對完全相同。
+- 報告 `fromLingLing/✅sys-diag-20261030.md` 與
+  `✅ins-improve-Improve-generate-20261030-0835.md`；同日日報依既有命名覆寫。
+  報告品質軸仍是模型候選診斷，這次 Cortex 守衛不等同所有軸因果推論皆已驗收。
+- 本輪未改 Python code，最近完整檢查仍為 `make check` exit 0：1920 passed、
+  1 skipped、1 個既有 warning；`git diff --check` clean。A2 排程／索引追補與
+  新 synthesis 仍待自然執行樣本；未 commit／push。
+
+### 2026-10-30 分批交付
+
+- 依使用者授權 commit／push 至功能分支 `codex/a2-audit-hardening`，main 未變更。
+- 邏輯提交：`5b3825e` 測試 trace 隔離、`f02b8a5` A2 失敗與索引恢復、
+  `8e24b6d` M3 提案審閱、`591f7b2` synthesis 審查失敗、`43f4dd8` M1／M2 因果守衛。
+- 提交前完整 `make check` exit 0：1920 passed、1 skipped、1 個既有 warning，
+  ruff／mypy clean；分批提交的 pre-commit hooks 均通過。上述「尚未 commit」為歷次
+  工作紀錄，本節更新最終交付狀態。A2／新 synthesis 的 live 驗收缺口仍保留。
+- 下一工作：Scout 正文充分性與訂閱／付費牆提示辨識，先離線實作及測試，
+  不重啟 daemon、不修改 live 既有報告。
