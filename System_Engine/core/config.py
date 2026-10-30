@@ -257,6 +257,10 @@ CORTEX_UNMERGE_MIN_SAMPLES = int(os.getenv("CORTEX_UNMERGE_MIN_SAMPLES", "5"))
 INSIGHT_SEED_EPSILON = float(os.getenv("INSIGHT_SEED_EPSILON", "0.2"))
 INSIGHT_SEED_TARGETS = int(os.getenv("INSIGHT_SEED_TARGETS", "2"))
 
+# Google News pages must contain this many non-whitespace letters/digits
+# after removing access prompts. Other Scout sources keep their own contracts.
+SCOUT_NEWS_MIN_CONTENT_CHARS = max(1, int(os.getenv("SCOUT_NEWS_MIN_CONTENT_CHARS", "300")))
+
 # ─── Paths ────────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()

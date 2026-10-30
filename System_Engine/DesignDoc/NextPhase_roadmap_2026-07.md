@@ -443,3 +443,55 @@
   工作紀錄，本節更新最終交付狀態。A2／新 synthesis 的 live 驗收缺口仍保留。
 - 下一工作：Scout 正文充分性與訂閱／付費牆提示辨識，先離線實作及測試，
   不重啟 daemon、不修改 live 既有報告。
+
+## 2026-10-30 Google News 正文充分性（交付後續，尚未提交）
+
+- 僅 Google News 包裝網址解析後的媒體頁啟用新聞正文檢查；其他 Scout 來源及 parser
+  已提供的內容保留既有契約，避免將短 README 或 arXiv 摘要誤當失敗。
+- 移除已知訂閱／cookie／dialog／隱藏區域及以存取提示開頭的文字區塊；若頁面無
+  article 且主標題為訂閱／登入／newsletter，也不作正文。只在指定 UI 結構或提示
+  句首判斷，保留報導中討論 paywall／subscription 的一般段落。
+- 對輸出預算內去除重複行後的文字計算字母／數字數，至少
+  `SCOUT_NEWS_MIN_CONTENT_CHARS`（env，預設 300，最小 1）才作可用正文。
+  不足即回空字串，沿用現有 snippet grounding 與「未取得內文」標記；原媒體 URL
+  與原 feed GUID 不變，失敗仍依解析後的媒體網域記 strike。
+- 這是保守的 heuristic，會將短新聞／部分付費牆摘錄降級，也不能保證排除所有長篇
+  boilerplate 或報價頁；未宣稱已完成新聞相關性篩選或通用 readability 引擎。
+- 新增 14 個 hermetic 案例，包含訂閱頁、人機驗證、重複提示、隱藏文字、正文與 UI
+  混合、正常訂閱議題報導、可設定門檻及 digest 的 prompt／report／domain strike
+  整合路徑。既有 Google 原網址解析成功 fixture 改為實質長度正文；短正文改由新
+  降級案例覆蓋，解析流程及 GUID 契約不變。
+- `make check` exit 0：ruff clean、mypy 168 source files 無錯誤；
+  **1934 passed、1 skipped、1 個既有 Chroma warning**；`git diff --check` clean。
+- 前一批六個 commits 已推送至 origin 功能分支；本節的新 code／tests／docs 保留
+  未提交狀態。本次未重啟 daemon、未抓 live 網頁或更動既有 Scout 報告；需後續載入
+  新碼再抽查實際新聞頁。
+
+### 2026-10-30 11:45 Scout 重啟後驗證
+
+- 使用者確認重啟（PID 檔 11:35 更新），經正常 prompt queue 送出
+  `@ling-scout-verify-content-20261030.md`，沿用 daemon busy lock 與原 Scout 設定。
+  run `run_6d36269d171049cd96ee9c328e8dae4b` 在 11:35:36–11:45:39 succeeded；
+  29 次 scout_summarize 呼叫均 succeeded，最後 busy=false，命令已歸檔。
+- 四來源抓取皆成功，29 新項目（Google News 4、HN 15、arXiv 10、GitHub 0）。
+  Google News 列表 10 項，因既有去重只分析 4 新項目：4/4 為原媒體網址，
+  Yahoo Finance 與 Microsoft 取得正文，AP／UN 以既有缺正文標記降級。
+- 兩則降級另做唯讀複查：AP HTTP 403；UN HTTP 200 但新舊擷取均 0 字，
+  不將這兩例的缺正文歸因新門檻。沒有修改 seen／target 時鐘來強制重複分析。
+- 額外唯讀抽查先前誤判的 Brookings 原文頁：HTTP 200，舊擷取 59 字
+  （The Beijing Brief 節目／訂閱提示），新 news 判定為空正文，證實已知誤判
+  被排除。此為獨立 HTTP＋純擷取比較，未呼叫 LLM、未重寫舊 Scout 報告；
+  不宣稱它是本輪 daemon 的新項目。
+- 日報 `fromLingLing/✅Scout-2026-10-30.md` 按既有同日命名更新；
+  `Notes/Scout/✅Scout-2026-10-30.md` 與日報內容完全相同。seen 458→487，
+  Google crawl clock 與本輪一致，沒有中轉網址被當作新聞連結。
+- 本輪未修改 Python code；最近 `make check` exit 0 為 1934 passed、1 skipped、
+  1 個既有 warning。`git diff --check` clean。Google News 新正文 heuristic 的
+  離線與上述樣本驗證完成，仍不保證排除所有未知站型。這批新改進尚未 commit／push。
+
+### 2026-10-30 正文判定交付
+
+- 使用者授權將上述 Scout 正文改善與實跑驗證紀錄 commit／push 至
+  `codex/a2-audit-hardening`；上方「尚未提交」為實作時的歷史狀態。
+- 提交前重新執行 `make check` exit 0：ruff／mypy clean，1934 passed、
+  1 skipped、1 個既有 Chroma deprecation warning；`git diff --check` clean。

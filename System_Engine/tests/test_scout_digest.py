@@ -311,3 +311,44 @@ def test_no_targets_file(tmp_path):
         now=NOW,
     )
     assert result.status == "skipped"
+
+
+def test_google_news_subscription_page_degrades_without_polluting_summary(tmp_path, monkeypatch):
+    import json
+    import services.scout.content as content
+
+    feed_url = "https://news.google.com/rss/search?q=economy"
+    wrapper = "https://news.google.com/rss/articles/test"
+    publisher = "https://publisher.example/economy"
+    monkeypatch.setattr(content, "resolve_article_url", lambda *args: publisher)
+
+    class Client:
+        def get(self, url, **kwargs):
+            if url == feed_url:
+                return _response(
+                    text=(
+                        "<rss version='2.0'><channel><item><title>Economic outlook</title>"
+                        f"<link>{wrapper}</link><guid>stable-guid</guid>"
+                        "<description>Output rose this quarter.</description>"
+                        "</item></channel></rss>"
+                    )
+                )
+            assert url == publisher
+            return _response(text="<main><h1>Subscribe to read this story</h1></main>")
+
+    llm = FakeLLM()
+    result = _run(
+        tmp_path, llm=llm, client=Client(), targets_md=f"---\ntargets:\n  - url: {feed_url}\n---\n"
+    )
+    assert result.status == "succeeded"
+    prompt = llm.calls[0][1]
+    assert "Output rose this quarter." in prompt
+    assert "(unavailable" in prompt
+    assert "Subscribe to read" not in prompt
+    report = result.report_path.read_text(encoding="utf-8")
+    assert f"]({publisher})" in report
+    assert "未取得內文，僅依標題與摘錄分析" in report
+    state = json.loads((tmp_path / "scout_state.json").read_text())
+    assert state["domains"]["publisher.example"]["fails"] == 1
+    assert "news.google.com" not in state["domains"]
+    assert ScoutState(tmp_path / "scout_state.json").is_seen("stable-guid")
