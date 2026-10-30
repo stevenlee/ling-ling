@@ -495,3 +495,26 @@
   `codex/a2-audit-hardening`；上方「尚未提交」為實作時的歷史狀態。
 - 提交前重新執行 `make check` exit 0：ruff／mypy clean，1934 passed、
   1 skipped、1 個既有 Chroma deprecation warning；`git diff --check` clean。
+
+## 2026-10-30 A2 supports 範圍稽核（唯讀）
+
+- 新增 `A2_support_quality_audit_2026-10-30.md`，盤點 28 筆 supports；只有 8 筆／
+  7 條 active claim 有當次完整 supports trace。人工逐段分類為局部 5、類比 2、
+  機制不相符 1，未找到足以無保留支持完整 claim 的單段樣本。這是 trace retention
+  留下的偏樣本，不推算全部 28 筆的錯誤率，也不等於主張被反證。
+- 具體缺口包括：NIST 通用控制移轉法律插件、CRM／衰減圖未涵蓋 Beta-Binomial
+  與特徵選取、線上事務驗證被誤作 CoT 預編譯、政治根基類比物理零容錯結構、
+  一般槓桿理論類比併購。API／Skills 兩來源各支持組件，不各算一次完整驗證。
+- 後續優先：支持範圍（direct／partial／analogy）＋引文及內容 basis 的可覆核契約，
+  僅完整直接支持可強化；部分支持保留探索用途。來源獨立性與原始 lineage 為另一
+  缺口，空 sources 不能證明獨立或循環，不以不同 title 直接等同獨立證據。
+- 未修改歷史 evidence、confidence、S 或索引，未調門檻／強化幅度、未呼叫 LLM。
+  本輪為文件交付，未重跑 `make check`；`git diff --check` clean。
+  新文件尚未 commit／push；前一批 Scout 已提交至 `a5339ce`。
+
+### 2026-10-30 A2 品質稽核交付
+
+- 依使用者授權提交並推送本輪稽核文件；提交前重新執行 `make check` exit 0：
+  ruff／mypy clean，1934 passed、1 skipped、1 個既有 Chroma warning。
+- 接續評估開發計畫，另建目前有效的未完成工作排序與驗收清單，避免把歷史階段
+  的「未完成」文字當成現行 backlog。
