@@ -1,4 +1,4 @@
-"""Cortex evidence traceback (A2) — falsifier-first corroboration scan, dry-run.
+"""Cortex evidence traceback (A2) — versioned passage-scope corroboration scan.
 
 98.8% of Cortex claims carry exactly one evidence entry: each belief was born
 from a single insight and never corroborated again. The N.1 observation window
@@ -18,17 +18,17 @@ candidates.
 TWO MODES:
   * DRY-RUN (default, `evidence_traceback_apply: false`): judgments go to a
     fromLingLing/ report; NOTHING in Cortex state is mutated.
-  * APPLY (`evidence_traceback_apply: true`): after review of the dry-run hit
-    rates (2026-08-07: 18% evidential, 0 error across 128 judgments), the scan
-    additionally MUTATES the claim, conservatively:
-      - supports  → append an independent-evidence entry (keyed by an
+  * APPLY (`evidence_traceback_apply: true`): only a v2 full-scope verdict can
+    strengthen a claim. Historical v1 hit rates do not validate this contract.
+    With apply enabled, the scan MUTATES the claim, conservatively:
+      - full_support → append an independent-evidence entry (keyed by an
         [EvidenceTrace] marker so a re-scan of the same source is idempotent),
         then a SINGLE gentle reinforce (GAIN_REVALIDATION) + small confidence
         step per apply. Thickens the belief's evidence — the whole point.
       - contradicts → record the passage as a COUNTERPOINT (human-visible in
         the rendered page). NO reinforce, NO confidence change, NO auto-flip —
         surfaced for human adjudication, not decided by the scan.
-      - neutral / unparseable / error → no mutation.
+      - partial_support / analogy / neutral / unparseable / error → no mutation.
     Mutations go through save_cortex_page + a consolidation-style re-index, all
     inside the daemon where the maintenance scheduler serialises Cortex writers
     (single-writer discipline). The [EvidenceTrace] provenance and the derivative
@@ -67,6 +67,12 @@ from services.cortex_store import (
 )
 from services.ingest.atomic_io import atomic_write_text
 from services.llm_client import JSONCompletionParseError
+from services.evidence_contract import (
+    CONTRACT_VERSION,
+    PASSAGE_LIMIT,
+    RELATIONS,
+    validate_scope_verdict,
+)
 from maintenance.cortex_index_repair import (
     enqueue_index_repair,
     repair_index_slot,
@@ -78,7 +84,6 @@ from maintenance.cortex_index_repair import (
 _MAX_PASSAGES = 3
 _TOP_K = 5
 
-_VALID_RELATIONS = ("supports", "contradicts", "neutral")
 _DERIVATIVE_ROOTS = {"cortex", "insights", "fromlingling"}
 _SOURCE_VARIANT_RE = re.compile(r"\s+\((?:Part\s+\d+|Stitched|Synthesis)\)$", re.IGNORECASE)
 
@@ -94,32 +99,28 @@ _TRACE_MARKER = "[EvidenceTrace]"
 _APPLY_CONFIDENCE_STEP = 0.05
 _APPLY_CONFIDENCE_CAP = 0.8
 
-# Control-plane JSON-extraction prompt: stays in code on purpose (the
-# content/control boundary from the prompt-system review — vault files carry
-# voice and methodology, structured-output contracts stay next to their
-# parser).
-_SYSTEM = (
-    "You are a rigorous evidence auditor for a personal knowledge base.\n"
-    "Given a CLAIM, its FALSIFIER (the observation that would refute it), and one\n"
-    "PASSAGE retrieved from the knowledge base, judge the passage's evidential\n"
-    "relation to the claim.\n"
-    'Return JSON only: {"relation": "supports" | "contradicts" | "neutral",\n'
-    ' "reason": "<one sentence, Traditional Chinese>"}\n'
-    "- contradicts: the passage describes or strongly implies the falsifier\n"
-    "  scenario, or otherwise conflicts with the claim.\n"
-    "- supports: the passage INDEPENDENTLY corroborates the claim — not merely\n"
-    "  restating it.\n"
-    "- neutral: related topic, no evidential force either way.\n"
-    "Judge evidential force only. Do not invent content beyond the passage."
-)
-
 
 @dataclass
 class PassageJudgment:
     title: str
-    relation: str  # supports / contradicts / neutral / unparseable / error
+    relation: str  # RELATIONS / unparseable / error
     reason: str = ""
     distance: float | None = None
+    contract_version: int | None = None
+    quotes: list[str] = field(default_factory=list)
+    unsupported: list[str] = field(default_factory=list)
+    applicability: str = ""
+    passage: str = ""
+
+    def verdict(self) -> dict:
+        return {
+            "contract_version": self.contract_version,
+            "relation": self.relation,
+            "reason": self.reason,
+            "quotes": self.quotes,
+            "unsupported": self.unsupported,
+            "applicability": self.applicability,
+        }
 
 
 @dataclass
@@ -199,8 +200,8 @@ def _is_independent(hit: dict, page) -> tuple[bool, str]:
     # Insight filenames truncate long source titles, so origin matching works
     # on a prefix — but only when the prefix is long enough to be distinctive
     # (a 3-char title would substring-match half the vault). A false
-    # "independent" here only costs one judged passage (and shows up in the
-    # report for review), never a state write.
+    # "independent" can reach apply mode: this heuristic is only an origin
+    # exclusion, not proof of original-source independence (A04 tracks lineage).
     prefix = title[:24]
     fuzzy = len(prefix) >= 6
     for entry in page.evidence:
@@ -328,26 +329,22 @@ def _judge_passage(llm, page, hit: dict) -> PassageJudgment:
     meta = hit.get("metadata") or {}
     title = str(meta.get("title") or "").strip()
     distance = hit.get("distance") if isinstance(hit.get("distance"), (int, float)) else None
-    text = str(hit.get("text") or "")[:2000]
-    user_msg = (
-        f"## CLAIM\n{page.claim}\n\n"
-        f"## FALSIFIER\n{page.falsifier or '(none stated)'}\n\n"
-        f"## PASSAGE（來源：{title}）\n{text}\n"
-    )
-    try:
-        parsed = llm._complete_json(
-            kind="object",
-            raise_on_miss=True,
-            propagate_errors=True,
-            system_prompt=_SYSTEM,
-            user_msg=user_msg,
-            temperature=0.1,
-            trace_context={
-                "stage": "evidence_traceback",
-                "metadata": {"claim_id": page.claim_id, "passage_title": title},
-            },
+    raw_text = hit.get("text")
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        return PassageJudgment(
+            title=title, relation="unparseable", reason="缺少有效段落", distance=distance
         )
-    except JSONCompletionParseError as e:
+    text = raw_text[:PASSAGE_LIMIT]
+    try:
+        parsed = llm.judge_evidence_scope(
+            claim=page.claim,
+            falsifier=page.falsifier,
+            title=title,
+            passage=text,
+            claim_id=page.claim_id,
+        )
+        verdict = validate_scope_verdict(parsed, text)
+    except (JSONCompletionParseError, ValueError) as e:
         return PassageJudgment(
             title=title, relation="unparseable", reason=str(e)[:200], distance=distance
         )
@@ -356,22 +353,7 @@ def _judge_passage(llm, page, hit: dict) -> PassageJudgment:
         return PassageJudgment(
             title=title, relation="error", reason=str(e)[:200], distance=distance
         )
-
-    relation = (
-        str((parsed or {}).get("relation") or "").strip().lower()
-        if isinstance(parsed, dict)
-        else ""
-    )
-    reason = (
-        str((parsed or {}).get("reason") or "").strip()[:300] if isinstance(parsed, dict) else ""
-    )
-    if relation not in _VALID_RELATIONS:
-        # An unreadable verdict is reported as unparseable, never coerced to
-        # neutral — same discipline as the synthesis critique gate.
-        return PassageJudgment(
-            title=title, relation="unparseable", reason=reason, distance=distance
-        )
-    return PassageJudgment(title=title, relation=relation, reason=reason, distance=distance)
+    return PassageJudgment(title=title, distance=distance, passage=text, **verdict)
 
 
 def _scan_incomplete(scan: ClaimScan) -> bool:
@@ -386,8 +368,10 @@ def _dry_run_action(scan: ClaimScan) -> str:
     relations = {j.relation for j in scan.judgments}
     if "contradicts" in relations:
         return "記 tension（falsifier 情境有跡可循，主張待壓力複核）"
-    if "supports" in relations:
-        return "+1 evidence（獨立佐證）＋強化"
+    if "full_support" in relations:
+        return "+1 evidence（完整支持；來源獨立性仍依排除規則）＋強化"
+    if relations & {"partial_support", "analogy"}:
+        return "僅留報告（局部支持／類比，不強化）"
     return "無（維持薄證據，交由 decay）"
 
 
@@ -395,12 +379,24 @@ def _apply_scan(
     page, scan: ClaimScan, rag, now: datetime, *, repair_dir: Path | None = None
 ) -> dict:
     """Mutate the claim page from its judgments (apply mode). Conservative:
-    supports thicken evidence + a single gentle reinforce; contradicts become
+    full_support thickens evidence + a single gentle reinforce; contradicts become
     human-visible counterpoints with no confidence change. Idempotent across
     re-scans via the [EvidenceTrace] marker. Returns an actions dict; on any
     pre-commit failure returns {"error": <str>}. Post-commit index failure
     keeps the applied counts and a durable intent, never claims rollback."""
     from services.cortex_decay import GAIN_REVALIDATION, reinforce
+
+    # The consumer also validates: hand-built/legacy judgments cannot bypass
+    # the model adapter, and an incomplete batch cannot partially strengthen.
+    if _scan_incomplete(scan):
+        return {"deferred": True}
+    if (page.claim_id, page.claim, page.falsifier) != (scan.claim_id, scan.claim, scan.falsifier):
+        return {"error": "主張或 falsifier 已改變，必須重新判讀"}
+    try:
+        for judgment in scan.judgments:
+            validate_scope_verdict(judgment.verdict(), judgment.passage)
+    except ValueError as validation_error:
+        return {"error": f"判讀契約無效：{validation_error}"}
 
     added_evidence = 0
     refreshed = 0
@@ -410,13 +406,17 @@ def _apply_scan(
 
     for j in scan.judgments:
         marker = f"{_TRACE_MARKER} {j.title}"
-        if j.relation == "supports":
+        if j.relation == "full_support":
             entry = {
                 "insight": marker,
                 "sources": [j.title],
                 "date": now.strftime("%Y-%m-%d"),
                 "summary": j.reason or "（追溯佐證）",
                 "method": "evidence_traceback",
+                "scope_contract_version": CONTRACT_VERSION,
+                "scope_relation": j.relation,
+                "quotes": j.quotes,
+                "applicability": j.applicability,
             }
             if marker in existing_markers:
                 # Same corroborating source found again — refresh in place, no
@@ -509,15 +509,15 @@ def _render_report(
     repair_summary: str = "",
     repair_errors: list[str] | None = None,
 ) -> str:
-    counts = {"supports": 0, "contradicts": 0, "neutral": 0, "unparseable": 0, "error": 0}
+    counts = dict.fromkeys((*RELATIONS, "unparseable", "error"), 0)
     for scan in scans:
         for j in scan.judgments:
             counts[j.relation] = counts.get(j.relation, 0) + 1
     if apply:
         header = f"# 🌱 證據追溯（apply）{now:%Y-%m-%d}"
         blurb = (
-            "> Cortex 薄證據主張的 falsifier-first 佐證掃描。**apply 模式：supports 已寫入\n"
-            "> 獨立佐證＋溫和強化、contradicts 已記為 counterpoint 待人審；contradicts 不自動翻案。**"
+            "> Cortex 薄證據主張的 falsifier-first 佐證掃描。**apply 模式：僅 full_support 可寫入\n"
+            "> 佐證＋溫和強化、contradicts 可記為 counterpoint 待人審；局部支持與類比僅留報告。**"
         )
         action_label = "動作"
         applied_ev = sum((s.applied or {}).get("added_evidence", 0) for s in scans)
@@ -541,8 +541,11 @@ def _render_report(
         "",
         blurb,
         "",
+        "- 引文存在僅驗證字面來源，不證明語義支持或原始來源獨立性。",
         f"- 薄證據池：{pool_size} 條主張；本輪掃描 {len(scans)} 條",
-        f"- 段落判定：supports {counts['supports']} ・ contradicts {counts['contradicts']}"
+        f"- 判讀契約 v{CONTRACT_VERSION}；段落判定：full_support {counts['full_support']}"
+        f" ・ partial_support {counts['partial_support']} ・ analogy {counts['analogy']}"
+        f" ・ contradicts {counts['contradicts']}"
         f" ・ neutral {counts['neutral']} ・ 無法解析 {counts['unparseable']} ・ 錯誤 {counts['error']}",
     ]
     if apply_line:
@@ -565,6 +568,12 @@ def _render_report(
         for j in scan.judgments:
             dist = f"（distance {j.distance:.2f}）" if j.distance is not None else ""
             lines.append(f"  - [{j.relation}] {j.title} — {j.reason}{dist}")
+            if j.applicability:
+                lines.append(f"    - 適用範圍：{j.applicability}")
+            for quote in j.quotes:
+                lines.append(f"    - 引文：{quote}")
+            for missing in j.unsupported:
+                lines.append(f"    - 未支持部分：{missing}")
         action = _applied_action(scan.applied) if apply else _dry_run_action(scan)
         lines.append(f"- {action_label}：{action}")
         lines.append("")
@@ -582,7 +591,7 @@ def run_evidence_traceback(
     now: datetime | None = None,
 ) -> TracebackResult:
     """One traceback batch. Judgment is read-only; when
-    ``EVIDENCE_TRACEBACK_APPLY`` is set the accepted supports/contradicts also
+    ``EVIDENCE_TRACEBACK_APPLY`` is set the accepted full_support/contradicts also
     mutate the claim page (append evidence / counterpoint, gentle reinforce).
     Always writes the dated report and the rotation cursor."""
     cortex_dir = cortex_dir or CORTEX_DIR
@@ -670,7 +679,9 @@ def run_evidence_traceback(
     atomic_write_text(state_file, json.dumps(state, ensure_ascii=False, indent=2))
 
     judged = sum(len(s.judgments) for s in scans)
-    hits = sum(1 for s in scans for j in s.judgments if j.relation in ("supports", "contradicts"))
+    hits = sum(
+        1 for s in scans for j in s.judgments if j.relation in ("full_support", "contradicts")
+    )
     mode = "apply" if apply else "dry-run"
     extra = ""
     if apply:

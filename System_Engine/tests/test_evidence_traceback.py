@@ -80,20 +80,33 @@ class _PerQueryRAG:
         return list(self.hits_by_query[query])
 
 
+def _verdict(relation="full_support", passage="passage text", reason="理由"):
+    return {
+        "contract_version": 2,
+        "relation": relation,
+        "reason": reason,
+        "quotes": [] if relation == "neutral" else [passage],
+        "unsupported": ["缺少目標領域或部分結果"]
+        if relation in ("partial_support", "analogy")
+        else [],
+        "applicability": "僅限本次測試及指定條件",
+    }
+
+
 class _StubLLM:
-    def __init__(self, relation="supports", raise_exc=None, parsed=None):
+    def __init__(self, relation="full_support", raise_exc=None, parsed=None):
         self.relation = relation
         self.raise_exc = raise_exc
         self.parsed = parsed
         self.calls = []
 
-    def _complete_json(self, **kwargs):
-        self.calls.append(kwargs)
+    def judge_evidence_scope(self, *, claim, falsifier, title, passage, claim_id):
+        self.calls.append({"user_msg": passage, "claim_id": claim_id})
         if self.raise_exc:
             raise self.raise_exc
         if self.parsed is not None:
             return self.parsed
-        return {"relation": self.relation, "reason": "理由"}
+        return _verdict(self.relation, passage=passage)
 
 
 @pytest.fixture
@@ -157,12 +170,12 @@ def test_claim_only_query_when_falsifier_empty(env):
 def test_dry_run_never_mutates_cortex(env):
     page = _claim_page(env["cortex"], "cortex-thin1", "主張 A")
     before = page.path.read_bytes()
-    result = _run(env, _StubLLM(relation="supports"), _StubRAG([_hit("Independent Doc")]))
+    result = _run(env, _StubLLM(relation="full_support"), _StubRAG([_hit("Independent Doc")]))
     assert result.status == "ok"
     assert page.path.read_bytes() == before  # claim file untouched
     report = result.report_path.read_text(encoding="utf-8")
     assert "dry-run" in report
-    assert "[supports] Independent Doc" in report
+    assert "[full_support] Independent Doc" in report
     assert "+1 evidence" in report  # would-be action is REPORTED, not applied
 
 
@@ -382,7 +395,7 @@ def test_apply_supports_appends_evidence_and_reinforces(env):
     page = _thin_claim_reinforceable(env)
     rag = _StubRAG([_hit("Independent Doc")])
 
-    result = _run(env, _StubLLM(relation="supports"), rag)
+    result = _run(env, _StubLLM(relation="full_support"), rag)
 
     reloaded = parse_cortex_page(page.path)
     # evidence thickened 1 → 2, no longer thin; new entry is EvidenceTrace-marked.
@@ -423,13 +436,13 @@ def test_apply_thickened_claim_leaves_thin_pool(env):
     _apply_on(env)
     page = _thin_claim_reinforceable(env)
 
-    first = _run(env, _StubLLM(relation="supports"), _StubRAG([_hit("Independent Doc")]))
+    first = _run(env, _StubLLM(relation="full_support"), _StubRAG([_hit("Independent Doc")]))
     assert first.scans[0].applied["added_evidence"] == 1
     assert len(parse_cortex_page(page.path).evidence) == 2
 
     second = _run(
         env,
-        _StubLLM(relation="supports"),
+        _StubLLM(relation="full_support"),
         _StubRAG([_hit("Independent Doc")]),
         now=datetime(2026, 7, 26, 3, 0),
     )
@@ -459,7 +472,9 @@ def test_apply_scan_refreshes_existing_trace_marker_in_place(env):
 
     scan = ClaimScan(claim_id=page.claim_id, claim=page.claim, falsifier=page.falsifier)
     scan.judgments = [
-        PassageJudgment(title="Independent Doc", relation="supports", reason="新摘要")
+        PassageJudgment(
+            title="Independent Doc", passage="passage text", **_verdict(reason="新摘要")
+        )
     ]
     applied = _apply_scan(page, scan, _StubRAG([]), _NOW)
 
@@ -498,7 +513,7 @@ def test_apply_write_failure_recorded_not_silent(env, monkeypatch):
         raise OSError("disk full")
 
     monkeypatch.setattr("maintenance.evidence_traceback.save_cortex_page", boom, raising=False)
-    result = _run(env, _StubLLM(relation="supports"), _StubRAG([_hit("Independent Doc")]))
+    result = _run(env, _StubLLM(relation="full_support"), _StubRAG([_hit("Independent Doc")]))
 
     # Both claims are processed, but neither write failure is a healthy result.
     assert result.status == "failed"
@@ -510,7 +525,7 @@ def test_dry_run_default_leaves_applied_none(env):
     # env pins APPLY False → applied stays None, page untouched.
     page = _thin_claim_reinforceable(env)
     before = page.path.read_bytes()
-    result = _run(env, _StubLLM(relation="supports"), _StubRAG([_hit("Independent Doc")]))
+    result = _run(env, _StubLLM(relation="full_support"), _StubRAG([_hit("Independent Doc")]))
     assert result.scans[0].applied is None
     assert page.path.read_bytes() == before
 
@@ -551,6 +566,17 @@ def _real_json_client(replies):
         return response
 
     client._complete_text = complete
+    # Only the version-controlled prompt asset is read, never the live vault.
+    from pathlib import Path
+    from core.parser import strip_body_frontmatter
+
+    prompt = (
+        Path(__file__).resolve().parents[2]
+        / "lings-desktop/Templates/Operations/judge_evidence_scope.md"
+    )
+    client._load_capability_body = lambda path: strip_body_frontmatter(
+        prompt.read_text(encoding="utf-8")
+    )[0]
     return client, calls
 
 
@@ -575,7 +601,7 @@ def test_content_parse_failure_remains_unparseable_and_bounded(env):
     llm, calls = _real_json_client(["not json", "still not json"])
     result = _run(env, llm, _StubRAG([_hit("Independent Doc")]))
     assert len(calls) == 2
-    assert [c["trace_context"]["metadata"]["json_attempt"] for c in calls] == [1, 2]
+    assert [c["trace_context"]["metadata"]["scope_attempt"] for c in calls] == [1, 2]
     assert result.status == "failed"
     assert result.scans[0].judgments[0].relation == "unparseable"
     assert "錯誤 0" in result.report_path.read_text(encoding="utf-8")
@@ -583,7 +609,7 @@ def test_content_parse_failure_remains_unparseable_and_bounded(env):
 
 def test_content_retry_recovers_but_transport_does_not_reroll(env):
     _claim_page(env["cortex"], "cortex-thin1", "主張 A")
-    llm, calls = _real_json_client(["not json", '{"relation":"neutral"}'])
+    llm, calls = _real_json_client(["not json", json.dumps(_verdict("neutral"))])
     result = _run(env, llm, _StubRAG([_hit("Independent Doc")]))
     assert result.status == "ok" and len(calls) == 2
     llm, calls = _real_json_client(["not json", ConnectionError("down")])
@@ -597,7 +623,7 @@ def test_partial_claim_failure_does_not_undo_completed_claim(env):
     first = _thin_claim_reinforceable(env, "cortex-1", "主張 A")
     second = _thin_claim_reinforceable(env, "cortex-2", "主張 B")
     before = second.path.read_bytes()
-    llm, calls = _real_json_client(['{"relation":"supports"}', ConnectionError("down")])
+    llm, calls = _real_json_client([json.dumps(_verdict()), ConnectionError("down")])
     result = _run(env, llm, _StubRAG([_hit("Independent Doc")]))
     assert result.status == "failed" and len(calls) == 2
     assert len(parse_cortex_page(first.path).evidence) == 2
@@ -612,7 +638,7 @@ def test_incomplete_claim_does_not_apply_partial_supports(env):
     _apply_on(env)
     page = _thin_claim_reinforceable(env)
     before = page.path.read_bytes()
-    llm, _ = _real_json_client(['{"relation":"supports"}', ConnectionError("down")])
+    llm, _ = _real_json_client([json.dumps(_verdict()), ConnectionError("down")])
     result = _run(env, llm, _StubRAG([_hit("Independent A"), _hit("Independent B")]))
     assert result.status == "failed"
     assert page.path.read_bytes() == before
@@ -784,3 +810,179 @@ def test_invalid_breakdown_cannot_fall_back_to_zero(env, breakdown):
     result = _run(env, llm, _StubRAG([hit]))
     assert llm.calls == []
     assert result.scans[0].excluded_unknown == 1
+
+
+@pytest.mark.parametrize("relation", ["partial_support", "analogy"])
+def test_limited_scope_only_reports_without_strengthening(env, relation):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+    rag = _StubRAG([_hit("Independent A"), _hit("Independent B")])
+    result = _run(env, _StubLLM(relation=relation), rag)
+    assert result.status == "ok"
+    assert page.path.read_bytes() == before
+    assert rag.indexed == []  # two partial passages cannot become a full claim
+    assert result.scans[0].applied["added_evidence"] == 0
+    report = result.report_path.read_text(encoding="utf-8")
+    assert f"[{relation}]" in report
+    assert "未支持部分：缺少目標領域或部分結果" in report
+    assert "適用範圍：僅限本次測試及指定條件" in report
+    assert "引文：passage text" in report
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"contract_version": None},
+        {"contract_version": True},
+        {"contract_version": 1},
+        {"relation": "supports"},
+        {"relation": []},
+        {"reason": ""},
+        {"reason": {}},
+        {"applicability": " "},
+        {"quotes": []},
+        {"quotes": "passage text"},
+        {"quotes": [123]},
+        {"quotes": ["invented quote"]},
+        {"quotes": ["passage text", "not in passage"]},
+        {"unsupported": "none"},
+        {"unsupported": [None]},
+        {"unsupported": ["missing result"]},
+        {"relation": "partial_support", "unsupported": []},
+        {"relation": "analogy", "unsupported": []},
+        {"relation": "contradicts", "quotes": []},
+    ],
+)
+def test_invalid_scope_verdict_never_reaches_apply(env, patch):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+    result = _run(env, _StubLLM(parsed={**_verdict(), **patch}), _StubRAG([_hit("Doc")]))
+    assert result.status == "failed"
+    assert result.scans[0].judgments[0].relation == "unparseable"
+    assert result.scans[0].applied == {"deferred": True}
+    assert page.path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "key", ["contract_version", "relation", "reason", "quotes", "unsupported", "applicability"]
+)
+def test_missing_scope_fields_are_not_defaulted(env, key):
+    page = _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    verdict = _verdict()
+    del verdict[key]
+    result = _run(env, _StubLLM(parsed=verdict), _StubRAG([_hit("Doc")]))
+    assert result.scans[0].judgments[0].relation == "unparseable"
+    assert len(parse_cortex_page(page.path).evidence) == 1
+
+
+@pytest.mark.parametrize(
+    "patch", [{"contract_version": None}, {"quotes": ["fake"]}, {"unsupported": ["gap"]}]
+)
+def test_apply_boundary_revalidates_hand_built_judgments(env, patch):
+    from maintenance.evidence_traceback import ClaimScan, PassageJudgment, _apply_scan
+
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+    scan = ClaimScan(page.claim_id, page.claim, page.falsifier)
+    # A valid first judgment must not be partially applied before an invalid second.
+    scan.judgments = [
+        PassageJudgment(title="A", passage="passage text", **_verdict()),
+        PassageJudgment(title="B", passage="passage text", **{**_verdict(), **patch}),
+    ]
+    result = _apply_scan(page, scan, _StubRAG([]), _NOW)
+    assert "error" in result
+    assert page.path.read_bytes() == before
+    assert len(page.evidence) == 1
+    assert not (env["state"].parent.parent / "repairs").exists()
+
+
+def test_apply_boundary_rejects_legacy_supports(env):
+    from maintenance.evidence_traceback import ClaimScan, PassageJudgment, _apply_scan
+
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+    scan = ClaimScan(
+        page.claim_id,
+        page.claim,
+        page.falsifier,
+        judgments=[PassageJudgment("Doc", "supports", "舊格式")],
+    )
+    assert "error" in _apply_scan(page, scan, _StubRAG([]), _NOW)
+    assert page.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("field", ["claim", "falsifier", "claim_id"])
+def test_apply_rejects_changed_claim_basis(env, field):
+    from maintenance.evidence_traceback import ClaimScan, PassageJudgment, _apply_scan
+
+    page = _thin_claim_reinforceable(env)
+    scan = ClaimScan(
+        page.claim_id,
+        page.claim,
+        page.falsifier,
+        judgments=[PassageJudgment("Doc", passage="passage text", **_verdict())],
+    )
+    setattr(page, field, "changed")
+    before = page.path.read_bytes()
+    assert "error" in _apply_scan(page, scan, _StubRAG([]), _NOW)
+    assert page.path.read_bytes() == before
+
+
+def test_schema_retry_is_bounded_and_can_recover(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    llm, calls = _real_json_client([json.dumps({"relation": "supports"}), json.dumps(_verdict())])
+    result = _run(env, llm, _StubRAG([_hit("Doc")]))
+    assert result.status == "ok" and len(calls) == 2
+    assert [c["trace_context"]["metadata"]["scope_attempt"] for c in calls] == [1, 2]
+    assert all(c["trace_context"]["metadata"]["contract_version"] == 2 for c in calls)
+    llm, calls = _real_json_client([json.dumps({"relation": "supports"})] * 2)
+    result = _run(env, llm, _StubRAG([_hit("Doc")]))
+    assert result.status == "failed" and len(calls) == 2
+    assert result.scans[0].judgments[0].relation == "unparseable"
+
+
+def test_missing_prompt_fails_without_model_or_mutation(env):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+    llm, calls = _real_json_client([])
+    llm._load_capability_body = lambda path: ""
+    result = _run(env, llm, _StubRAG([_hit("Doc")]))
+    assert result.status == "failed" and calls == []
+    assert result.scans[0].judgments[0].relation == "error"
+    assert page.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("text", [None, {}, " "])
+def test_invalid_passage_is_not_coerced_to_evidence(env, text):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    llm = _StubLLM()
+    result = _run(env, llm, _StubRAG([_hit("Doc", text=text)]))
+    assert result.status == "failed"
+    assert llm.calls == []
+
+
+def test_citation_outside_sent_budget_is_rejected(env):
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    verdict = _verdict(passage="hidden suffix")
+    result = _run(
+        env, _StubLLM(parsed=verdict), _StubRAG([_hit("Doc", text="x" * 2000 + "hidden suffix")])
+    )
+    assert result.scans[0].judgments[0].relation == "unparseable"
+
+
+def test_full_support_persists_version_and_citations(env):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    _run(env, _StubLLM(), _StubRAG([_hit("Doc")]))
+    entry = parse_cortex_page(page.path).evidence[-1]
+    assert entry["scope_contract_version"] == 2
+    assert entry["scope_relation"] == "full_support"
+    assert entry["quotes"] == ["passage text"]
+    assert entry["applicability"] == "僅限本次測試及指定條件"
+    reloaded = parse_cortex_page(page.path)
+    save_cortex_page(reloaded)
+    assert parse_cortex_page(page.path).evidence[-1] == entry
+    assert "scope_contract_version" not in reloaded.evidence[0]  # legacy stays legacy

@@ -69,8 +69,18 @@ class FakeRAG:
 
 
 def _apply(page, rag):
-    scan = traceback.ClaimScan(page.claim_id, page.claim, "反例")
-    scan.judgments = [traceback.PassageJudgment("Independent Doc", "supports", "佐證")]
+    scan = traceback.ClaimScan(page.claim_id, page.claim, page.falsifier)
+    scan.judgments = [
+        traceback.PassageJudgment(
+            "Independent Doc",
+            "full_support",
+            "佐證",
+            contract_version=2,
+            quotes=["原文"],
+            applicability="測試條件",
+            passage="原文",
+        )
+    ]
     return traceback._apply_scan(page, scan, rag, _NOW)
 
 

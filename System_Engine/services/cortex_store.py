@@ -127,6 +127,12 @@ def _coerce_evidence(value) -> list[dict]:
             entry["revision"] = _as_str(item.get("revision"))
         if item.get("superseded_by"):
             entry["superseded_by"] = _as_str(item.get("superseded_by"))
+        # Scope provenance is retained verbatim, never inferred for legacy
+        # evidence or treated as apply authorization. The apply seam validates
+        # the full verdict against its actual passage before any mutation.
+        for key in ("scope_contract_version", "scope_relation", "quotes", "applicability"):
+            if key in item:
+                entry[key] = item[key]
         out.append(entry)
     return out
 

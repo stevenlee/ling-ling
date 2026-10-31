@@ -42,6 +42,7 @@ from core.parser import (
 from core.json_extract import salvage_json_array
 from core.retrying import reroll, retry_call
 from core.utils import MtimeCache, digest_value_to_text
+from services.evidence_contract import CONTRACT_VERSION, PASSAGE_LIMIT, validate_scope_verdict
 from services.capability_manager import CapabilityManager
 from services.trace_store import TraceStore, elapsed_ms
 from services.ingest.entity_quality import assess_entity_body
@@ -1609,6 +1610,53 @@ class LLMClient:
 
         best_result = min(results, key=lambda r: abs(r["score"] - median_score))
         return {"score": median_score, "falsifier": best_result["falsifier"]}
+
+    def judge_evidence_scope(
+        self, *, claim: str, falsifier: str, title: str, passage: str, claim_id: str
+    ) -> dict:
+        """Judge versioned scope; content retries never repeat transport failures."""
+        prompt = self._load_capability_body(OPERATIONS_DIR / "judge_evidence_scope.md")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise RuntimeError("缺少證據範圍判讀 prompt")
+        passage = passage[:PASSAGE_LIMIT]
+        user_msg = (
+            f"## CLAIM\n{claim}\n\n## FALSIFIER\n{falsifier or '(none stated)'}\n\n"
+            f"## PASSAGE（來源：{title}）\n{passage}\n"
+        )
+
+        def attempt(number: int) -> dict | None:
+            try:
+                parsed = self._complete_json(
+                    kind="object",
+                    raise_on_miss=True,
+                    propagate_errors=True,
+                    json_attempts=1,
+                    system_prompt=prompt,
+                    user_msg=user_msg,
+                    temperature=0.1,
+                    trace_context={
+                        "stage": "evidence_traceback",
+                        "metadata": {
+                            "claim_id": claim_id,
+                            "passage_title": title,
+                            "contract_version": CONTRACT_VERSION,
+                            "scope_attempt": number,
+                        },
+                    },
+                )
+            except JSONCompletionParseError as error:
+                logging.warning("evidence scope JSON miss (attempt %s/2): %s", number, error)
+                return None
+            try:
+                return validate_scope_verdict(parsed, passage)
+            except ValueError as error:
+                logging.warning("evidence scope content miss (attempt %s/2): %s", number, error)
+                return None
+
+        result = reroll(attempt, accept=lambda value: value is not None, attempts=2)
+        if result is None:
+            raise JSONCompletionParseError("兩次判讀仍未符合證據範圍契約")
+        return result
 
     def adjudicate_claims(self, claim_a: str, claim_b: str) -> dict:
         """Closed-choice relation verdict between two atomic claims.
