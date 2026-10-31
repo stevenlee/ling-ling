@@ -182,3 +182,13 @@ def test_modified_reference_content_invalidates_saved_predictions(tmp_path):
     assert changed.id == old.id and changed.sha256 != old.sha256
     with pytest.raises(ValueError, match="dataset_sha256"):
         evaluate_predictions(changed, payload)
+
+
+def test_reference_input_identities_are_opaque_not_label_hints():
+    import re
+
+    dataset = load_dataset(_CASES)
+    assert dataset.id == "a2-evidence-scope-v2"
+    for case in dataset.inputs()["cases"]:
+        assert re.fullmatch(r"case_\d{3}", case["id"])
+        assert re.fullmatch(r"Synthetic source \d{3}", case["source_title"])
