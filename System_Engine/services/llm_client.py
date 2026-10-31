@@ -119,10 +119,10 @@ from services.llm.transport import (  # noqa: E402
 
 
 class LLMClient:
-    def __init__(self):
+    def __init__(self, *, trace_store: TraceStore | None = None):
         self.provider = LLM_PROVIDER
         self._file_cache = MtimeCache()
-        self.trace_store = TraceStore()
+        self.trace_store = trace_store if trace_store is not None else TraceStore()
         self.capability_manager = CapabilityManager(OPERATIONS_DIR, SKILLS_DIR)
 
         self.composer = PromptComposer(self._file_cache, self.capability_manager)
