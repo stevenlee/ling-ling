@@ -581,3 +581,20 @@
 - 新增 41 個隔離案例，`make check` exit 0：ruff／mypy 172 source files clean；
   2087 passed、1 skipped、1 個既有 Chroma warning；`git diff --check` exit 0。
   依先前授權完成本段後提交、merge main／push；A04 須再次載入 daemon 才能確保生效。
+
+
+## 2026-10-31 A01／A02 真模型隔離評估
+
+- [模型評估報告](A2_scope_model_evaluation_2026-10-31.md) 保存兩輪版本、完整 24 案結果、
+  逐案分歧及實際 calls／provider attempts；輸入與模型輸出皆為合成資料，沒有私有 vault。
+- 新增顯式隔離 runner 與 client trace 注入；獨立輸出／trace，失敗不偽裝 neutral、
+  缺漏不移出分母，不額外 retry 或自動 resume。先前 v1 六次判讀漏版本，補明確 shape；
+  parser／引文／apply gate 保持嚴格。
+- v1 ID／合成 title 帶提示，改匿名 v2；原 claim／passage／gold／理由不變，標註仍待
+  獨立複核。完整輪 `gemma4:26b`：24 calls／24 attempts，0 error／0 missing，與暫定
+  分類一致 18/24、unsafe_full_support=0，未達 24/24。局部與類比邊界仍需複核，
+  不宣稱已驗 live 品質，也不因分歧繼續加長 prompt 或倒改 gold。
+- `make check` exit 0：ruff／mypy 173 source files clean，2105 passed、1 skipped、
+  1 個既有 Chroma warning；公開結果可離線重評。A04 來源缺口與 A05 正常排程仍欠。
+- 三個實作提交為 `59c802d`、`0fe123d`、`daaa27f`，本報告／入口另交付。
+  輸出範本沿現有 prompt 熱載入；本輪沒有新增需要 daemon 重啟才會排程的工作。

@@ -48,8 +48,8 @@ A2 雖能持久化補證與追補索引，但歷史樣本證明 supports 的語�
 
 | ID | 狀態／規模 | 工作與交付物 | 依賴 | 驗收條件 |
 |---|---|---|---|---|
-| A01 | 基準已實作／標註待複核（10/31） | 建 A2 固定判讀評估集：本次 8 個可重播樣本的合成變體，另加真正直接支持、明確反證、neutral、複合 claim、規範建議及惡意引文案例；標出人工預期與理由 | 現有稽核 | 每個案例有可覆核標準；公開 fixture 不複製私有長段資料；negative 與 positive 對照齊全，不能靠全部判 neutral 過關 |
-| A02 | 程式已實作、隔離模型評估待驗收（10/31）／M | 支持範圍契約：區分直接完整、局部、類比；要求支持引文、未支持部分及適用範圍；更新 parser／report／apply 並更正 `_is_independent` 的過期註解 | A01 | 只有範圍與資料有效的直接完整支持能新增完整 evidence／reinforce；局部與類比留報告；缺欄、壞 schema、不存在引文不得套用；contradicts、transport、parse 狀態不混同 |
+| A01 | 基準 v2 與真模型評估完成／標註待複核（10/31） | 建 A2 固定判讀評估集：本次 8 個可重播樣本的合成變體，另加真正直接支持、明確反證、neutral、複合 claim、規範建議及惡意引文案例；標出人工預期與理由 | 現有稽核 | 每個案例有可覆核標準；公開 fixture 不複製私有長段資料；negative 與 positive 對照齊全，不能靠全部判 neutral 過關 |
+| A02 | 程式已實作；真模型與暫定分類一致 18/24、未通過（10/31）／M | 支持範圍契約：區分直接完整、局部、類比；要求支持引文、未支持部分及適用範圍；更新 parser／report／apply 並更正 `_is_independent` 的過期註解 | A01 | 只有範圍與資料有效的直接完整支持能新增完整 evidence／reinforce；局部與類比留報告；缺欄、壞 schema、不存在引文不得套用；contradicts、transport、parse 狀態不混同 |
 | A03 | 程式與隔離故障驗證完成（10/31），live 待驗收／M | 可重播的 A2 audit record：claim／falsifier basis、送審段落快照或可恢復私有引用、hash、來源 family／path／範圍、contract／prompt／model 版本、trace 與判定 | 與 A02 一起定格式，獨立交付 | trace 到期後仍可覆核；套用前檢查 basis；稽核資料無法落盤時不提交不可稽核的補證；原子寫入、崩潰恢復、去重及保存政策有測試；私有內容不進公開 Git |
 | A04 | 程式與隔離驗證完成；來源資料／live 待驗收（10/31）／M | 原始來源 lineage 與獨立性：分開「不同顯示 title」與「不同原始證據」，追溯 Part／Stitched／Synthesis、原 insight 來源及 grounded_on | A03 | 同一原文件不同 view 不灌票；已知同源拒絕，無法確認獨立性明列未知、不冒充獨立佐證；缺資料不藉批量重生補齊 |
 | A05 | 已實作部分、待驗收／S | A2 新版端到端驗收報告：正常排程結果、來源／距離／範圍排除、index intent 與 trace／state 一致性 | 現有可靠性可先唯讀觀察；新版語義驗收依 A02–A04 | 部分失敗如實呈現、成功不重複強化、空池仍可追補；反證寫入用隔離資料驗完整交易，live 無反證樣本時仍標缺口；不故意破壞 live index 來製造故障 |
@@ -122,8 +122,9 @@ C01 是程式比對確認的缺口，尚未實作；C02 不能只用 10/30 手�
 
 ## 8. 實際執行批次與完成條件
 
-1. **A01 → A02＋A03 的離線實作已完成**。標註獨立複核與隔離真模型評估仍欠，
-   不把評分器／fault tests 通過當成語義品質驗收。詳見 §10–12；各邏輯修復獨立提交。
+1. **A01 → A02＋A03 的離線實作已完成**。隔離真模型已跑完整 24 案，與暫定分類
+   一致 18/24，尚未通過；標註獨立複核仍欠。不把評分器／fault tests 或零過度支持
+   當成 live 品質驗收。詳見 §10–14；各邏輯修復獨立提交。
 2. **下一批：A04 → A05**。確認 lineage／unknown 行為，再收新版觀察窗；既有 A2
    可靠性排程可在第一批期間唯讀追蹤，不必為等 live 樣本停止所有離線工作。
 3. **第三批：B01＋B02**。用新版可覆核樣本訂歷史處置與 M2 輸入契約。
@@ -274,3 +275,34 @@ C01 是程式比對確認的缺口，尚未實作；C02 不能只用 10/30 手�
   `codex/a4-source-lineage` 實作，通過檢查後提交並整合。新增的 A04 仍須 daemon
   再次載入新版，不能把本輪之前的重啟當作這批程式已載入的證明。
 - A04 程式／契約／測試提交為 `3c27223`；本交接狀態另列 docs commit。
+
+
+## 14. 2026-10-31 A01／A02 隔離真模型評估
+
+- 已完成 [完整模型評估與逐案分歧報告](A2_scope_model_evaluation_2026-10-31.md)，
+  以及可離線重評的合成 JSON 結果。§10–13 的「隔離真模型尚未執行」由本節更新，
+  標註獨立複核、來源資料修復與 A05 live 排程仍保留未完成。
+- 新增顯式 `scripts.run_evidence_scope_eval`，只將乾淨案例輸入送 production judge；
+  `LLMClient(trace_store=...)` 將 trace 注入獨立 run。輸出拒絕 live vault、拒絕覆寫，
+  呼叫前 checkpoint、失敗／中斷留分母、busy 時停止、不加 caller retry、不自動重播。
+- 首輪 v1 三案六次 provider attempts 皆漏 contract_version，3 error／21 missing 後
+  按預算停止。只補明確六欄 JSON shape，沒有放寬 parser、引文檢查或 apply gate。
+  該 prompt 資產沿既有熱載入，不須新增 daemon 排程才能讀取。
+- 發現案例 ID／合成 title 的間接標籤提示，匿名化並升版 `a2-evidence-scope-v2`。
+  原可讀名稱只留在不匯出的 provenance；24 案的 claim／falsifier／passage／參考分類／
+  理由／tags 逐案比對皆未修改。assistant_authored_pending_review 不改為 reviewed。
+- 第二輪 Ollama `gemma4:26b` 完整 24 案、24 provider attempts；0 error、0 missing，
+  與暫定分類一致 **18/24（75%）**、unsafe_full_support=0，既定 24/24 門檻未通過。
+  full_support 6/6、contradiction 4/4、neutral 6/6，partial_support 2/6、analogy 0/2。
+  API／Skills 同一 compound claim 的組件案例分別被判反證／局部，邊界仍不一致。
+- 兩輪版本不同，不當成受控語義 A/B；小合成樣本的零過度支持不證明 live 零錯誤。
+  不再加長 prompt 追分，也不依模型結果倒改 gold。下一步先獨立複核六筆分歧及
+  partial／analogy／neutral rubric，再決定是否演進契約或替換判讀方案。
+- 新增 18 個 hermetic 案例；`make check` exit 0：ruff clean、mypy 173 source files
+  無錯誤；**2105 passed、1 skipped、1 個既有 Chroma warning**（16.11 秒）。
+  公開結果以離線 scorer 重評得到相同 18/24，CLI exit 1 是未通過參考分類，非執行故障。
+- 隔離 runner `59c802d`、匿名化基準 `0fe123d`、明確 JSON shape `daaa27f` 已分開提交；
+  報告與 roadmap 另行交付，依既有授權完成一段後整合 main／push。
+- 本輪未手動觸發 live A2、改排程時鐘、建構 live RAG／Chroma writer、修改 live evidence／
+  confidence／S 或變更 apply 開關。A04 的 12 條薄證據來源缺口沒有因此補齊；正常排程
+  的新版 A05 驗收仍須真實樣本，不把隔離模型評估冒充 live 成效。
