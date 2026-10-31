@@ -1,5 +1,8 @@
 # 下一階段路線圖（2026-07-13 起）
 
+> **目前執行入口（2026-10-30）**：[開發計畫重評與未完成工作](Development_Plan_2026-10-30.md)。
+> 本文件保留歷史決策與逐輪驗證；舊段落的待辦請以新計畫的狀態／依賴／驗收條件核對。
+
 > 承 2026-07-12 產出品質稽核（`LingLing_Output_Audit_report_20260712.md`）與其後一連串修復。
 > 這份文件記錄:①本波做完了什麼 ②殘留工作(分類+排序) ③下一階段的分期計劃。
 
@@ -518,3 +521,48 @@
   ruff／mypy clean，1934 passed、1 skipped、1 個既有 Chroma warning。
 - 接續評估開發計畫，另建目前有效的未完成工作排序與驗收清單，避免把歷史階段
   的「未完成」文字當成現行 backlog。
+
+
+## 2026-10-31 A01 固定判讀評估基準
+
+- 依 [目前開發計畫](Development_Plan_2026-10-30.md) 建立 24 個合成案例與純離線評分器。
+  [使用與標準](../tests/fixtures/evidence_evaluation/README.md) 明示 assistant-authored
+  標註仍待獨立複核；未把歷史私有段落複製進 Git，也未宣稱已驗證真模型。
+- 覆蓋完整／局部支持、類比、反證、中立，以及複合 claim、規範主張、錯誤機制、
+  假引用與 prompt injection。只匯出輸入、不洩漏答案；結果綁內容 hash，錯版拒絕。
+- 全 neutral 與全支持皆不能通過。缺漏／error 留在分母，不偽裝 neutral。
+  當前 production A2 與 apply 契約不變，後續由 A02／A03 接入並做隔離模型評估。
+- `make check` exit 0：ruff／mypy 169 source files clean，1965 passed、1 skipped、
+  1 個既有 Chroma warning；`git diff --check` clean。未重啟或操作 live 資料。
+- 本輪新碼、測試、文件及前輪未提交的開發計畫保留在功能分支，未 commit／push。
+
+
+## 2026-10-31 A02 支持範圍契約（離線實作）
+
+- 詳見 [目前開發計畫 §11](Development_Plan_2026-10-30.md#11-2026-10-31-a02-支持範圍契約)。
+  新 v2 判讀區分完整支持、局部、類比、反證及 neutral，要求引文／未支持部分／適用範圍；
+  舊 supports、缺欄、錯版及不存在引文不接受。局部／類比不新增完整 evidence 或強化。
+- LLMClient 專用方法與 vault operation asset 接上兩次 bounded content reroll，transport
+  不加碼重試。apply 邊界重驗整批及傳入 basis；scope metadata 在 Cortex 讀寫後保留。
+- 新增 41 個隔離回歸案例，既有索引交易／故障恢復驗證保留。
+  `make check` exit 0：ruff clean、mypy 170 source files clean；2006 passed、1 skipped、
+  1 個既有 Chroma warning；`git diff --check` exit 0。
+- 真模型語義評估／A01 標註複核、A03 durable audit 與 A04 lineage 仍待驗收或實作；
+  不把字面引文匹配當語義支持。未重啟 daemon、未呼叫真模型／RAG、未修改 live evidence／DB，
+  未 commit／push；先前 A01 與計畫文件的未提交變更保留。
+
+
+## 2026-10-31 A03 可重播私有稽核與整合交付
+
+- [稽核格式與 commit 契約](Evidence_Audit_Record_Contract.md) 已實作：判讀 basis／
+  passage／prompt snapshots、hash、來源 family／path／範圍及模型／trace 資訊持久化；
+  稽核無法落盤不得套用，提交前重讀 basis，保留競寫的人工編輯。
+- audit 內容定址且不自動清除；evidence／counterpoint 引用 audit ID。崩潰前留下的
+  preparation 不視為已套用；vault commit 後只追補索引，避免重複強化。
+  snapshots 存於被 Git 忽略的私有 Database，不入 RAG；詳細限制見契約。
+- 本輪新增 40 個隔離測試；`make check` exit 0：ruff／mypy 171 source files clean，
+  2046 passed、1 skipped、1 個既有 Chroma warning；`git diff --check` exit 0。
+- 使用者授權本段完成後 commit、合併 main 並 push。A01 `be6d59a`、A02 `8ece600`、
+  A03 `8e25475` 已各自提交，交接文件另列一次提交；遠端整合狀態以本輪 Git 結果為準。
+- A01 標註複核／真模型評估、A04 lineage 與 A05 live 驗收仍欠。使用者於本輪之前
+  重啟 daemon，不代表之後新增的 A03 已載入；本輪未自行重啟或觸發 live 寫入。
