@@ -45,3 +45,16 @@ counterexamples. Choose neutral when there is no evidential force either way.
 For every non-neutral verdict, quotes must be nonempty. For full_support,
 unsupported must be []. For neutral, quotes may be []. Every verdict must include
 all six fields. Quote existence is only a provenance check, not proof of meaning.
+
+Use this exact top-level shape. All SIX keys are required, including the literal
+integer contract_version (not the string "2"). Replace every placeholder; emit
+only the JSON object, without a Markdown fence or surrounding commentary:
+
+{
+  "contract_version": 2,
+  "relation": "<one allowed relation>",
+  "reason": "<Traditional Chinese explanation>",
+  "quotes": ["<exact passage quotation; may be [] for neutral>"],
+  "unsupported": ["<unestablished component; must be [] for full_support>"],
+  "applicability": "<Traditional Chinese scope or why none applies>"
+}
