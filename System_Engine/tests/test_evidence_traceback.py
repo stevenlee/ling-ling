@@ -5,6 +5,8 @@ from datetime import datetime
 
 import pytest
 
+from fake_evidence_lineage import KnownLineageResolver
+
 from maintenance.evidence_traceback import (
     TracebackResult,
     run_evidence_traceback,
@@ -98,6 +100,13 @@ def _bind_basis(scan, page):
     scan.basis_path = str(page.path)
     for judgment in scan.judgments:
         judgment.source_family = judgment.source_family or "independent-doc"
+        judgment.source_lineage = KnownLineageResolver(page.path.parent.parent).compare(
+            page,
+            {
+                "metadata": {"title": judgment.title, "source_path": judgment.source_path},
+                "text": judgment.passage,
+            },
+        )
     return scan
 
 
@@ -137,6 +146,11 @@ def env(tmp_path, monkeypatch):
     out = tmp_path / "fromLingLing"
     state = tmp_path / "Database" / "evidence_traceback_state.json"
     cortex.mkdir()
+    # These tests isolate transport/schema/audit/commit semantics. Filesystem
+    # lineage and its apply gates use real sources in test_evidence_lineage.
+    monkeypatch.setattr(
+        "maintenance.evidence_traceback.SourceLineageResolver", KnownLineageResolver
+    )
     monkeypatch.setattr(
         "maintenance.evidence_traceback.CORTEX_INDEX_REPAIR_DIR", tmp_path / "repairs"
     )
@@ -218,7 +232,8 @@ def test_self_and_derivative_sources_excluded(env):
     titles = [j.title for j in scan.judgments]
     assert titles == ["Truly Independent Doc"]
     # 3 excluded per query pass, and each seen title is judged at most once.
-    assert scan.excluded_self >= 3
+    assert scan.excluded_self == 2
+    assert scan.excluded_same_origin == 1
     assert len(llm.calls) == 1
 
 
@@ -424,7 +439,7 @@ def test_apply_supports_appends_evidence_and_reinforces(env):
     # evidence thickened 1 → 2, no longer thin; new entry is EvidenceTrace-marked.
     assert len(reloaded.evidence) == 2
     markers = [e["insight"] for e in reloaded.evidence]
-    assert "[EvidenceTrace] Independent Doc" in markers
+    assert any(marker.startswith("[EvidenceTrace] Independent Doc [origin:") for marker in markers)
     # gentle reinforce moved S up and nudged confidence.
     assert reloaded.S > 1.0
     assert reloaded.confidence == 0.55
@@ -474,11 +489,9 @@ def test_apply_thickened_claim_leaves_thin_pool(env):
     assert len(parse_cortex_page(page.path).evidence) == 2
 
 
-def test_apply_scan_refreshes_existing_trace_marker_in_place(env):
-    # Direct unit test of the refresh branch: a claim that STAYS thin (its one
-    # real evidence plus a prior [EvidenceTrace] entry that was later trimmed
-    # elsewhere) — re-finding the same source refreshes, never double-appends
-    # or re-reinforces.
+def test_apply_scan_does_not_refresh_or_reinforce_an_existing_original(env):
+    # A04 rejects a known original instead of upgrading/refreshing the prior
+    # evidence. Its historical summary and strength must remain unchanged.
     from maintenance.evidence_traceback import ClaimScan, PassageJudgment, _apply_scan
 
     page = _thin_claim_reinforceable(env)
@@ -488,6 +501,9 @@ def test_apply_scan_refreshes_existing_trace_marker_in_place(env):
             "sources": ["Independent Doc"],
             "date": "2026-07-01",
             "summary": "舊摘要",
+            "source_lineage": KnownLineageResolver(page.path.parent.parent).compare(
+                page, {"metadata": {"title": "Independent Doc"}}
+            ),
         }
     )
     save_cortex_page(page)
@@ -502,12 +518,13 @@ def test_apply_scan_refreshes_existing_trace_marker_in_place(env):
     applied = _apply_scan(page, _bind_basis(scan, page), _StubRAG([]), _NOW)
 
     assert applied["added_evidence"] == 0
-    assert applied["refreshed"] == 1
+    assert applied["refreshed"] == 0
     assert applied["reinforced"] is False
     reloaded = parse_cortex_page(page.path)
     markers = [e["insight"] for e in reloaded.evidence]
     assert markers.count("[EvidenceTrace] Independent Doc") == 1  # not doubled
     assert reloaded.S == s_before  # no second reinforce
+    assert reloaded.evidence[-1]["summary"] == "舊摘要"
 
 
 def test_apply_neutral_leaves_page_untouched(env):
@@ -1055,7 +1072,7 @@ def test_dry_run_audits_exact_basis_and_chunk_without_applying(env):
     assert record["payload"]["source"]["passage"] == hit["text"][:2000]
     assert record["payload"]["source"]["chunk_id"] == "chunk-42"
     assert record["payload"]["source"]["range"]["end"] == 2000
-    assert record["payload"]["source"]["family_method"].endswith("unverified")
+    assert record["payload"]["source"]["family_method"] == "document-lineage-v1"
     assert page.path.read_text(encoding="utf-8") == before
     assert judgment.audit_id in result.report_path.read_text(encoding="utf-8")
 

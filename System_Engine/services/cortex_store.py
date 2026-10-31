@@ -136,6 +136,7 @@ def _coerce_evidence(value) -> list[dict]:
             "quotes",
             "applicability",
             "audit_id",
+            "source_lineage",
         ):
             if key in item:
                 entry[key] = item[key]

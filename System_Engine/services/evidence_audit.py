@@ -16,6 +16,7 @@ from pathlib import Path
 
 from services.cortex_store import parse_cortex_page
 from services.evidence_contract import CONTRACT_VERSION, validate_scope_verdict
+from services.evidence_lineage import validate_lineage
 from services.ingest.atomic_io import atomic_write_text
 
 _HEX = re.compile(r"[0-9a-f]{64}")
@@ -101,6 +102,8 @@ def validate_payload(payload: object) -> dict:
         "end": len(passage),
     }:
         raise ValueError("稽核範圍必須對應實際送審 chunk prefix，不冒充文件 offset")
+    if "lineage" in source:
+        validate_lineage(source["lineage"])  # A03 records without this field remain readable
     validate_scope_verdict(payload.get("verdict"), passage)
     validate_judge_context(payload.get("judge"))
     _canonical(payload)  # rejects non-JSON values and non-finite distances

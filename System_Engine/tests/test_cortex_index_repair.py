@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from fake_evidence_lineage import KnownLineageResolver
+
 from maintenance import cortex_index_repair as repair
 from maintenance import evidence_traceback as traceback
 from services.cortex_store import CortexPage, parse_cortex_page, save_cortex_page
@@ -17,6 +19,7 @@ _NOW = datetime(2026, 10, 29, 3)
 def env(tmp_path, monkeypatch):
     cortex, queue = tmp_path / "Cortex", tmp_path / "repairs"
     cortex.mkdir()
+    monkeypatch.setattr(traceback, "SourceLineageResolver", KnownLineageResolver)
     monkeypatch.setattr(traceback, "CORTEX_INDEX_REPAIR_DIR", queue)
     monkeypatch.setattr(traceback, "EVIDENCE_AUDIT_DIR", tmp_path / "audits")
     monkeypatch.setattr(repair, "CORTEX_INDEX_REPAIR_BACKOFF_SECONDS", 60)
@@ -99,6 +102,14 @@ def _apply(page, rag):
             },
         )
     ]
+    for judgment in scan.judgments:
+        judgment.source_lineage = KnownLineageResolver(page.path.parent.parent).compare(
+            page,
+            {
+                "metadata": {"title": judgment.title, "source_path": judgment.source_path},
+                "text": judgment.passage,
+            },
+        )
     return traceback._apply_scan(page, scan, rag, _NOW)
 
 

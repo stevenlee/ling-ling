@@ -62,6 +62,7 @@ from core.config import (
     EVIDENCE_AUDIT_DIR,
     FROM_LLM_DIR,
     settings,
+    WIKI_VAULT_DIR,
 )
 from services.cortex_store import (
     active_evidence,
@@ -71,6 +72,7 @@ from services.cortex_store import (
 )
 from services.ingest.atomic_io import atomic_write_text
 from services.evidence_audit import persist_audit, text_hash, validate_judge_context
+from services.evidence_lineage import SourceLineageResolver, validate_lineage
 from services.llm_client import JSONCompletionParseError
 from services.evidence_contract import (
     CONTRACT_VERSION,
@@ -92,10 +94,8 @@ _TOP_K = 5
 _DERIVATIVE_ROOTS = {"cortex", "insights", "fromlingling"}
 _SOURCE_VARIANT_RE = re.compile(r"\s+\((?:Part\s+\d+|Stitched|Synthesis)\)$", re.IGNORECASE)
 
-# Apply-mode provenance marker: A2 evidence entries are keyed by this + the
-# source title so a re-scan of the same corroborating passage refreshes in
-# place (idempotent) instead of double-counting. It also visibly distinguishes
-# traceback-sourced evidence from insight-sourced evidence in the rendered page.
+# Marker keeps the human source title plus an original-document key. Titles
+# alone cannot distinguish evidence; known originals are rejected by lineage.
 _TRACE_MARKER = "[EvidenceTrace]"
 # Confidence bump per apply that adds ≥1 independent evidence — deliberately
 # smaller than consolidation's rediscovery step (0.1) and capped below its cap
@@ -121,6 +121,7 @@ class PassageJudgment:
     chunk_id: str = ""
     audit_context: dict = field(default_factory=dict)
     audit_id: str = ""
+    source_lineage: dict = field(default_factory=dict)
 
     def verdict(self) -> dict:
         return {
@@ -148,6 +149,9 @@ class ClaimScan:
     basis_snapshot: str = ""
     basis_path: str = ""
     audit_errors: list[str] = field(default_factory=list)
+    excluded_same_origin: int = 0
+    excluded_duplicate_origin: int = 0
+    lineage_notes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -190,13 +194,12 @@ def _select_thin_claims(pool, state: dict, batch: int):
     return ordered[: max(0, batch)]
 
 
-def _is_independent(hit: dict, page) -> tuple[bool, str]:
-    """Whether a retrieval hit counts as INDEPENDENT evidence for this claim.
+def _passes_source_exclusions(hit: dict, page) -> tuple[bool, str]:
+    """Conservative negative filters; passing does not establish independence.
 
     Excluded: derivative content (Cortex pages, Insights output, own reports —
     a belief must not corroborate itself through its own downstream artifacts)
-    and the claim's originating sources (re-finding the origin is the same
-    single observation, not a second one).
+    Origin overlap is checked separately by the lineage resolver.
     """
     meta = hit.get("metadata") or {}
     title = str(meta.get("title") or "").strip()
@@ -210,26 +213,11 @@ def _is_independent(hit: dict, page) -> tuple[bool, str]:
     path_parts = {part.casefold() for part in path.replace("\\", "/").split("/") if part.strip()}
     if path_parts & _DERIVATIVE_ROOTS:
         return False, "derivative"
-    # Insight filenames truncate long source titles, so origin matching works
-    # on a prefix — but only when the prefix is long enough to be distinctive
-    # (a 3-char title would substring-match half the vault). A false
-    # "independent" can reach apply mode: this heuristic is only an origin
-    # exclusion, not proof of original-source independence (A04 tracks lineage).
-    prefix = title[:24]
-    fuzzy = len(prefix) >= 6
-    for entry in page.evidence:
-        origin = str(entry.get("insight") or "")
-        if (prefix in origin) if fuzzy else (title == origin):
-            return False, "self-source"
-        for source in entry.get("sources") or []:
-            s = str(source)
-            if (prefix in s or s[:24] in title) if fuzzy else (title == s):
-                return False, "self-source"
     return True, ""
 
 
 def _source_family(hit: dict) -> str:
-    """Canonical underlying document key across Part/Stitched/Synthesis views."""
+    """Candidate grouping hint across Part/Stitched/Synthesis views, not proof."""
     meta = hit.get("metadata") or {}
     source = str(meta.get("source_path") or meta.get("source") or "").strip()
     source_path = Path(source.replace("\\", "/")) if source else None
@@ -252,6 +240,9 @@ class PassageCandidates:
     excluded_far: int = 0
     excluded_unknown: int = 0
     errors: list[str] = field(default_factory=list)
+    excluded_same_origin: int = 0
+    excluded_duplicate_origin: int = 0
+    lineage_notes: list[str] = field(default_factory=list)
 
 
 def _passage_distance(hit: dict) -> float | None:
@@ -275,7 +266,9 @@ def _passage_distance(hit: dict) -> float | None:
     return distance if math.isfinite(distance) and distance >= 0 else None
 
 
-def _candidate_passages(rag, page, max_distance: float) -> PassageCandidates:
+def _candidate_passages(
+    rag, page, max_distance: float, lineage: SourceLineageResolver
+) -> PassageCandidates:
     """Falsifier-first retrieval: the falsifier query runs FIRST and its hits
     rank ahead of claim-text hits at equal footing (stress test before
     corroboration). Missing distances and retrieval errors remain explicit."""
@@ -319,6 +312,8 @@ def _candidate_passages(rag, page, max_distance: float) -> PassageCandidates:
             if new_rank < old_rank:
                 candidates[key] = hit
 
+    seen_roots: set[str] = set()
+    seen_families: set[str] = set()
     for key in candidate_order:
         hit = candidates[key]
         distance = hit.get("distance")
@@ -328,10 +323,25 @@ def _candidate_passages(rag, page, max_distance: float) -> PassageCandidates:
         if distance > max_distance:
             result.excluded_far += 1
             continue
-        independent, _why = _is_independent(hit, page)
-        if not independent:
+        permitted, _why = _passes_source_exclusions(hit, page)
+        if not permitted:
             result.excluded_self += 1
             continue
+        ancestry = lineage.compare(page, hit)
+        title = str((hit.get("metadata") or {}).get("title") or "")
+        if ancestry["status"] == "shared":
+            result.excluded_same_origin += 1
+            result.lineage_notes.append(f"{title}：與主張來源鏈共用原始文件／view／grounding")
+            continue
+        roots = set(ancestry["candidate"]["roots"])
+        families = set(ancestry["candidate"]["families"])
+        if (roots & seen_roots) or (families & seen_families):
+            result.excluded_duplicate_origin += 1
+            result.lineage_notes.append(f"{title}：候選與已選段落共用原始來源，不重複計票")
+            continue
+        seen_roots.update(roots)
+        seen_families.update(families)
+        hit["_source_lineage"] = ancestry
         result.passages.append(hit)
         if len(result.passages) >= _MAX_PASSAGES:
             break
@@ -374,6 +384,7 @@ def _judge_passage(llm, page, hit: dict) -> PassageJudgment:
         source_path=str(meta.get("source_path") or meta.get("source") or ""),
         source_family=_source_family(hit),
         chunk_id=str(hit.get("id") or ""),
+        source_lineage=hit.get("_source_lineage") or {},
         audit_context=parsed.get("audit_context")
         if isinstance(parsed.get("audit_context"), dict)
         else {},
@@ -397,7 +408,8 @@ def _persist_scan_audits(scan: ClaimScan, audit_dir: Path, now: datetime) -> Non
                 "title": judgment.title,
                 "path": judgment.source_path,
                 "family": judgment.source_family,
-                "family_method": "path_stem_v1_unverified",
+                "family_method": "document-lineage-v1",
+                "lineage": validate_lineage(judgment.source_lineage),
                 "chunk_id": judgment.chunk_id,
                 "passage": judgment.passage,
                 "sha256": text_hash(judgment.passage),
@@ -430,6 +442,7 @@ def _trace_audits(llm, scan: ClaimScan, audit_dir: Path) -> None:
                     "claim_id": scan.claim_id,
                     "relation": judgment.relation,
                     "contract_version": CONTRACT_VERSION,
+                    "lineage_status": judgment.source_lineage.get("status", "unknown"),
                 },
             )
         except Exception:
@@ -446,13 +459,41 @@ def _dry_run_action(scan: ClaimScan) -> str:
     if _scan_incomplete(scan):
         return "判讀未完成，本輪不套用"
     relations = {j.relation for j in scan.judgments}
-    if "contradicts" in relations:
+    if any(
+        j.relation == "contradicts" and j.source_lineage.get("status") == "independent"
+        for j in scan.judgments
+    ):
         return "記 tension（falsifier 情境有跡可循，主張待壓力複核）"
-    if "full_support" in relations:
-        return "+1 evidence（完整支持；來源獨立性仍依排除規則）＋強化"
+    if any(
+        j.relation == "full_support" and j.source_lineage.get("status") == "independent"
+        for j in scan.judgments
+    ):
+        return "+1 evidence（完整支持且原始文件來源不重疊）＋強化"
+    if any(j.source_lineage.get("status") == "unknown" for j in scan.judgments):
+        return "僅留報告（來源獨立性未知，不強化）"
     if relations & {"partial_support", "analogy"}:
         return "僅留報告（局部支持／類比，不強化）"
     return "無（維持薄證據，交由 decay）"
+
+
+def _verify_lineages(page, scan: ClaimScan, vault_dir: Path) -> None:
+    fresh = SourceLineageResolver(vault_dir)
+    for judgment in scan.judgments:
+        recorded = validate_lineage(judgment.source_lineage)
+        if recorded["status"] != "independent" or judgment.relation not in (
+            "full_support",
+            "contradicts",
+        ):
+            continue
+        current = fresh.compare(
+            page,
+            {
+                "metadata": {"title": judgment.title, "source_path": judgment.source_path},
+                "text": judgment.passage,
+            },
+        )
+        if current != recorded:
+            raise ValueError("來源 lineage 或來源檔案已變更，必須重新判讀")
 
 
 def _apply_scan(
@@ -463,6 +504,7 @@ def _apply_scan(
     *,
     repair_dir: Path | None = None,
     audit_dir: Path | None = None,
+    vault_dir: Path | None = None,
 ) -> dict:
     """Mutate the claim page from its judgments (apply mode). Conservative:
     full_support thickens evidence + a single gentle reinforce; contradicts become
@@ -489,19 +531,27 @@ def _apply_scan(
             return {"error": "Cortex 檔案 basis 已變更，未套用"}
         if scan.basis_path != str(page.path):
             return {"error": "Cortex 路徑與稽核 basis 不符"}
+        _verify_lineages(page, scan, vault_dir or WIKI_VAULT_DIR)
         _persist_scan_audits(scan, audit_dir or EVIDENCE_AUDIT_DIR, now)
     except Exception as audit_error:
         return {"error": f"稽核準備失敗，未套用：{audit_error}"}
+    basis_page = page
     page = copy.deepcopy(page)
 
     added_evidence = 0
-    refreshed = 0
     tensions = 0
-    existing_markers = {e.get("insight") for e in page.evidence if isinstance(e, dict)}
     existing_counterpoints = list(page.counterpoints)
 
+    applied_roots: set[str] = set()
     for j in scan.judgments:
-        marker = f"{_TRACE_MARKER} {j.title}"
+        if j.source_lineage.get("status") != "independent":
+            continue
+        roots = set(j.source_lineage["candidate"]["roots"])
+        if roots & applied_roots:
+            continue
+        applied_roots.update(roots)
+        identity = text_hash("\n".join(sorted(roots)))
+        marker = f"{_TRACE_MARKER} {j.title} [origin:{identity}]"
         if j.relation == "full_support":
             entry = {
                 "insight": marker,
@@ -512,33 +562,22 @@ def _apply_scan(
                 "scope_contract_version": CONTRACT_VERSION,
                 "scope_relation": j.relation,
                 "audit_id": j.audit_id,
+                "source_lineage": j.source_lineage,
                 "quotes": j.quotes,
                 "applicability": j.applicability,
             }
-            if marker in existing_markers:
-                # Same corroborating source found again — refresh in place, no
-                # double-count and no extra reinforcement (mirrors consolidation's
-                # revision semantics).
-                for i, e in enumerate(page.evidence):
-                    if isinstance(e, dict) and e.get("insight") == marker:
-                        page.evidence[i] = entry
-                        break
-                refreshed += 1
-            else:
-                page.evidence.append(entry)
-                existing_markers.add(marker)
-                added_evidence += 1
+            page.evidence.append(entry)
+            added_evidence += 1
         elif j.relation == "contradicts":
-            cp = f"{_TRACE_MARKER} {now:%Y-%m-%d} 反例：{j.title} — {j.reason} [audit:{j.audit_id}]"
-            # Dedup on the source title so a re-scan doesn't stack counterpoints.
-            if not any(j.title in existing for existing in existing_counterpoints):
+            cp = f"{_TRACE_MARKER} {now:%Y-%m-%d} 反例：{j.title} — {j.reason} [origin:{identity}] [audit:{j.audit_id}]"
+            if not any(f"[origin:{identity}]" in existing for existing in existing_counterpoints):
                 page.counterpoints.append(cp)
                 existing_counterpoints.append(cp)
                 tensions += 1
 
     # A single reinforce + confidence nudge per apply that added NEW independent
     # evidence (not per passage — two supports from one scan is still one
-    # corroboration event). Refresh-only and contradicts never reinforce.
+    # corroboration event). Already-seen originals are rejected, not refreshed.
     reinforced = False
     if added_evidence:
         reinforce(page, GAIN_REVALIDATION, now=now)
@@ -546,10 +585,10 @@ def _apply_scan(
             min(_APPLY_CONFIDENCE_CAP, float(page.confidence) + _APPLY_CONFIDENCE_STEP), 4
         )
         reinforced = True
-    if added_evidence or refreshed or tensions:
+    if added_evidence or tensions:
         page.updated = now.isoformat(timespec="seconds")
 
-    if not (added_evidence or refreshed or tensions):
+    if not (added_evidence or tensions):
         return {"added_evidence": 0, "refreshed": 0, "tensions": 0, "reinforced": False}
 
     repair_dir = repair_dir or CORTEX_INDEX_REPAIR_DIR
@@ -559,6 +598,7 @@ def _apply_scan(
         slot = enqueue_index_repair(page, repair_dir, page.path.parent)
         if page.path.read_text(encoding="utf-8") != scan.basis_snapshot:
             return {"error": "Cortex 在提交前已變更，未套用；索引意圖將依最新版追補"}
+        _verify_lineages(basis_page, scan, vault_dir or WIKI_VAULT_DIR)
         save_cortex_page(page)  # commit point: durable audit already exists
     except Exception as e:
         logging.error(f"evidence_traceback: apply write failed for {page.claim_id}: {e}")
@@ -566,7 +606,7 @@ def _apply_scan(
 
     applied: dict = {
         "added_evidence": added_evidence,
-        "refreshed": refreshed,
+        "refreshed": 0,
         "tensions": tensions,
         "reinforced": reinforced,
     }
@@ -590,8 +630,6 @@ def _applied_action(applied: dict | None) -> str:
     if applied.get("added_evidence"):
         suffix = "＋強化" if applied.get("reinforced") else ""
         parts.append(f"+{applied['added_evidence']} evidence{suffix}")
-    if applied.get("refreshed"):
-        parts.append(f"{applied['refreshed']} 筆既有佐證刷新（不重複計）")
     if applied.get("tensions"):
         parts.append(f"記 {applied['tensions']} 筆 tension（counterpoint，待人審）")
     if applied.get("index_pending"):
@@ -615,7 +653,7 @@ def _render_report(
     if apply:
         header = f"# 🌱 證據追溯（apply）{now:%Y-%m-%d}"
         blurb = (
-            "> Cortex 薄證據主張的 falsifier-first 佐證掃描。**apply 模式：僅 full_support 可寫入\n"
+            "> Cortex 薄證據主張的 falsifier-first 佐證掃描。**apply 模式：僅 full_support 且原始文件來源不重疊可寫入\n"
             "> 佐證＋溫和強化、contradicts 可記為 counterpoint 待人審；局部支持與類比僅留報告。**"
         )
         action_label = "動作"
@@ -666,9 +704,19 @@ def _render_report(
             lines.append(f"- 檢索失敗：{error}")
         for error in scan.audit_errors:
             lines.append(f"- 稽核記錄失敗：{error}")
+        lines.append(
+            f"- 來源追溯：同源排除 {scan.excluded_same_origin}、候選同源去重 {scan.excluded_duplicate_origin}"
+        )
+        for note in scan.lineage_notes:
+            lines.append(f"  - {note}")
         for j in scan.judgments:
             dist = f"（distance {j.distance:.2f}）" if j.distance is not None else ""
             lines.append(f"  - [{j.relation}] {j.title} — {j.reason}{dist}")
+            if j.source_lineage:
+                lines.append(f"    - 原始文件來源關係：{j.source_lineage.get('status', 'unknown')}")
+                for side, label in (("candidate", "候選"), ("origin", "主張")):
+                    for reason in j.source_lineage.get(side, {}).get("reasons", []):
+                        lines.append(f"    - {label}來源缺口：{reason}")
             if j.audit_id:
                 lines.append(
                     f"    - 稽核 ID：`{j.audit_id}`（僅代表判讀已記錄，套用以 Cortex 為準）"
@@ -694,6 +742,7 @@ def run_evidence_traceback(
     state_file: Path | None = None,
     repair_dir: Path | None = None,
     audit_dir: Path | None = None,
+    vault_dir: Path | None = None,
     now: datetime | None = None,
 ) -> TracebackResult:
     """One traceback batch. Judgment is read-only; when
@@ -736,6 +785,7 @@ def run_evidence_traceback(
         return TracebackResult("ok", "Evidence traceback: no thin-evidence claims to scan.")
 
     scans: list[ClaimScan] = []
+    lineage = SourceLineageResolver(vault_dir or WIKI_VAULT_DIR)
     for page in batch:
         try:
             snapshot = page.path.read_text(encoding="utf-8")
@@ -755,7 +805,9 @@ def run_evidence_traceback(
             )
             state.setdefault("checked", {})[page.claim_id] = now.isoformat(timespec="seconds")
             continue
-        candidates = _candidate_passages(rag, page, settings.EVIDENCE_TRACEBACK_MAX_DISTANCE)
+        candidates = _candidate_passages(
+            rag, page, settings.EVIDENCE_TRACEBACK_MAX_DISTANCE, lineage
+        )
         scan = ClaimScan(
             claim_id=page.claim_id,
             claim=page.claim,
@@ -766,6 +818,9 @@ def run_evidence_traceback(
             retrieval_errors=candidates.errors,
             basis_snapshot=snapshot,
             basis_path=str(page.path),
+            excluded_same_origin=candidates.excluded_same_origin,
+            excluded_duplicate_origin=candidates.excluded_duplicate_origin,
+            lineage_notes=candidates.lineage_notes,
         )
         scan.judgments = [_judge_passage(llm, page, hit) for hit in candidates.passages]
         try:
@@ -783,7 +838,13 @@ def run_evidence_traceback(
             # batch (same discipline as a failed judgment).
             try:
                 scan.applied = _apply_scan(
-                    page, scan, rag, now, repair_dir=repair_dir, audit_dir=audit_dir
+                    page,
+                    scan,
+                    rag,
+                    now,
+                    repair_dir=repair_dir,
+                    audit_dir=audit_dir,
+                    vault_dir=vault_dir,
                 )
             except Exception as e:
                 logging.error(f"evidence_traceback: apply crashed for {page.claim_id}: {e}")
@@ -816,7 +877,11 @@ def run_evidence_traceback(
 
     judged = sum(len(s.judgments) for s in scans)
     hits = sum(
-        1 for s in scans for j in s.judgments if j.relation in ("full_support", "contradicts")
+        1
+        for s in scans
+        for j in s.judgments
+        if j.relation in ("full_support", "contradicts")
+        and j.source_lineage.get("status") == "independent"
     )
     mode = "apply" if apply else "dry-run"
     extra = ""
