@@ -566,3 +566,18 @@
   A03 `8e25475` 已各自提交，交接文件另列一次提交；遠端整合狀態以本輪 Git 結果為準。
 - A01 標註複核／真模型評估、A04 lineage 與 A05 live 驗收仍欠。使用者於本輪之前
   重啟 daemon，不代表之後新增的 A03 已載入；本輪未自行重啟或觸發 live 寫入。
+
+
+## 2026-10-31 A04 原始文件來源資格
+
+- [來源鏈契約](Evidence_Source_Lineage_Contract.md) 已實作。shared 排除、unknown 報告
+  不強化；只有完整且不重疊的已記錄原文，才可與 A02 判定共同取得 A03 apply 資格。
+- 全部明示來源與 grounded_on 納入 closure；不同 view、raw body hash 與 URL 共同提供
+  同源資訊。缺資料／循環／重名／I/O／上限仍 unknown，不以 title 或檔名單獨放行。
+- 候選／apply 去重並在提交前重驗來源 snapshot。新 evidence／counterpoint 使用原文
+  身份 key，保留同名不同原文；同源不再刷新舊 evidence，既有內容不自動升級。
+- 目前唯讀盤點 12 條薄證據主張：完整 origin closure 0/12、至少一個 root 7/12。
+  這是來源資料缺口，不是 A2 語義錯誤率或新版 live 成效；A01 模型評估與 A05 仍待。
+- 新增 41 個隔離案例，`make check` exit 0：ruff／mypy 172 source files clean；
+  2087 passed、1 skipped、1 個既有 Chroma warning；`git diff --check` exit 0。
+  依先前授權完成本段後提交、merge main／push；A04 須再次載入 daemon 才能確保生效。

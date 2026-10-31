@@ -51,7 +51,7 @@ A2 雖能持久化補證與追補索引，但歷史樣本證明 supports 的語�
 | A01 | 基準已實作／標註待複核（10/31） | 建 A2 固定判讀評估集：本次 8 個可重播樣本的合成變體，另加真正直接支持、明確反證、neutral、複合 claim、規範建議及惡意引文案例；標出人工預期與理由 | 現有稽核 | 每個案例有可覆核標準；公開 fixture 不複製私有長段資料；negative 與 positive 對照齊全，不能靠全部判 neutral 過關 |
 | A02 | 程式已實作、隔離模型評估待驗收（10/31）／M | 支持範圍契約：區分直接完整、局部、類比；要求支持引文、未支持部分及適用範圍；更新 parser／report／apply 並更正 `_is_independent` 的過期註解 | A01 | 只有範圍與資料有效的直接完整支持能新增完整 evidence／reinforce；局部與類比留報告；缺欄、壞 schema、不存在引文不得套用；contradicts、transport、parse 狀態不混同 |
 | A03 | 程式與隔離故障驗證完成（10/31），live 待驗收／M | 可重播的 A2 audit record：claim／falsifier basis、送審段落快照或可恢復私有引用、hash、來源 family／path／範圍、contract／prompt／model 版本、trace 與判定 | 與 A02 一起定格式，獨立交付 | trace 到期後仍可覆核；套用前檢查 basis；稽核資料無法落盤時不提交不可稽核的補證；原子寫入、崩潰恢復、去重及保存政策有測試；私有內容不進公開 Git |
-| A04 | 待實作／M | 原始來源 lineage 與獨立性：分開「不同顯示 title」與「不同原始證據」，追溯 Part／Stitched／Synthesis、原 insight 來源及 grounded_on | A03 | 同一原文件不同 view 不灌票；已知同源拒絕，無法確認獨立性明列未知、不冒充獨立佐證；缺資料不藉批量重生補齊 |
+| A04 | 程式與隔離驗證完成；來源資料／live 待驗收（10/31）／M | 原始來源 lineage 與獨立性：分開「不同顯示 title」與「不同原始證據」，追溯 Part／Stitched／Synthesis、原 insight 來源及 grounded_on | A03 | 同一原文件不同 view 不灌票；已知同源拒絕，無法確認獨立性明列未知、不冒充獨立佐證；缺資料不藉批量重生補齊 |
 | A05 | 已實作部分、待驗收／S | A2 新版端到端驗收報告：正常排程結果、來源／距離／範圍排除、index intent 與 trace／state 一致性 | 現有可靠性可先唯讀觀察；新版語義驗收依 A02–A04 | 部分失敗如實呈現、成功不重複強化、空池仍可追補；反證寫入用隔離資料驗完整交易，live 無反證樣本時仍標缺口；不故意破壞 live index 來製造故障 |
 
 A02 的字面引文匹配只能驗證「引用存在」，不能證明語義支持成立；必須再跑 A01
@@ -243,3 +243,34 @@ C01 是程式比對確認的缺口，尚未實作；C02 不能只用 10/30 手�
   重啟、手動觸發 maintenance、呼叫真模型或開啟 live RAG／DB writer。
 - 下一段為 A04 原始來源 lineage／unknown 契約；A01 標註複核與隔離真模型評估、
   A05 新版排程／端到端成效仍待完成。A03 的可稽核性不替代語義品質驗收。
+
+
+## 13. 2026-10-31 A04 原始文件來源鏈
+
+- 已完成 [A04 來源契約](Evidence_Source_Lineage_Contract.md)：來源為 shared／independent／
+  unknown，區分原始文件 roots、不同 view 的 family 與 display title。完整追溯且不重疊
+  的已記錄原文才有補證資格；URL 或檔名本身只能提供負面同源提示，不足以正面放行。
+- 追溯所有明示來源欄位與 grounded_on，claim_id 對應實際 Cortex metadata；處理
+  來源缺檔、重名、循環、schema、I/O、symlink 與 traversal／fanout 上限。只用 active
+  evidence，保存 lineage 的 evidence 可保留歷史原文身份，不靠顯示 title 重新猜來源。
+- 候選與 apply 均同源去重；來源檔案需含實際檢索片段，提交前兩次用新 snapshot 重驗
+  lineage。已知同源不刷新舊 evidence；新 marker／counterpoint 帶原文 roots key，
+  同名不同原文不互相覆蓋。整條 claim 仍只 reinforce 一次，unknown 只留報告。
+- 新 lineage 附於 A03 private audit 與 evidence metadata；舊 A03 無 lineage 的紀錄仍可讀，
+  不自動升級資格。沒有重新索引／重生舊資料或新增 daemon 外 writer。
+- 舊 transport／schema／index 單元測試明確注入 known-provenance double，保留原故障
+  接縫；新增 real filesystem 端到端測試驗所有 unknown／shared 與 apply 邊界。
+  舊刷新契約依 A04 改為同源不動，另有 real-source 回歸案例；不放行 unknown 來過測試。
+- 本輪先前 daemon status 顯示待命，但 A2 state 仍是 10/31 00:03、0 judged 的舊 run，
+  尚無重啟後新版 A03／A04 實跑樣本。唯讀來源可用性盤點：12 條薄證據的完整 closure
+  0/12，至少一個 root 7/12；全部仍有來源／grounding／budget 缺口。不能聲稱新增補證
+  已改善，也不為增加計數而放寬 gate。
+- 下一段為 A01 標註複核／有限隔離模型評估與具體來源缺口處置，再做 A05 新版端到端
+  驗收。歷史回填仍須獨立的備份與冪等方案；本段沒有批量寫入 live evidence／DB。
+- 本段驗證：`make check` exit 0，ruff／mypy 172 source files clean；
+  **2087 passed、1 skipped、1 個既有 Chroma warning**（16.67 秒），
+  `git diff --check` exit 0。新增 41 個 real-source 隔離案例；未呼叫真模型或 live RAG。
+- 延續使用者「完成一段後 commit／merge main／push」的交付流程；本段先在
+  `codex/a4-source-lineage` 實作，通過檢查後提交並整合。新增的 A04 仍須 daemon
+  再次載入新版，不能把本輪之前的重啟當作這批程式已載入的證明。
+- A04 程式／契約／測試提交為 `3c27223`；本交接狀態另列 docs commit。
