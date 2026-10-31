@@ -319,6 +319,8 @@ MAINTENANCE_STATE_FILE = DATABASE_DIR / "maintenance_state.json"
 SCOUT_STATE_FILE = DATABASE_DIR / "scout_state.json"
 EVIDENCE_TRACEBACK_STATE_FILE = DATABASE_DIR / "evidence_traceback_state.json"
 CORTEX_INDEX_REPAIR_DIR = DATABASE_DIR / "cortex_index_repairs"
+# Private audit snapshots contain source text; never index or auto-expire them.
+EVIDENCE_AUDIT_DIR = DATABASE_DIR / "evidence_audits"
 CORTEX_INDEX_REPAIR_BATCH = max(1, int(os.getenv("CORTEX_INDEX_REPAIR_BATCH", "5")))
 CORTEX_INDEX_REPAIR_BACKOFF_SECONDS = max(
     60, int(os.getenv("CORTEX_INDEX_REPAIR_BACKOFF_SECONDS", "3600"))

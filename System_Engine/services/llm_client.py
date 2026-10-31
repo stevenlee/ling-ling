@@ -43,6 +43,7 @@ from core.json_extract import salvage_json_array
 from core.retrying import reroll, retry_call
 from core.utils import MtimeCache, digest_value_to_text
 from services.evidence_contract import CONTRACT_VERSION, PASSAGE_LIMIT, validate_scope_verdict
+from services.evidence_audit import text_hash
 from services.capability_manager import CapabilityManager
 from services.trace_store import TraceStore, elapsed_ms
 from services.ingest.entity_quality import assess_entity_body
@@ -1640,6 +1641,7 @@ class LLMClient:
                             "claim_id": claim_id,
                             "passage_title": title,
                             "contract_version": CONTRACT_VERSION,
+                            "prompt_sha256": text_hash(prompt),
                             "scope_attempt": number,
                         },
                     },
@@ -1648,10 +1650,22 @@ class LLMClient:
                 logging.warning("evidence scope JSON miss (attempt %s/2): %s", number, error)
                 return None
             try:
-                return validate_scope_verdict(parsed, passage)
+                verdict = validate_scope_verdict(parsed, passage)
             except ValueError as error:
                 logging.warning("evidence scope content miss (attempt %s/2): %s", number, error)
                 return None
+            store = getattr(self, "trace_store", None)
+            verdict["audit_context"] = {
+                "provider": self.provider,
+                "model": self.model,
+                "prompt_asset": "Operations/judge_evidence_scope.md",
+                "prompt_sha256": text_hash(prompt),
+                "prompt_body": prompt,
+                "contract_version": CONTRACT_VERSION,
+                "scope_attempt": number,
+                "trace_run_id": store.current_run_id() if store is not None else None,
+            }
+            return verdict
 
         result = reroll(attempt, accept=lambda value: value is not None, attempts=2)
         if result is None:

@@ -18,6 +18,7 @@ def env(tmp_path, monkeypatch):
     cortex, queue = tmp_path / "Cortex", tmp_path / "repairs"
     cortex.mkdir()
     monkeypatch.setattr(traceback, "CORTEX_INDEX_REPAIR_DIR", queue)
+    monkeypatch.setattr(traceback, "EVIDENCE_AUDIT_DIR", tmp_path / "audits")
     monkeypatch.setattr(repair, "CORTEX_INDEX_REPAIR_BACKOFF_SECONDS", 60)
     monkeypatch.setattr(repair, "CORTEX_INDEX_REPAIR_MAX_BACKOFF_SECONDS", 600)
     monkeypatch.setattr(repair, "CORTEX_INDEX_REPAIR_BATCH", 5)
@@ -69,7 +70,13 @@ class FakeRAG:
 
 
 def _apply(page, rag):
-    scan = traceback.ClaimScan(page.claim_id, page.claim, page.falsifier)
+    scan = traceback.ClaimScan(
+        page.claim_id,
+        page.claim,
+        page.falsifier,
+        basis_snapshot=page.path.read_text(encoding="utf-8"),
+        basis_path=str(page.path),
+    )
     scan.judgments = [
         traceback.PassageJudgment(
             "Independent Doc",
@@ -79,6 +86,17 @@ def _apply(page, rag):
             quotes=["原文"],
             applicability="測試條件",
             passage="原文",
+            source_family="independent-doc",
+            audit_context={
+                "provider": "fake",
+                "model": "fake-model",
+                "prompt_asset": "Operations/judge_evidence_scope.md",
+                "prompt_sha256": "f5b75fb3abfafdb8ad9e977f254084eabd38286c425e2db9cc329606bfa1becb",
+                "prompt_body": "fake prompt",
+                "contract_version": 2,
+                "scope_attempt": 1,
+                "trace_run_id": None,
+            },
         )
     ]
     return traceback._apply_scan(page, scan, rag, _NOW)

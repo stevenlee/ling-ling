@@ -80,6 +80,27 @@ class _PerQueryRAG:
         return list(self.hits_by_query[query])
 
 
+def _audit_context():
+    return {
+        "provider": "fake",
+        "model": "fake-model",
+        "prompt_asset": "Operations/judge_evidence_scope.md",
+        "prompt_sha256": "f5b75fb3abfafdb8ad9e977f254084eabd38286c425e2db9cc329606bfa1becb",
+        "prompt_body": "fake prompt",
+        "contract_version": 2,
+        "scope_attempt": 1,
+        "trace_run_id": None,
+    }
+
+
+def _bind_basis(scan, page):
+    scan.basis_snapshot = page.path.read_text(encoding="utf-8")
+    scan.basis_path = str(page.path)
+    for judgment in scan.judgments:
+        judgment.source_family = judgment.source_family or "independent-doc"
+    return scan
+
+
 def _verdict(relation="full_support", passage="passage text", reason="理由"):
     return {
         "contract_version": 2,
@@ -90,6 +111,7 @@ def _verdict(relation="full_support", passage="passage text", reason="理由"):
         if relation in ("partial_support", "analogy")
         else [],
         "applicability": "僅限本次測試及指定條件",
+        "audit_context": _audit_context(),
     }
 
 
@@ -118,6 +140,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "maintenance.evidence_traceback.CORTEX_INDEX_REPAIR_DIR", tmp_path / "repairs"
     )
+    monkeypatch.setattr("maintenance.evidence_traceback.EVIDENCE_AUDIT_DIR", tmp_path / "audits")
     monkeypatch.setattr("core.config.settings.EVIDENCE_TRACEBACK_BATCH", 5, raising=False)
     monkeypatch.setattr("core.config.settings.EVIDENCE_TRACEBACK_MAX_DISTANCE", 0.45, raising=False)
     # Default OFF so a dev Scripture with apply:true can't leak into dry-run tests.
@@ -476,7 +499,7 @@ def test_apply_scan_refreshes_existing_trace_marker_in_place(env):
             title="Independent Doc", passage="passage text", **_verdict(reason="新摘要")
         )
     ]
-    applied = _apply_scan(page, scan, _StubRAG([]), _NOW)
+    applied = _apply_scan(page, _bind_basis(scan, page), _StubRAG([]), _NOW)
 
     assert applied["added_evidence"] == 0
     assert applied["refreshed"] == 1
@@ -555,6 +578,7 @@ def _real_json_client(replies):
     from services.llm_client import LLMClient
 
     client = LLMClient.__new__(LLMClient)
+    client.provider, client.model = "fake", "fake-model"
     calls = []
     pending = iter(replies)
 
@@ -891,7 +915,7 @@ def test_apply_boundary_revalidates_hand_built_judgments(env, patch):
         PassageJudgment(title="A", passage="passage text", **_verdict()),
         PassageJudgment(title="B", passage="passage text", **{**_verdict(), **patch}),
     ]
-    result = _apply_scan(page, scan, _StubRAG([]), _NOW)
+    result = _apply_scan(page, _bind_basis(scan, page), _StubRAG([]), _NOW)
     assert "error" in result
     assert page.path.read_bytes() == before
     assert len(page.evidence) == 1
@@ -909,7 +933,7 @@ def test_apply_boundary_rejects_legacy_supports(env):
         page.falsifier,
         judgments=[PassageJudgment("Doc", "supports", "舊格式")],
     )
-    assert "error" in _apply_scan(page, scan, _StubRAG([]), _NOW)
+    assert "error" in _apply_scan(page, _bind_basis(scan, page), _StubRAG([]), _NOW)
     assert page.path.read_bytes() == before
 
 
@@ -926,7 +950,7 @@ def test_apply_rejects_changed_claim_basis(env, field):
     )
     setattr(page, field, "changed")
     before = page.path.read_bytes()
-    assert "error" in _apply_scan(page, scan, _StubRAG([]), _NOW)
+    assert "error" in _apply_scan(page, _bind_basis(scan, page), _StubRAG([]), _NOW)
     assert page.path.read_bytes() == before
 
 
@@ -986,3 +1010,234 @@ def test_full_support_persists_version_and_citations(env):
     save_cortex_page(reloaded)
     assert parse_cortex_page(page.path).evidence[-1] == entry
     assert "scope_contract_version" not in reloaded.evidence[0]  # legacy stays legacy
+
+
+def test_audit_write_failure_blocks_apply_and_stays_visible(env, monkeypatch):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+
+    def fail(*args):
+        raise OSError("audit disk full")
+
+    monkeypatch.setattr("maintenance.evidence_traceback.persist_audit", fail)
+    rag = _StubRAG([_hit("Doc")])
+    result = _run(env, _StubLLM(), rag)
+    assert result.status == "failed" and page.path.read_bytes() == before
+    assert rag.indexed == []
+    assert result.scans[0].applied == {"deferred": True}
+    assert "稽核記錄失敗：audit disk full" in result.report_path.read_text(encoding="utf-8")
+
+
+def test_missing_model_provenance_cannot_commit_evidence(env):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+    verdict = _verdict()
+    del verdict["audit_context"]
+    result = _run(env, _StubLLM(parsed=verdict), _StubRAG([_hit("Doc")]))
+    assert result.status == "failed"
+    assert page.path.read_bytes() == before
+    assert "缺少模型" in result.scans[0].audit_errors[0]
+
+
+def test_dry_run_audits_exact_basis_and_chunk_without_applying(env):
+    from services.evidence_audit import load_audit
+
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_text(encoding="utf-8")
+    hit = _hit("Doc", text="段落" * 1200, source_path="pages/Doc.md")
+    hit["id"] = "chunk-42"
+    result = _run(env, _StubLLM(), _StubRAG([hit]))
+    judgment = result.scans[0].judgments[0]
+    record = load_audit(env["state"].parent.parent / "audits", judgment.audit_id)
+    assert record["payload"]["basis"]["snapshot"] == before
+    assert record["payload"]["source"]["passage"] == hit["text"][:2000]
+    assert record["payload"]["source"]["chunk_id"] == "chunk-42"
+    assert record["payload"]["source"]["range"]["end"] == 2000
+    assert record["payload"]["source"]["family_method"].endswith("unverified")
+    assert page.path.read_text(encoding="utf-8") == before
+    assert judgment.audit_id in result.report_path.read_text(encoding="utf-8")
+
+
+def test_edit_during_judgment_is_preserved_and_blocks_apply(env):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    original = page.path.read_text(encoding="utf-8")
+
+    class EditingLLM(_StubLLM):
+        def judge_evidence_scope(self, **kwargs):
+            page.path.write_text(original + "\n人工編輯\n", encoding="utf-8")
+            return super().judge_evidence_scope(**kwargs)
+
+    result = _run(env, EditingLLM(), _StubRAG([_hit("Doc")]))
+    assert result.status == "failed"
+    assert "basis 已變更" in result.scans[0].applied["error"]
+    assert page.path.read_text(encoding="utf-8") == original + "\n人工編輯\n"
+    assert len(parse_cortex_page(page.path).evidence) == 1
+
+
+def test_edit_after_index_preparation_is_preserved(env, monkeypatch):
+    import maintenance.evidence_traceback as traceback
+
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_text(encoding="utf-8")
+    enqueue = traceback.enqueue_index_repair
+
+    def edit_then_enqueue(*args):
+        slot = enqueue(*args)
+        page.path.write_text(before + "\n提交前人工編輯\n", encoding="utf-8")
+        return slot
+
+    monkeypatch.setattr(traceback, "enqueue_index_repair", edit_then_enqueue)
+    result = _run(env, _StubLLM(), _StubRAG([_hit("Doc")]))
+    assert result.status == "failed"
+    assert "提交前已變更" in result.scans[0].applied["error"]
+    assert page.path.read_text(encoding="utf-8") == before + "\n提交前人工編輯\n"
+
+
+def test_crash_after_audit_before_vault_commit_reuses_preparation(env, monkeypatch):
+    import maintenance.evidence_traceback as traceback
+
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+    save = traceback.save_cortex_page
+
+    def crash(*args):
+        raise SystemExit("simulated process death")
+
+    monkeypatch.setattr(traceback, "save_cortex_page", crash)
+    with pytest.raises(SystemExit):
+        _run(env, _StubLLM(), _StubRAG([_hit("Doc")]))
+    audit_dir = env["state"].parent.parent / "audits"
+    prepared = next(audit_dir.glob("*.json"))
+    assert page.path.read_bytes() == before
+    assert len(list(audit_dir.glob("*.json"))) == 1
+    monkeypatch.setattr(traceback, "save_cortex_page", save)
+    result = _run(env, _StubLLM(), _StubRAG([_hit("Doc")]))
+    assert result.status == "ok"
+    assert len(list(audit_dir.glob("*.json"))) == 1
+    entry = parse_cortex_page(page.path).evidence[-1]
+    assert entry["audit_id"] == prepared.stem
+    assert len(parse_cortex_page(page.path).evidence) == 2
+
+
+def test_crash_after_vault_commit_recovers_index_without_reinforcement(env, monkeypatch):
+    import maintenance.evidence_traceback as traceback
+
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    repair = traceback.repair_index_slot
+
+    def crash(*args):
+        raise SystemExit("simulated process death")
+
+    monkeypatch.setattr(traceback, "repair_index_slot", crash)
+    with pytest.raises(SystemExit):
+        _run(env, _StubLLM(), _StubRAG([_hit("Doc")]))
+    committed = page.path.read_bytes()
+    entry = parse_cortex_page(page.path).evidence[-1]
+    assert (env["state"].parent.parent / "audits" / f"{entry['audit_id']}.json").exists()
+    monkeypatch.setattr(traceback, "repair_index_slot", repair)
+    llm = _StubLLM()
+    result = _run(env, llm, _StubRAG([]))
+    assert result.status == "ok"
+    assert llm.calls == []
+    assert page.path.read_bytes() == committed
+    assert not list((env["state"].parent.parent / "repairs").glob("*.json"))
+
+
+def test_counterpoint_keeps_audit_reference_without_strengthening(env):
+    from services.evidence_audit import load_audit
+
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    result = _run(env, _StubLLM(relation="contradicts"), _StubRAG([_hit("Doc")]))
+    identifier = result.scans[0].judgments[0].audit_id
+    reloaded = parse_cortex_page(page.path)
+    assert f"[audit:{identifier}]" in reloaded.counterpoints[0]
+    assert reloaded.confidence == page.confidence and reloaded.S == page.S
+    assert (
+        load_audit(env["state"].parent.parent / "audits", identifier)["payload"]["verdict"][
+            "relation"
+        ]
+        == "contradicts"
+    )
+
+
+def test_audit_records_actual_client_prompt_and_model_not_model_supplied_metadata(env):
+    from services.evidence_audit import load_audit, text_hash
+
+    _claim_page(env["cortex"], "cortex-thin1", "主張 A")
+    verdict = _verdict()
+    verdict["audit_context"]["model"] = "untrusted-model-name"
+    llm, calls = _real_json_client([json.dumps(verdict)])
+    result = _run(env, llm, _StubRAG([_hit("Doc")]))
+    identifier = result.scans[0].judgments[0].audit_id
+    context = load_audit(env["state"].parent.parent / "audits", identifier)["payload"]["judge"]
+    assert context["model"] == "fake-model"
+    assert context["prompt_body"] == calls[0]["system_prompt"]
+    assert context["prompt_sha256"] == text_hash(context["prompt_body"])
+    assert context["prompt_sha256"] == calls[0]["trace_context"]["metadata"]["prompt_sha256"]
+
+
+def test_audit_directory_fsync_failure_prevents_commit(env, monkeypatch):
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    before = page.path.read_bytes()
+
+    def fail(path):
+        raise OSError("directory fsync failed")
+
+    monkeypatch.setattr("services.evidence_audit._sync_directory", fail)
+    result = _run(env, _StubLLM(), _StubRAG([_hit("Doc")]))
+    assert result.status == "failed" and page.path.read_bytes() == before
+    assert result.scans[0].applied == {"deferred": True}
+    assert "directory fsync failed" in result.scans[0].audit_errors[0]
+
+
+@pytest.mark.parametrize("fail_trace", [False, True])
+def test_trace_artifacts_reference_durable_audits_and_fail_soft(env, fail_trace):
+    _apply_on(env)
+    _thin_claim_reinforceable(env)
+    events = []
+
+    class Trace:
+        def record_artifact(self, **kwargs):
+            events.append(kwargs)
+            assert kwargs["path"].exists()  # metadata follows durable record
+            if fail_trace:
+                raise OSError("trace unavailable")
+
+    llm = _StubLLM()
+    llm.trace_store = Trace()
+    result = _run(env, llm, _StubRAG([_hit("Doc")]))
+    assert result.status == "ok"
+    assert result.scans[0].applied["added_evidence"] == 1
+    assert len(events) == 1
+    assert events[0]["artifact_type"] == "evidence_audit"
+    assert events[0]["metadata"]["audit_id"] == result.scans[0].judgments[0].audit_id
+
+
+def test_basis_read_failure_is_visible_and_rotates_attempt_cursor(env, monkeypatch):
+    import maintenance.evidence_traceback as traceback
+
+    _apply_on(env)
+    page = _thin_claim_reinforceable(env)
+    load = traceback.load_all_pages
+
+    def disappear_after_selection(directory):
+        pages = load(directory)
+        page.path.unlink()
+        return pages
+
+    monkeypatch.setattr(traceback, "load_all_pages", disappear_after_selection)
+    result = _run(env, _StubLLM(), _StubRAG([]))
+    assert result.status == "failed"
+    assert result.scans[0].applied == {"deferred": True}
+    assert "無法取得 basis" in result.scans[0].audit_errors[0]
+    state = json.loads(env["state"].read_text(encoding="utf-8"))
+    assert page.claim_id in state["checked"]
+    assert not page.path.exists()

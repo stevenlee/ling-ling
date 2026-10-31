@@ -130,7 +130,13 @@ def _coerce_evidence(value) -> list[dict]:
         # Scope provenance is retained verbatim, never inferred for legacy
         # evidence or treated as apply authorization. The apply seam validates
         # the full verdict against its actual passage before any mutation.
-        for key in ("scope_contract_version", "scope_relation", "quotes", "applicability"):
+        for key in (
+            "scope_contract_version",
+            "scope_relation",
+            "quotes",
+            "applicability",
+            "audit_id",
+        ):
             if key in item:
                 entry[key] = item[key]
         out.append(entry)

@@ -34,8 +34,9 @@ TWO MODES:
     (single-writer discipline). The [EvidenceTrace] provenance and the derivative
     self-source exclusion keep this from becoming an echo chamber.
 
-The only OTHER file this task owns is its rotation-cursor state file — task
-bookkeeping, not belief state.
+Judgments are recorded as immutable private audit snapshots before any vault
+commit. The rotation cursor records attempts; index intents own crash recovery.
+Neither an audit file nor a trace event alone asserts that a claim was changed.
 
 Failure semantics (per house hardening rules): an LLM failure or unparseable
 relation is COUNTED AND SHOWN as such, never coerced into "neutral" — a
@@ -45,6 +46,7 @@ the batch.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -57,15 +59,18 @@ from core.config import (
     CORTEX_DIR,
     CORTEX_INDEX_REPAIR_DIR,
     EVIDENCE_TRACEBACK_STATE_FILE,
+    EVIDENCE_AUDIT_DIR,
     FROM_LLM_DIR,
     settings,
 )
 from services.cortex_store import (
     active_evidence,
     load_all_pages,
+    parse_cortex_page,
     save_cortex_page,
 )
 from services.ingest.atomic_io import atomic_write_text
+from services.evidence_audit import persist_audit, text_hash, validate_judge_context
 from services.llm_client import JSONCompletionParseError
 from services.evidence_contract import (
     CONTRACT_VERSION,
@@ -111,6 +116,11 @@ class PassageJudgment:
     unsupported: list[str] = field(default_factory=list)
     applicability: str = ""
     passage: str = ""
+    source_path: str = ""
+    source_family: str = ""
+    chunk_id: str = ""
+    audit_context: dict = field(default_factory=dict)
+    audit_id: str = ""
 
     def verdict(self) -> dict:
         return {
@@ -135,6 +145,9 @@ class ClaimScan:
     retrieval_errors: list[str] = field(default_factory=list)
     # Apply-mode outcome (None in dry-run): what was actually written to Cortex.
     applied: dict | None = None
+    basis_snapshot: str = ""
+    basis_path: str = ""
+    audit_errors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -353,11 +366,78 @@ def _judge_passage(llm, page, hit: dict) -> PassageJudgment:
         return PassageJudgment(
             title=title, relation="error", reason=str(e)[:200], distance=distance
         )
-    return PassageJudgment(title=title, distance=distance, passage=text, **verdict)
+    return PassageJudgment(
+        title=title,
+        distance=distance,
+        passage=text,
+        **verdict,
+        source_path=str(meta.get("source_path") or meta.get("source") or ""),
+        source_family=_source_family(hit),
+        chunk_id=str(hit.get("id") or ""),
+        audit_context=parsed.get("audit_context")
+        if isinstance(parsed.get("audit_context"), dict)
+        else {},
+    )
+
+
+def _persist_scan_audits(scan: ClaimScan, audit_dir: Path, now: datetime) -> None:
+    for judgment in scan.judgments:
+        if judgment.relation not in RELATIONS:
+            continue  # no fabricated verdict for transport/parse failures
+        payload = {
+            "basis": {
+                "path": scan.basis_path,
+                "snapshot": scan.basis_snapshot,
+                "sha256": text_hash(scan.basis_snapshot),
+                "claim_id": scan.claim_id,
+                "claim": scan.claim,
+                "falsifier": scan.falsifier,
+            },
+            "source": {
+                "title": judgment.title,
+                "path": judgment.source_path,
+                "family": judgment.source_family,
+                "family_method": "path_stem_v1_unverified",
+                "chunk_id": judgment.chunk_id,
+                "passage": judgment.passage,
+                "sha256": text_hash(judgment.passage),
+                "distance": judgment.distance,
+                "range": {
+                    "coordinate": "retrieved_chunk_prefix",
+                    "start": 0,
+                    "end": len(judgment.passage),
+                },
+            },
+            "verdict": judgment.verdict(),
+            "judge": validate_judge_context(judgment.audit_context),
+        }
+        judgment.audit_id = persist_audit(audit_dir, payload, now)
+
+
+def _trace_audits(llm, scan: ClaimScan, audit_dir: Path) -> None:
+    store = getattr(llm, "trace_store", None)
+    if store is None:
+        return
+    for judgment in scan.judgments:
+        if not judgment.audit_id:
+            continue
+        try:
+            store.record_artifact(
+                path=audit_dir / f"{judgment.audit_id}.json",
+                artifact_type="evidence_audit",
+                metadata={
+                    "audit_id": judgment.audit_id,
+                    "claim_id": scan.claim_id,
+                    "relation": judgment.relation,
+                    "contract_version": CONTRACT_VERSION,
+                },
+            )
+        except Exception:
+            logging.exception("evidence_traceback: trace artifact failed; durable audit retained")
 
 
 def _scan_incomplete(scan: ClaimScan) -> bool:
-    return bool(scan.retrieval_errors) or any(
+    return bool(scan.retrieval_errors or scan.audit_errors) or any(
         j.relation in ("error", "unparseable") for j in scan.judgments
     )
 
@@ -376,7 +456,13 @@ def _dry_run_action(scan: ClaimScan) -> str:
 
 
 def _apply_scan(
-    page, scan: ClaimScan, rag, now: datetime, *, repair_dir: Path | None = None
+    page,
+    scan: ClaimScan,
+    rag,
+    now: datetime,
+    *,
+    repair_dir: Path | None = None,
+    audit_dir: Path | None = None,
 ) -> dict:
     """Mutate the claim page from its judgments (apply mode). Conservative:
     full_support thickens evidence + a single gentle reinforce; contradicts become
@@ -398,6 +484,16 @@ def _apply_scan(
     except ValueError as validation_error:
         return {"error": f"判讀契約無效：{validation_error}"}
 
+    try:
+        if not scan.basis_snapshot or page.path.read_text(encoding="utf-8") != scan.basis_snapshot:
+            return {"error": "Cortex 檔案 basis 已變更，未套用"}
+        if scan.basis_path != str(page.path):
+            return {"error": "Cortex 路徑與稽核 basis 不符"}
+        _persist_scan_audits(scan, audit_dir or EVIDENCE_AUDIT_DIR, now)
+    except Exception as audit_error:
+        return {"error": f"稽核準備失敗，未套用：{audit_error}"}
+    page = copy.deepcopy(page)
+
     added_evidence = 0
     refreshed = 0
     tensions = 0
@@ -415,6 +511,7 @@ def _apply_scan(
                 "method": "evidence_traceback",
                 "scope_contract_version": CONTRACT_VERSION,
                 "scope_relation": j.relation,
+                "audit_id": j.audit_id,
                 "quotes": j.quotes,
                 "applicability": j.applicability,
             }
@@ -432,7 +529,7 @@ def _apply_scan(
                 existing_markers.add(marker)
                 added_evidence += 1
         elif j.relation == "contradicts":
-            cp = f"{_TRACE_MARKER} {now:%Y-%m-%d} 反例：{j.title} — {j.reason}"
+            cp = f"{_TRACE_MARKER} {now:%Y-%m-%d} 反例：{j.title} — {j.reason} [audit:{j.audit_id}]"
             # Dedup on the source title so a re-scan doesn't stack counterpoints.
             if not any(j.title in existing for existing in existing_counterpoints):
                 page.counterpoints.append(cp)
@@ -460,7 +557,9 @@ def _apply_scan(
         # Write-ahead intent closes the crash gap between the vault commit and
         # the DB call. If it cannot persist, do not commit the belief mutation.
         slot = enqueue_index_repair(page, repair_dir, page.path.parent)
-        save_cortex_page(page)
+        if page.path.read_text(encoding="utf-8") != scan.basis_snapshot:
+            return {"error": "Cortex 在提交前已變更，未套用；索引意圖將依最新版追補"}
+        save_cortex_page(page)  # commit point: durable audit already exists
     except Exception as e:
         logging.error(f"evidence_traceback: apply write failed for {page.claim_id}: {e}")
         return {"error": str(e)[:200]}
@@ -565,9 +664,15 @@ def _render_report(
         )
         for error in scan.retrieval_errors:
             lines.append(f"- 檢索失敗：{error}")
+        for error in scan.audit_errors:
+            lines.append(f"- 稽核記錄失敗：{error}")
         for j in scan.judgments:
             dist = f"（distance {j.distance:.2f}）" if j.distance is not None else ""
             lines.append(f"  - [{j.relation}] {j.title} — {j.reason}{dist}")
+            if j.audit_id:
+                lines.append(
+                    f"    - 稽核 ID：`{j.audit_id}`（僅代表判讀已記錄，套用以 Cortex 為準）"
+                )
             if j.applicability:
                 lines.append(f"    - 適用範圍：{j.applicability}")
             for quote in j.quotes:
@@ -588,6 +693,7 @@ def run_evidence_traceback(
     out_dir: Path | None = None,
     state_file: Path | None = None,
     repair_dir: Path | None = None,
+    audit_dir: Path | None = None,
     now: datetime | None = None,
 ) -> TracebackResult:
     """One traceback batch. Judgment is read-only; when
@@ -631,6 +737,24 @@ def run_evidence_traceback(
 
     scans: list[ClaimScan] = []
     for page in batch:
+        try:
+            snapshot = page.path.read_text(encoding="utf-8")
+            current = parse_cortex_page(page.path, text=snapshot)
+            if current is None or current.claim_id != page.claim_id or not _thin_pool([current]):
+                raise ValueError("掃描前主張已變更或不再符合薄證據條件")
+            page = current
+        except Exception as basis_error:
+            scans.append(
+                ClaimScan(
+                    page.claim_id,
+                    page.claim,
+                    page.falsifier,
+                    audit_errors=[f"無法取得 basis：{basis_error}"],
+                    applied={"deferred": True} if apply else None,
+                )
+            )
+            state.setdefault("checked", {})[page.claim_id] = now.isoformat(timespec="seconds")
+            continue
         candidates = _candidate_passages(rag, page, settings.EVIDENCE_TRACEBACK_MAX_DISTANCE)
         scan = ClaimScan(
             claim_id=page.claim_id,
@@ -640,15 +764,27 @@ def run_evidence_traceback(
             excluded_far=candidates.excluded_far,
             excluded_unknown=candidates.excluded_unknown,
             retrieval_errors=candidates.errors,
+            basis_snapshot=snapshot,
+            basis_path=str(page.path),
         )
         scan.judgments = [_judge_passage(llm, page, hit) for hit in candidates.passages]
+        try:
+            _persist_scan_audits(scan, audit_dir or EVIDENCE_AUDIT_DIR, now)
+        except Exception as audit_error:
+            logging.warning(
+                "evidence_traceback: audit failed for %s: %s", page.claim_id, audit_error
+            )
+            scan.audit_errors.append(str(audit_error)[:200])
+        _trace_audits(llm, scan, audit_dir or EVIDENCE_AUDIT_DIR)
         if apply and _scan_incomplete(scan):
             scan.applied = {"deferred": True}
         elif apply:
             # One claim's apply failure is caught and recorded, never aborts the
             # batch (same discipline as a failed judgment).
             try:
-                scan.applied = _apply_scan(page, scan, rag, now, repair_dir=repair_dir)
+                scan.applied = _apply_scan(
+                    page, scan, rag, now, repair_dir=repair_dir, audit_dir=audit_dir
+                )
             except Exception as e:
                 logging.error(f"evidence_traceback: apply crashed for {page.claim_id}: {e}")
                 scan.applied = {"error": str(e)[:200]}
