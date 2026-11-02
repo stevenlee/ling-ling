@@ -158,7 +158,7 @@ class ImproveAgent(BaseAgent):
         from maintenance.self_diagnosis import run_self_diagnosis
         from maintenance.self_improve import run_self_improve
 
-        assessment = run_self_assessment(trace_store)
+        assessment = run_self_assessment(trace_store, rag=self.rag)
         diagnosis = run_self_diagnosis(self.llm, assessment)
         improve = run_self_improve(self.llm, assessment, diagnosis)
 

@@ -402,7 +402,7 @@ class CommandDispatcher:
                 return "skipped：沒有 trace store，無法體檢。"
             from maintenance.self_assessment import run_self_assessment
 
-            result_obj = run_self_assessment(trace_store)
+            result_obj = run_self_assessment(trace_store, rag=self.rag)
         else:
             return f"未知的大腦指令：{intent_key}"
 
