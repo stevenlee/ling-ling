@@ -87,7 +87,7 @@ budget 不是取消進行中 HTTP request 的硬上限，報告不能把 600 秒
 | C01 | 已修、隔離驗證完成（11/02），live 待驗／S | 手動 M1 的 source baseline 對齊：兩個手動入口現與 scheduler 同樣傳入注入的 rag | 用注入的 rag 傳入 `run_self_assessment`，測試手動與排程資料契約一致。缺 baseline 不顯示成零；不因此重建 embedding |
 | C02 | 待重稽核／M | 更新 N.2／SE／grounding／doc-anchored falsifiability 的成效報告 | 先 C01；依 operation、建立時間、backend／版本與 active cohort 分層。SE 的來源／產出比、固定母體增厚及 decay 分開；不以混合全庫 aggregate 證明干預有效 |
 | C03 | 待觀察／S | Scout 英文經濟／財經來源品質：累積促銷頁、報價頁、付費牆與誤拒短新聞的案例，再決定篩選／readability 需要 | 保留 economy OR finance 與英文來源需求；不擅自縮成只看股市。先標註再調 300 字門檻，報告保留缺正文標記，來源解析失敗可見 |
-| C04 | 既有交付已整合，執行版本可觀測性待補／S | Build／配置／執行版本可觀測性及當前 feature branch 整合 | 用啟動與任務版本資料區分 stale module／新碼失敗；交付可覆核版本。使用者已另授權逐段完成後 commit／merge main／push；部署仍依具體授權 |
+| C04 | 執行版本觀測實作與隔離驗證完成（11/04），live 待驗／S | Build／配置／執行版本可觀測性及當前 feature branch 整合 | 用啟動與任務版本資料區分 stale module／新碼失敗；交付可覆核版本。使用者已另授權逐段完成後 commit／merge main／push；部署仍依具體授權 |
 | C05 | 待數據／S | Lens 引文門檻校準（目前 0.8） | 先有翻譯／原文分組的人工作答基準與足夠樣本，衡量漏報／誤報；不為讓健康燈轉綠直接降門檻 |
 
 C01 已修並有隔離回歸測試；C02 不能只用 10/30 手動報告顯示「無來源基準」
@@ -322,3 +322,19 @@ C01 已修並有隔離回歸測試；C02 不能只用 10/30 手動報告顯示�
 - `make check` exit 0：ruff clean、mypy 173 source files clean；2116 passed、1 skipped、
   1 個既有 Chroma warning。`git diff --check` exit 0。Git 交付結果見本次摘要；先前
   歷史段落的未提交聲明不代表目前狀態。C01 需 daemon 重新載入後才影響手動入口。
+
+
+## 16. 2026-11-04 C04 程序版本觀測
+
+- [C04 契約](Runtime_Identity_Contract.md)：啟動 checkout commit／engine dirty／session ID
+  固定於程序首次載入，發布至 daemon status、每個 trace run 與維護 state；LLM run
+  同時保存實際 client provider／model，選定非機密設定以 allowlist 保存。
+  Git 不可用／查核競態明示 unknown，不以更新後 HEAD 重新標示舊程序。
+- 這不是逐模組載入內容或全部配置證明；穩定 checkout、prompt／權重版本仍有各自契約。
+  舊紀錄不回填；C04 live 新欄位需之後載入本版，不能把本輪前的重啟當作已部署。
+- 12 個隔離回歸案例含 Git 故障、動態旗標、巢狀 trace 與失敗 task；`make check`
+  exit 0：ruff clean、mypy 174 source files clean，2128 passed、1 skipped、1 個既有
+  Chroma warning；`git diff --check` exit 0。依先前授權逐段提交並整合 main／push。
+- [A05 追加觀察](A2_runtime_observation_2026-11-02.md#2026-11-04-追加唯讀觀察)：
+  11/03、11/04 排程正常、各 0 判讀／套用；live 正向交易缺口仍在。C01 尚無本次
+  重啟後手動自評樣本，保留 live 待驗。模型未換，未重新 ingestion 或強迫維護排程。

@@ -609,3 +609,13 @@
   缺基準仍呈現未知，不重建 embedding；daemon 重新載入後才使用新入口。
 - 詳見[開發計畫 §15](Development_Plan_2026-10-30.md#15-2026-11-02-a05-部分觀察與-c01-修復)。
   A01 標註複核、A04 來源資料及 C04 載入版本 metadata 仍欠；模型維持不變。
+
+
+## 2026-11-04 C04 程序版本與配置觀測
+
+- [C04 契約](Runtime_Identity_Contract.md) 已實作：程序固定 checkout 快照，status／trace／
+  維護 state 共用 session；Git 故障或 dirty 不冒充乾淨版本，選定非機密設定隨事件記錄。
+  實作與隔離驗證完成，live 發布待後續載入本版，不回填歷史紀錄。
+- `make check` exit 0：ruff clean、mypy 174 source files clean；2128 passed、1 skipped、
+  1 個既有 Chroma warning。A05 追加兩日正常排程樣本，仍 0 判讀／套用；C01 本次
+  重啟後手動入口尚無樣本。剩餘工作見[開發計畫 §16](Development_Plan_2026-10-30.md#16-2026-11-04-c04-程序版本觀測)。

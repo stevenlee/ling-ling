@@ -57,3 +57,24 @@ A05 部分完成：新版正常排程、檢索、負向排除與零判讀報告�
 觀察時 daemon 為 idle；最新 evidence traceback state 為 11/02 ok，摘要與報告的
 掃描／判讀／套用計數一致。consolidation 最新為 11/02 succeeded、0 新 insight／claim、
 3 quarantined；不據此解除隔離或判定其他維護任務已驗收。
+
+## 2026-11-04 追加唯讀觀察
+
+11/03、11/04 新版正常排程均 succeeded，各掃描 5／12 個主張、10 次成功檢索；
+兩日仍為 0 判讀／新增 evidence／tension／索引追補。audit 與 index repair JSON
+紀錄仍為 0。這是額外負向樣本，A05 的 live 正向交易缺口不變。
+
+| 日期（Taipei） | 實際執行時間 | Run ID | 合併後排除：距離／缺距離／自我來源 |
+|---|---|---|---|
+| 11/03 | 00:35:38–00:38:31 | `run_ebcd92bf3b5f4ca69a223dceb7397a03` | 7／23／1 |
+| 11/04 | 00:35:34–00:38:25 | `run_7a56d8b1263b47ed988228c371b5ba56` | 11／20／3 |
+
+私有報告 SHA-256：
+
+- 11/03：`339d3a5aa6a5aea5951eb428df819bd29861fe8301aaeee12c95ba4a28620d49`
+- 11/04：`6ea30d1431845803979766fc2f79b44e2ee53481f314e014c17a5b042f5926a0`
+
+最新自評是 11/02 15:27:59–15:28:52 的排程 run
+`run_9cb8281fbbd340ed9148704cd4ce24a6`，不能取代本次重啟後 C01 手動入口驗收。
+觀察時 daemon 狀態 idle，status ts 為 11/04 21:11:42；現有 trace metadata 仍只有 task，
+無法從這些歷史 run 釘住載入 commit。後續識別依 [C04 契約](Runtime_Identity_Contract.md)。
