@@ -1,6 +1,7 @@
 """Metacognition M2: self-diagnosis over the M1 scorecard."""
 
 import os
+import pytest
 
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
@@ -58,21 +59,23 @@ def test_diagnoses_only_flagged_axes(tmp_path):
     # only the 2 non-green axes get an LLM call
     assert set(filter(None, llm.calls)) == {"檢索品質", "Cortex 信念"}
     assert len(r.diagnoses) == 2
-    assert r.diagnoses[0].candidate_fixes
+    assert not r.diagnoses[0].candidate_fixes
+    assert not r.diagnoses[0].proposal_eligible
+    assert r.diagnoses[0].hypothesis == "rc"
     assert not r.diagnoses[1].proposal_eligible
     assert r.diagnoses[1].hypothesis == "rc"
     assert r.diagnoses[1].candidate_fixes == []
     assert r.report_path is not None
 
 
-def test_report_includes_root_cause_and_fixes(tmp_path):
+def test_report_includes_unverified_hypothesis_and_investigations(tmp_path):
     axes = [Axis("檢索品質", RED, "pass 50%", detail={"pass_rate": 0.5})]
     r = run_self_diagnosis(FakeLLM(), _assessment(axes), **_paths(tmp_path))
     body = r.report_path.read_text(encoding="utf-8")
     assert "根因" in body and "rc" in body
-    assert "fix A" in body and "fix B" in body
-    # M2 must frame fixes as not-yet-applied
-    assert "尚未套用" in body or "候選" in body
+    assert "fix A" not in body and "fix B" not in body
+    assert "模型未驗證假設" in body and "查證項目（尚未執行）" in body
+    assert "信心 70%" not in body and "未送入 M3" in body
 
 
 def test_chronic_streak_surfaced(tmp_path):
@@ -208,7 +211,8 @@ def test_legacy_cortex_metrics_also_require_causal_evidence(tmp_path):
     )
     cortex, retrieval = result.diagnoses
     assert not cortex.proposal_eligible and cortex.candidate_fixes == []
-    assert retrieval.proposal_eligible and retrieval.candidate_fixes
+    assert not retrieval.proposal_eligible and retrieval.candidate_fixes == []
+    assert retrieval.hypothesis == "rc"
 
 
 def test_cortex_provider_failure_does_not_become_a_diagnosis(tmp_path):
@@ -242,3 +246,89 @@ def test_malformed_confidence_does_not_leak_partial_fixes(tmp_path):
     )
     assert all(not dx.candidate_fixes and not dx.proposal_eligible for dx in result.diagnoses)
     assert result.report_path is None
+
+
+@pytest.mark.parametrize(
+    "axis", ["報告品質", "洞察品質", "檢索品質", "LLM 健康", "記憶衰減", "語義熵", "Cortex 信念"]
+)
+def test_aggregate_diagnoses_cannot_enable_m3_even_with_samples_and_high_confidence(tmp_path, axis):
+    assessment = _assessment([Axis(axis, RED, "aggregate only", detail={})])
+    assessment.diagnostic_evidence = {
+        "schema_version": 1,
+        "status": "available",
+        "window_days": 7,
+        "runs": [
+            {
+                "run_id": "r1",
+                "intent": "maintenance.evidence_traceback",
+                "trace_status": "succeeded",
+            }
+        ],
+        "artifacts": [
+            {"artifact_id": "a1", "artifact_type": "synthesis", "quality_verdict": "reject"}
+        ],
+    }
+    llm = FakeLLM(
+        ret={
+            "root_cause": "Unsupported causal assertion.",
+            "candidate_fixes": ["rewrite everything"],
+            "confidence": 1.0,
+            "needs": "",
+            "proposal_eligible": True,
+            "reviewed": True,
+        }
+    )
+    result = run_self_diagnosis(llm, assessment, **_paths(tmp_path))
+    dx = result.diagnoses[0]
+    assert not dx.proposal_eligible and dx.candidate_fixes == [] and dx.confidence == 0
+    assert dx.hypothesis == "Unsupported causal assertion."
+    assert "尚未確認根因" in dx.root_cause and len(dx.investigation_steps) == 3
+    assert "元件能力與推論邊界" in dx.context and "非完整清單" in dx.context
+    assert "空清單不代表功能不存在" in dx.context
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [{}, {"schema_version": 2, "status": "available"}, {"schema_version": 1, "status": "unknown"}],
+)
+def test_missing_execution_snapshot_stays_unknown(snapshot):
+    from maintenance.self_diagnosis import _execution_context
+
+    text = _execution_context("報告品質", snapshot)
+    assert "未知" in text and "不可當成零次執行" in text
+
+
+def test_execution_references_are_axis_specific_and_do_not_requery_trace(tmp_path):
+    class NoReads(FakeLLM):
+        @property
+        def trace_store(self):
+            raise AssertionError("M2 must use the M1 snapshot")
+
+    assessment = _assessment([Axis("Cortex 信念", RED), Axis("洞察品質", RED)])
+    assessment.diagnostic_evidence = {
+        "schema_version": 1,
+        "status": "available",
+        "window_days": 7,
+        "runs": [
+            {
+                "run_id": "a2-run",
+                "intent": "maintenance.evidence_traceback",
+                "trace_status": "succeeded",
+            },
+            {"run_id": "insight-run", "intent": "insight", "trace_status": "succeeded"},
+        ],
+        "artifacts": [
+            {
+                "artifact_id": "insight-art",
+                "artifact_type": "report_insight",
+                "quality_verdict": None,
+            }
+        ],
+    }
+    result = run_self_diagnosis(NoReads(), assessment, **_paths(tmp_path))
+    cortex, insight = result.diagnoses
+    assert "a2-run" in cortex.context and "insight-run" not in cortex.context
+    assert "insight-run" in insight.context and "a2-run" not in insight.context
+    assert "insight-art" in insight.context
+    assert "沒有搜尋工具" in cortex.context
+    assert "trace_status=succeeded" in cortex.context and "可能是 skipped／無候選" in cortex.context

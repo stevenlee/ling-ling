@@ -441,3 +441,39 @@ def test_cortex_snapshot_separates_status_and_a2_provenance(tmp_path, monkeypatc
     assert ax.detail["thin_evidence"] == 2  # existing tension bucket excludes falsified
     assert ax.detail["active_thin_examples"] == ["b"]
     assert ax.detail["a2_enabled"] is True and ax.detail["a2_apply"] is True
+
+
+def test_diagnostic_references_are_captured_once_and_detached(tmp_path):
+    snapshot = {
+        "schema_version": 1,
+        "status": "available",
+        "window_days": 2,
+        "runs": [{"run_id": "run-original", "trace_status": "succeeded"}],
+    }
+
+    class SnapshotTrace(FakeTrace):
+        def __init__(self):
+            super().__init__()
+            self.windows = []
+
+        def query_diagnostic_snapshot(self, since_days):
+            self.windows.append(since_days)
+            return snapshot
+
+    trace = SnapshotTrace()
+    result = run_self_assessment(trace, window_days=2, **_paths(tmp_path))
+    snapshot["runs"][0]["run_id"] = "changed-after-M1"
+    assert trace.windows == [2]
+    assert result.diagnostic_evidence["runs"][0]["run_id"] == "run-original"
+    # Compact numeric trend history must not grow into a second trace database.
+    assert "run-original" not in (tmp_path / "assessment_history.json").read_text(encoding="utf-8")
+
+
+def test_diagnostic_query_outage_does_not_break_m1(tmp_path):
+    class BrokenTrace(FakeTrace):
+        def query_diagnostic_snapshot(self, since_days):
+            raise OSError("trace query offline")
+
+    result = run_self_assessment(BrokenTrace(), **_paths(tmp_path))
+    assert result.status == "succeeded" and len(result.axes) == 7
+    assert result.diagnostic_evidence == {"schema_version": 1, "status": "unknown"}

@@ -515,6 +515,83 @@ class TraceStore:
             out.append(record)
         return out
 
+    def query_diagnostic_snapshot(self, since_days: int = 7) -> dict:
+        """Bounded references, not causal evidence or a complete task inventory."""
+        cutoff = self._since_cutoff(since_days)
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            runs = conn.execute(
+                """
+                SELECT run_id, intent, status AS trace_status, started_at, ended_at,
+                       substr(error, 1, 300) AS error
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY intent ORDER BY started_at DESC, run_id
+                    ) AS rank FROM runs
+                    WHERE started_at >= ? AND (
+                        intent LIKE 'maintenance.%' OR trigger_type = 'maintenance_scheduler'
+                    )
+                ) WHERE rank <= 3 ORDER BY started_at DESC, run_id LIMIT 60
+                """,
+                (cutoff,),
+            ).fetchall()
+            results = conn.execute(
+                """
+                SELECT artifact_id, run_id, metadata_json FROM artifacts
+                WHERE ts >= ? AND artifact_type = 'maintenance_result'
+                ORDER BY ts DESC, artifact_id LIMIT 180
+                """,
+                (cutoff,),
+            ).fetchall()
+            artifacts = conn.execute(
+                """
+                SELECT artifact_id, run_id, trace_id, ts, path, artifact_type, quality_verdict
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY artifact_type ORDER BY ts DESC, artifact_id
+                    ) AS rank FROM artifacts
+                    WHERE ts >= ? AND (quality_verdict IS NOT NULL OR
+                        artifact_type IN ('report_insight', 'report_insight_full'))
+                ) WHERE rank <= 3 ORDER BY ts DESC, artifact_id LIMIT 30
+                """,
+                (cutoff,),
+            ).fetchall()
+            failures = conn.execute(
+                """
+                SELECT trace_id, run_id, ts, stage, provider, model,
+                       substr(error, 1, 300) AS error
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY stage ORDER BY ts DESC, trace_id
+                    ) AS rank FROM llm_calls
+                    WHERE ts >= ? AND status = 'failed'
+                ) WHERE rank <= 2 ORDER BY ts DESC, trace_id LIMIT 20
+                """,
+                (cutoff,),
+            ).fetchall()
+        task_results = {}
+        for row in results:
+            try:
+                data = json.loads(row["metadata_json"])
+                if isinstance(data, dict) and row["run_id"] not in task_results:
+                    task_results[row["run_id"]] = {
+                        "artifact_id": row["artifact_id"],
+                        "status": str(data.get("status") or "unknown")[:40],
+                        "summary": str(data.get("summary") or "")[:600],
+                    }
+            except (TypeError, ValueError):
+                continue
+        return {
+            "schema_version": 1,
+            "status": "available",
+            "captured_at": _utc_now(),
+            "window_days": since_days,
+            "sampled": True,
+            "runs": [{**dict(r), "task_result": task_results.get(r["run_id"])} for r in runs],
+            "artifacts": [dict(r) for r in artifacts],
+            "failed_calls": [dict(r) for r in failures],
+        }
+
     def llm_call_health(self, since_days: int = 7) -> dict:
         """Aggregate LLM-call health over the window, grouped by stage.
 

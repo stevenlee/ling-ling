@@ -23,6 +23,7 @@ See DesignDoc/SelfImprovement_metacognition_plan.md.
 from __future__ import annotations
 
 import json
+import copy
 import logging
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -77,6 +78,7 @@ class SelfAssessmentResult:
     observations: list = field(default_factory=list)  # list[str] — M2 seeds
     trend: dict = field(default_factory=dict)  # axis name → {arrow, prev, streak}
     report_path: Path | None = None
+    diagnostic_evidence: dict = field(default_factory=dict)
 
 
 def _read_json(path: Path, default):
@@ -566,6 +568,20 @@ def run_self_assessment(
         observations=obs,
         trend=trend,
     )
+
+    try:
+        reader = getattr(trace_store, "query_diagnostic_snapshot", None)
+        snapshot = reader(since_days=window_days) if callable(reader) else None
+        if (
+            isinstance(snapshot, dict)
+            and snapshot.get("schema_version") == 1
+            and snapshot.get("status") == "available"
+        ):
+            result.diagnostic_evidence = copy.deepcopy(snapshot)
+    except Exception as e:
+        logging.warning("self_assessment: diagnostic references unavailable: %s", e)
+    if not result.diagnostic_evidence:
+        result.diagnostic_evidence = {"schema_version": 1, "status": "unknown"}
 
     _append_maintenance_log(log_path, result, window_days)
     # Quiet weeks stay quiet: only write the full report when something needs a look.

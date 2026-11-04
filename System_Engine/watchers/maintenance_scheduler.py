@@ -578,6 +578,21 @@ class MaintenanceScheduler(threading.Thread):
             )
             with run_context:
                 result = task.action()
+                store = getattr(self.llm, "trace_store", None)
+                if store is not None:
+                    try:
+                        store.record_artifact(
+                            path=None,
+                            artifact_type="maintenance_result",
+                            title=task.name,
+                            metadata={
+                                "task": task.name,
+                                "status": result.status,
+                                "summary": result.summary,
+                            },
+                        )
+                    except Exception as error:
+                        logging.warning("Maintenance result reference unavailable: %s", error)
                 # TraceStore marks a context as failed only on an exception.
                 # Preserve a fail-soft task's report while reflecting its
                 # explicit failure in BOTH trace and scheduler state.

@@ -1,6 +1,7 @@
 """Metacognition M3: proposal generator (diagnosis → revised prompt proposal)."""
 
 import os
+import pytest
 
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
@@ -561,3 +562,53 @@ def test_insufficient_diagnosis_cannot_trigger_prompt_rewrite(tmp_path):
     assert result.proposals == []
     assert any("診斷證據不足" in reason for _, reason in result.skipped_axes)
     assert not list(pending.glob("*.json"))
+
+
+@pytest.mark.parametrize("axis", ["報告品質", "洞察品質"])
+def test_m2_aggregate_hypothesis_never_calls_m3_editor_or_saves_proposal(tmp_path, axis):
+    from maintenance.self_diagnosis import run_self_diagnosis
+
+    class UnverifiedModel:
+        def __init__(self):
+            self.stages = []
+
+        def _complete_json(self, **kwargs):
+            self.stages.append(kwargs["trace_context"]["stage"])
+            return {
+                "root_cause": "A prompt defect inferred solely from aggregate rates.",
+                "candidate_fixes": ["rewrite prompt"],
+                "confidence": 1.0,
+                "proposal_eligible": True,
+                "needs": "",
+            }
+
+    vault, _ = _vault(tmp_path)
+    assessment = SelfAssessmentResult(
+        axes=[
+            Axis(
+                axis,
+                RED,
+                "aggregate",
+                detail={
+                    "by_type": {"lens_report": {"total": 1, "bad": 0, "unparseable": 1}},
+                    "total": 1,
+                    "content_bad": 0,
+                    "unparseable": 1,
+                },
+            )
+        ]
+    )
+    model = UnverifiedModel()
+    diagnosis = run_self_diagnosis(
+        model,
+        assessment,
+        cortex_dir=tmp_path / "cortex",
+        report_dir=tmp_path / "reports",
+        log_path=tmp_path / "maintenance.md",
+    )
+    pending = tmp_path / "_pending"
+    result = run_self_improve(model, assessment, diagnosis, vault_dir=vault, pending_dir=pending)
+    assert model.stages == ["self_diagnosis"]
+    assert not diagnosis.diagnoses[0].proposal_eligible
+    assert result.proposals == [] and not list(pending.glob("*.json"))
+    assert any("診斷證據不足" in reason for _, reason in result.skipped_axes)
