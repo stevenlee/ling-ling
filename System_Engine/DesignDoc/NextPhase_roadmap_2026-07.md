@@ -641,3 +641,14 @@
   ruff／mypy 174 source files clean，2155 passed、1 skipped、1 個既有 Chroma warning。
 - 實作與隔離驗證完成，live 新資料待後續載入與正常樣本。模型未改，未新增呼叫或重試。
   交接見[開發計畫 §18](Development_Plan_2026-10-30.md#18-2026-11-04-b02-診斷觀測與跨軸推論限制)。
+
+
+## 2026-11-04 完整待辦與 B03 提案審閱
+
+- [完整剩餘工作表](Remaining_Work_2026-11-04.md) 整合 16 項主線與 8 項條件式工作，
+  區分實作完成但未驗收與尚未稽核／決策。
+- [B03 15 份逐筆理由與 diff](M3_pending_review_2026-11-04.md)：13 份建議退回、
+  2 份保留概念，0 份直接批准；同目標／基底競爭與 5 份 Cortex 欄位契約違反已列明。
+  提案／prompt 均未變，正式處置待使用者決策；manifest 保存可重核 hash。
+- C04 status live 已確認載入 `8f5ee47`，啟動後尚無 trace／last_runtime 新樣本；
+  B02／B04 後續改動不能冒充已部署。接續先推進 B01 與 B05 的唯讀盤點。

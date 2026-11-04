@@ -1,5 +1,7 @@
 # 開發計畫重評與未完成工作 — 2026-10-30
 
+> 最新完整待辦：[2026-11-04 整合表](Remaining_Work_2026-11-04.md)。以下包含歷史基線，狀態以最新交接為準。
+
 > 本文件是截至 2026-10-30 的執行排序入口。舊 roadmap／implementation plan 保留設計與
 > 歷史決策；其 checkbox 或「待實作」不直接代表現在還沒做。後續狀態變更請更新本表，
 > 每個工作以獨立可驗收的變更交付。本輪只做評估與文件，不啟動下列實作或 live 修復。
@@ -52,7 +54,7 @@ A2 雖能持久化補證與追補索引，但歷史樣本證明 supports 的語�
 | A02 | 程式已實作；真模型與暫定分類一致 18/24、未通過（10/31）／M | 支持範圍契約：區分直接完整、局部、類比；要求支持引文、未支持部分及適用範圍；更新 parser／report／apply 並更正 `_is_independent` 的過期註解 | A01 | 只有範圍與資料有效的直接完整支持能新增完整 evidence／reinforce；局部與類比留報告；缺欄、壞 schema、不存在引文不得套用；contradicts、transport、parse 狀態不混同 |
 | A03 | 程式與隔離故障驗證完成（10/31），live 待驗收／M | 可重播的 A2 audit record：claim／falsifier basis、送審段落快照或可恢復私有引用、hash、來源 family／path／範圍、contract／prompt／model 版本、trace 與判定 | 與 A02 一起定格式，獨立交付 | trace 到期後仍可覆核；套用前檢查 basis；稽核資料無法落盤時不提交不可稽核的補證；原子寫入、崩潰恢復、去重及保存政策有測試；私有內容不進公開 Git |
 | A04 | 程式與隔離驗證完成；來源資料／live 待驗收（10/31）／M | 原始來源 lineage 與獨立性：分開「不同顯示 title」與「不同原始證據」，追溯 Part／Stitched／Synthesis、原 insight 來源及 grounded_on | A03 | 同一原文件不同 view 不灌票；已知同源拒絕，無法確認獨立性明列未知、不冒充獨立佐證；缺資料不藉批量重生補齊 |
-| A05 | 新版兩日正常排程部分驗收（11/02），正向樣本仍欠／S | A2 新版端到端驗收報告：正常排程結果、來源／距離／範圍排除、index intent 與 trace／state 一致性 | 現有可靠性可先唯讀觀察；新版語義驗收依 A02–A04 | 部分失敗如實呈現、成功不重複強化、空池仍可追補；反證寫入用隔離資料驗完整交易，live 無反證樣本時仍標缺口；不故意破壞 live index 來製造故障 |
+| A05 | 11/01–11/04 四輪正常排程部分驗收，正向樣本仍欠／S | A2 新版端到端驗收報告：正常排程結果、來源／距離／範圍排除、index intent 與 trace／state 一致性 | 現有可靠性可先唯讀觀察；新版語義驗收依 A02–A04 | 部分失敗如實呈現、成功不重複強化、空池仍可追補；反證寫入用隔離資料驗完整交易，live 無反證樣本時仍標缺口；不故意破壞 live index 來製造故障 |
 
 A02 的字面引文匹配只能驗證「引用存在」，不能證明語義支持成立；必須再跑 A01
 評估集及有限、隔離的真模型判讀。失敗時維持不能 apply，不用放寬距離／加信心補救。
@@ -68,7 +70,7 @@ A05 不需要等待 A02 才觀察既有可靠性，但舊契約下的成功 run 
 |---|---|---|---|---|
 | B01 | 待稽核／M | 歷史 28 筆 supports 的逐筆處置清單，分保留、局部線索、需更多資料及建議撤回；另做歷史 Cortex↔RAG 唯讀對帳 | 可先盤點；正式重判依 A01–A04 | 無 trace 的 20 筆不偽造歷史段落；人工確認處置前不刪 evidence、不回滾 confidence／S、不批量重建索引；修復另有備份與冪等方案 |
 | B02 | 觀測 context／跨軸 gate 與隔離驗證完成（11/04），live 待驗／M | M2 診斷輸入包含元件能力、相關任務執行結果與可覆核樣本；把必要的推論限制推廣到其他會進 M3 的軸 | A03、B04 的乾淨訊號；可先做一般能力對照 | 重播 10/30 的誤判與其他軸樣本；證據不足仍只給假設／查證；Cortex 不因多幾個數字或模型高信心就解除 gate；M3 消費端限制保留 |
-| B03 | 待審閱／S | 整理 15 筆既有 M3 提案：同 target／basis 競爭組、schema 不符與能力不可能的修改、可保留候選及退回理由 | 不需等模型工作，可作 P0 期間獨立小批 | 交付逐筆建議及 diff；由使用者決定 approve／reject；不以清空佇列為目標。人工確認的退回理由進正式流程 |
+| B03 | 15/15 審閱完成（11/04），待使用者決策／S | 整理 15 筆既有 M3 提案：同 target／basis 競爭組、schema 不符與能力不可能的修改、可保留候選及退回理由 | 不需等模型工作，可作 P0 期間獨立小批 | 交付逐筆建議及 diff；由使用者決定 approve／reject；不以清空佇列為目標。人工確認的退回理由進正式流程 |
 | B04 | 診斷／呈現修正與隔離驗證完成（11/04），真模型／live 待驗／S–M | Synthesis 判定格式與新版狀態驗收：先檢查新取得的 229-Part 文件兩次原 critique，定位模型漏寫判定或 parser 缺口，再做最小修正 | 現有 parser 重播已確認仍 None | 同份回應可重現；合法格式不破、漏 verdict 仍 NeedsReview；保留 bounded retry；用一份代表性短長文驗證新版 status／history／artifact，不重跑 229 Parts 才驗一條 parser |
 | B05 | 待稽核／M | 長文與 learning artifacts 的效能／品質收尾報告：Part 完整性、耗時分位數、實際 HTTP attempts、queue／wait、pending／deferred／quarantine 及至少 15 個 Parts 人工抽查 | 可在 A01–A04 間穿插；先查可用資料版本 | 229-Part 文件與數學書分開；不同題材不能當 routing A/B。若原數學書前後資料已過期，明示缺口，不補造比較；圖表須有內容正確性、互補性與 ownership 檢查 |
 | B06 | 待評估、按欠帳決定／M | 檢查 artifact deferred／pending 是否長期無喚醒；只有證明存在可處理欠帳，再設計持久化恢復／排程接點 | B05 | 沿現有 slot ledger、TTL、basis 與衝突保護；不把 deferred 當永久 skipped，不重生人工區域。以現有 timer pump／busy lock 交付，不新增無管理 thread |
@@ -87,7 +89,7 @@ budget 不是取消進行中 HTTP request 的硬上限，報告不能把 600 秒
 | C01 | 已修、隔離驗證完成（11/02），live 待驗／S | 手動 M1 的 source baseline 對齊：兩個手動入口現與 scheduler 同樣傳入注入的 rag | 用注入的 rag 傳入 `run_self_assessment`，測試手動與排程資料契約一致。缺 baseline 不顯示成零；不因此重建 embedding |
 | C02 | 待重稽核／M | 更新 N.2／SE／grounding／doc-anchored falsifiability 的成效報告 | 先 C01；依 operation、建立時間、backend／版本與 active cohort 分層。SE 的來源／產出比、固定母體增厚及 decay 分開；不以混合全庫 aggregate 證明干預有效 |
 | C03 | 待觀察／S | Scout 英文經濟／財經來源品質：累積促銷頁、報價頁、付費牆與誤拒短新聞的案例，再決定篩選／readability 需要 | 保留 economy OR finance 與英文來源需求；不擅自縮成只看股市。先標註再調 300 字門檻，報告保留缺正文標記，來源解析失敗可見 |
-| C04 | 執行版本觀測實作與隔離驗證完成（11/04），live 待驗／S | Build／配置／執行版本可觀測性及當前 feature branch 整合 | 用啟動與任務版本資料區分 stale module／新碼失敗；交付可覆核版本。使用者已另授權逐段完成後 commit／merge main／push；部署仍依具體授權 |
+| C04 | status live 已確認（11/04），trace／state live 待驗／S | Build／配置／執行版本可觀測性及當前 feature branch 整合 | 用啟動與任務版本資料區分 stale module／新碼失敗；交付可覆核版本。使用者已另授權逐段完成後 commit／merge main／push；部署仍依具體授權 |
 | C05 | 待數據／S | Lens 引文門檻校準（目前 0.8） | 先有翻譯／原文分組的人工作答基準與足夠樣本，衡量漏報／誤報；不為讓健康燈轉綠直接降門檻 |
 
 C01 已修並有隔離回歸測試；C02 不能只用 10/30 手動報告顯示「無來源基準」
@@ -369,3 +371,22 @@ C01 已修並有隔離回歸測試；C02 不能只用 10/30 手動報告顯示�
   1 個既有 Chroma warning；`git diff --check` exit 0。依既有授權提交並整合 main／push。
 - 未改模型、未觸發 live 診斷／提案、未重啟；需後續載入本版與正常樣本驗 live。
   B03 舊提案 review 與 B01 歷史 evidence 處置仍獨立保留，不因新 gate 自動清空。
+
+
+## 19. 2026-11-04 完整待辦與 B03 逐筆審閱
+
+- [全部剩餘工作](Remaining_Work_2026-11-04.md)：16 項主線分開標示實作／驗收／資料／
+  決策，另列 8 項條件式或低優先工作；已落地與過時舊待辦不重開。
+- [B03 審閱、理由與完整 diff](M3_pending_review_2026-11-04.md)／
+  [輸入 hash manifest](M3_pending_review_2026-11-04.json)：15/15 record 有效、基底相符、
+  edits 可精確重建；3 份 insight、12 份 Cortex 同目標／基底競爭，5 份 Cortex JSON
+  契約不符。13 份建議退回、2 份僅保留概念待驗證、0 份建議直接批准。
+- 未 approve／reject、未修改 prompt、未移動提案或寫 review memory；讀取前後提案集合、
+  逐檔與目標 hash 不變。B03 審閱交付完成，正式決策／處置由使用者決定，不以清空佇列為目標。
+- C04：status 已看到 clean snapshot `8f5ee47`，captured_at 為 11/04 23:21:49（Taipei）；
+  該啟動後尚無新 trace／maintenance last_runtime。狀態欄位 live 已驗，trace／state
+  一致性仍待樣本；不能把後來 B04／B02 或目前 Git HEAD 當成已載入。
+- 本段只產生審閱與交接文件，未改 runtime code、改模型或觸發 live 維護。
+  `make check` exit 0：ruff clean、mypy 174 source files clean，2155 passed、1 skipped、
+  1 個既有 Chroma warning；`git diff --check` exit 0。manifest／來源 hash／diff／連結已驗。
+  依先前授權整合 main／push；後續優先 B01 歷史處置表與 B05 品質／欠帳盤點。
