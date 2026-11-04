@@ -34,7 +34,7 @@ scout_language: ""
 scout_max_items: 10
 scout_fetch_content: true
 evidence_traceback: true
-evidence_traceback_apply: true
+evidence_traceback_apply: false
 ---
 
 # 📜 Scripture (Settings)
