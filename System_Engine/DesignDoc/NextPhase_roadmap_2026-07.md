@@ -629,3 +629,15 @@
   真模型短長文與 live 狀態仍待驗。未改模型／prompt／retry，未重跑或覆寫歷史長文。
 - `make check` exit 0：ruff clean、mypy 174 source files clean；2133 passed、1 skipped、
   1 個既有 Chroma warning。剩餘範圍見[開發計畫 §17](Development_Plan_2026-10-30.md#17-2026-11-04-b04-缺判定診斷與品質警示修復)。
+
+
+## 2026-11-04 B02 診斷依據與跨軸 gate
+
+- [B02 契約](Diagnosis_Evidence_Context_Contract.md)：M1 附加限量任務結果與產物參照，
+  M2 按軸說明能力限制；所有彙總因果斷言只留假設與查證，不送 M3。Cortex gate 保留，
+  新增計數不能解鎖，舊 pending 不自動處置；後續放行須另有覆核與重播契約。
+- scheduler 的 maintenance_result 區分真實 skipped／failed 與 trace 未拋錯；讀取或
+  記錄故障仍 fail-soft，舊資料未知。22 個新增 hermetic 回歸案例；`make check` exit 0：
+  ruff／mypy 174 source files clean，2155 passed、1 skipped、1 個既有 Chroma warning。
+- 實作與隔離驗證完成，live 新資料待後續載入與正常樣本。模型未改，未新增呼叫或重試。
+  交接見[開發計畫 §18](Development_Plan_2026-10-30.md#18-2026-11-04-b02-診斷觀測與跨軸推論限制)。

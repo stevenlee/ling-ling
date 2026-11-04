@@ -67,7 +67,7 @@ A05 不需要等待 A02 才觀察既有可靠性，但舊契約下的成功 run 
 | ID | 狀態／規模 | 工作與交付物 | 依賴／先後 | 驗收條件 |
 |---|---|---|---|---|
 | B01 | 待稽核／M | 歷史 28 筆 supports 的逐筆處置清單，分保留、局部線索、需更多資料及建議撤回；另做歷史 Cortex↔RAG 唯讀對帳 | 可先盤點；正式重判依 A01–A04 | 無 trace 的 20 筆不偽造歷史段落；人工確認處置前不刪 evidence、不回滾 confidence／S、不批量重建索引；修復另有備份與冪等方案 |
-| B02 | 待實作／M | M2 診斷輸入包含元件能力、相關任務執行結果與可覆核樣本；把必要的推論限制推廣到其他會進 M3 的軸 | A03、B04 的乾淨訊號；可先做一般能力對照 | 重播 10/30 的誤判與其他軸樣本；證據不足仍只給假設／查證；Cortex 不因多幾個數字或模型高信心就解除 gate；M3 消費端限制保留 |
+| B02 | 觀測 context／跨軸 gate 與隔離驗證完成（11/04），live 待驗／M | M2 診斷輸入包含元件能力、相關任務執行結果與可覆核樣本；把必要的推論限制推廣到其他會進 M3 的軸 | A03、B04 的乾淨訊號；可先做一般能力對照 | 重播 10/30 的誤判與其他軸樣本；證據不足仍只給假設／查證；Cortex 不因多幾個數字或模型高信心就解除 gate；M3 消費端限制保留 |
 | B03 | 待審閱／S | 整理 15 筆既有 M3 提案：同 target／basis 競爭組、schema 不符與能力不可能的修改、可保留候選及退回理由 | 不需等模型工作，可作 P0 期間獨立小批 | 交付逐筆建議及 diff；由使用者決定 approve／reject；不以清空佇列為目標。人工確認的退回理由進正式流程 |
 | B04 | 診斷／呈現修正與隔離驗證完成（11/04），真模型／live 待驗／S–M | Synthesis 判定格式與新版狀態驗收：先檢查新取得的 229-Part 文件兩次原 critique，定位模型漏寫判定或 parser 缺口，再做最小修正 | 現有 parser 重播已確認仍 None | 同份回應可重現；合法格式不破、漏 verdict 仍 NeedsReview；保留 bounded retry；用一份代表性短長文驗證新版 status／history／artifact，不重跑 229 Parts 才驗一條 parser |
 | B05 | 待稽核／M | 長文與 learning artifacts 的效能／品質收尾報告：Part 完整性、耗時分位數、實際 HTTP attempts、queue／wait、pending／deferred／quarantine 及至少 15 個 Parts 人工抽查 | 可在 A01–A04 間穿插；先查可用資料版本 | 229-Part 文件與數學書分開；不同題材不能當 routing A/B。若原數學書前後資料已過期，明示缺口，不補造比較；圖表須有內容正確性、互補性與 ownership 檢查 |
@@ -352,3 +352,20 @@ C01 已修並有隔離回歸測試；C02 不能只用 10/30 手動報告顯示�
   原始 parser、prompt、retry 上限未變；真模型短長文與 live 新版狀態仍待樣本。
 - `make check` exit 0：ruff clean、mypy 174 source files clean，2133 passed、1 skipped、
   1 個既有 Chroma warning；`git diff --check` exit 0。依先前授權提交、merge main／push。
+
+
+## 18. 2026-11-04 B02 診斷觀測與跨軸推論限制
+
+- [B02 契約](Diagnosis_Evidence_Context_Contract.md)：M1 保存限量 task run／實際結果、
+  產物與失敗呼叫參照，M2 用同次 assessment 副本、按軸注入能力邊界，不另讀 live 狀態。
+  ID／path 供覆核，不代表已審正文；缺資料明示 unknown，不以空清單推定機制不存在。
+- scheduler 新增 maintenance_result artifact，區分 trace succeeded 與任務 skipped／
+  succeeded／failed；舊紀錄及記錄故障保持未知，記錄失敗不改變任務原結果。
+- Cortex gate 維持；其餘軸的彙總推論也只留未驗證假設與查證，不送 M3。新增計數／高
+  信心／模型自填 reviewed 均不放行。自動 prompt 提案暫停於查證，未新增因果覆核放行
+  契約，亦未處置既有 pending；M3 消費端與人審 gate 保留。詳見契約的影響範圍。
+- 新增 22 個隔離回歸案例，含查詢／記錄故障、跨軸高信心及真實 M2→M3 邊界；
+  `make check` exit 0：ruff clean、mypy 174 source files clean，2155 passed、1 skipped、
+  1 個既有 Chroma warning；`git diff --check` exit 0。依既有授權提交並整合 main／push。
+- 未改模型、未觸發 live 診斷／提案、未重啟；需後續載入本版與正常樣本驗 live。
+  B03 舊提案 review 與 B01 歷史 evidence 處置仍獨立保留，不因新 gate 自動清空。
