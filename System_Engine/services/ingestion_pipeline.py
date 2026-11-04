@@ -1201,14 +1201,21 @@ class IngestionPipeline:
                 for line in critique_section.splitlines()
                 if "[critical]" in line or "[major]" in line
             ][:3]
+            if effective_verdict == "error":
+                review_warning = "品質審查未完成，本文尚未通過審查；請對照來源人工核對後再引用。"
+            elif effective_verdict == "unparseable":
+                review_warning = (
+                    "品質審查尚未取得明確判定，本文尚未通過審查；"
+                    "請對照來源與文末「🔍 Quality Critique」人工核對後再引用。"
+                )
+            else:
+                review_warning = (
+                    "品質審查發現未解決的缺陷，本文可能含有事實錯誤；"
+                    "請對照文末「🔍 Quality Critique」逐項核對後再引用。"
+                )
             warning_lines = [
                 f"> [!warning] 🔔 品質警示（critique 判定：{verdict_zh}）",
-                (
-                    "> 品質審查未完成，本文尚未通過審查；請對照來源人工核對後再引用。"
-                    if effective_verdict == "error"
-                    else "> 品質審查發現未解決的缺陷，本文可能含有事實錯誤；"
-                    "請對照文末「🔍 Quality Critique」逐項核對後再引用。"
-                ),
+                f"> {review_warning}",
             ]
             warning_lines.extend(f"> {finding}" for finding in findings)
             warning_block = "\n".join(warning_lines) + "\n\n"

@@ -631,3 +631,123 @@ def test_retry_error_history_is_preserved_in_published_metadata(tmp_path, monkey
     assert metadata["critique_status"] == "succeeded"  # selected original was reviewed
     assert metadata["critique_status_history"] == ["succeeded", "error"]
     assert "offline" in metadata["critique_error_history"][-1]
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "### 總結建議 (Final Recommendation)\n\n初步摘要可用，建議補充來源限制。",
+        "### 總結\n\n這份分析相當出色，後續可以加入對照表。",
+    ],
+)
+def test_missing_verdict_warning_does_not_invent_content_judgment(tmp_path, monkeypatch, summary):
+    assert IngestionPipeline._parse_verdict(summary) is None
+    text = _write_synthesis(
+        tmp_path, monkeypatch, _outcome(None, f"## 🔍 Quality Critique\n\n{summary}\n\n")
+    )
+    warning = text.split("## 📝 Executive Summary")[0]
+    assert "尚未取得明確判定" in warning
+    assert "發現未解決的缺陷" not in warning
+    assert "#NeedsReview" in text and "quality_verdict: unparseable" in text
+    assert summary in text
+
+
+@pytest.mark.parametrize("second", ["missing", "keep", "outage"])
+def test_two_part_review_publication_preserves_status_history_and_trace(
+    tmp_path, monkeypatch, second
+):
+    from core.parser import parse_markdown_metadata
+    from services.ingest.part_state import PartState
+    from services.trace_store import TraceStore
+
+    missing = "### 總結\n\n摘要結構完整，可再加入一項對照。"
+    response = {"missing": missing, "keep": _verdict("keep"), "outage": ConnectionError("offline")}[
+        second
+    ]
+
+    class TracedLLM(_RetryStubLLM):
+        model = "fixture-model"
+
+        def __init__(self):
+            super().__init__(["original synthesis", "retry synthesis"], [missing, response])
+            self.trace_store = TraceStore(db_path=tmp_path / "trace.sqlite")
+
+        def current_run_id(self):
+            return self.trace_store.current_run_id()
+
+        def current_trace_ids(self):
+            return self.trace_store.current_trace_ids()
+
+        def critique_text(self, candidate, sources, focus=None):
+            value = self.critiques.pop(0)
+            self.trace_store.record_llm_call(
+                system_prompt="fixture critique",
+                user_msg={"candidate": candidate, "sources": sources},
+                response_text=value if isinstance(value, str) else None,
+                provider="fixture",
+                model=self.model,
+                stage="critique_text",
+                status="failed" if isinstance(value, Exception) else "succeeded",
+                error=str(value) if isinstance(value, Exception) else None,
+            )
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+    class FakeRAG:
+        def __init__(self):
+            self.indexed = []
+
+        def add_document(self, path, title, content, tags=None):
+            self.indexed.append((path, content))
+
+    monkeypatch.setattr("services.ingestion_pipeline.PAGES_DIR", tmp_path / "pages")
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_ENABLED", True)
+    monkeypatch.setattr("services.ingestion_pipeline.SYNTHESIS_CRITIQUE_MAX_RETRIES", 1)
+    monkeypatch.setattr("core.config.settings.VISUAL_ROUTER_ENABLED", False)
+    llm, rag = TracedLLM(), FakeRAG()
+    pipe = _make_pipe(llm)
+    pipe.rag = rag
+    parts = PartState(
+        part_digests=[
+            {"part": 1, "thesis": "First source fact."},
+            {"part": 2, "thesis": "Second source limitation."},
+        ]
+    )
+    with llm.trace_store.run(intent="fixture.synthesis") as run_id:
+        path = pipe._write_synthesis(
+            base_title="Fixture",
+            content="source one\nsource two",
+            chunks=["source one", "source two"],
+            source_spans=[],
+            part_state=parts,
+            doc_config={"synthesis_template": "none"},
+        )
+    text = path.read_text(encoding="utf-8")
+    metadata = parse_markdown_metadata(text)
+    expected_status = "succeeded" if second == "keep" else "unparseable"
+    expected_verdict = "keep" if second == "keep" else "unparseable"
+    assert metadata["critique_status"] == expected_status
+    assert metadata["quality_verdict"] == expected_verdict
+    assert metadata["critique_attempts"] == len(llm.synthesis_calls) == 2
+    assert metadata["quality_verdict_history"] == [None, "keep" if second == "keep" else None]
+    assert metadata["critique_status_history"] == [
+        "unparseable",
+        {"missing": "unparseable", "keep": "succeeded", "outage": "error"}[second],
+    ]
+    if second == "outage":
+        assert "offline" in metadata["critique_error_history"][-1]
+    assert metadata["status"] == ("#PerfectPitch" if second == "keep" else "#NeedsReview")
+    assert ("retry synthesis" if second == "keep" else "original synthesis") in text
+    assert len(rag.indexed) == 1 and rag.indexed[0][0] == path
+    with llm.trace_store._connect() as conn:
+        artifact = conn.execute(
+            "SELECT * FROM artifacts WHERE artifact_type='synthesis'"
+        ).fetchone()
+    import json
+
+    audit = json.loads(artifact["metadata_json"])
+    assert artifact["run_id"] == metadata["run_id"] == run_id
+    assert artifact["quality_verdict"] == expected_verdict
+    for key in ("critique_status", "quality_verdict_history", "critique_status_history"):
+        assert audit[key] == metadata[key]
