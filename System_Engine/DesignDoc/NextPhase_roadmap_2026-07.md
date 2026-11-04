@@ -619,3 +619,13 @@
 - `make check` exit 0：ruff clean、mypy 174 source files clean；2128 passed、1 skipped、
   1 個既有 Chroma warning。A05 追加兩日正常排程樣本，仍 0 判讀／套用；C01 本次
   重啟後手動入口尚無樣本。剩餘工作見[開發計畫 §16](Development_Plan_2026-10-30.md#16-2026-11-04-c04-程序版本觀測)。
+
+
+## 2026-11-04 B04 原始判定診斷與發布措辭
+
+- [B04 查核](Synthesis_Critique_Audit_2026-11-04.md)：229-Part 原 critique 兩次都漏 verdict，
+  parser 回 None 正確。修正缺判定時不實的缺陷警示，維持 NeedsReview，不放寬 parser。
+- 新增 5 個隔離案例驗缺判定與兩個合成 Part 的 loop／頁面／artifact trace 一致性；
+  真模型短長文與 live 狀態仍待驗。未改模型／prompt／retry，未重跑或覆寫歷史長文。
+- `make check` exit 0：ruff clean、mypy 174 source files clean；2133 passed、1 skipped、
+  1 個既有 Chroma warning。剩餘範圍見[開發計畫 §17](Development_Plan_2026-10-30.md#17-2026-11-04-b04-缺判定診斷與品質警示修復)。

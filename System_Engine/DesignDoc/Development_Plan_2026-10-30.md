@@ -69,7 +69,7 @@ A05 不需要等待 A02 才觀察既有可靠性，但舊契約下的成功 run 
 | B01 | 待稽核／M | 歷史 28 筆 supports 的逐筆處置清單，分保留、局部線索、需更多資料及建議撤回；另做歷史 Cortex↔RAG 唯讀對帳 | 可先盤點；正式重判依 A01–A04 | 無 trace 的 20 筆不偽造歷史段落；人工確認處置前不刪 evidence、不回滾 confidence／S、不批量重建索引；修復另有備份與冪等方案 |
 | B02 | 待實作／M | M2 診斷輸入包含元件能力、相關任務執行結果與可覆核樣本；把必要的推論限制推廣到其他會進 M3 的軸 | A03、B04 的乾淨訊號；可先做一般能力對照 | 重播 10/30 的誤判與其他軸樣本；證據不足仍只給假設／查證；Cortex 不因多幾個數字或模型高信心就解除 gate；M3 消費端限制保留 |
 | B03 | 待審閱／S | 整理 15 筆既有 M3 提案：同 target／basis 競爭組、schema 不符與能力不可能的修改、可保留候選及退回理由 | 不需等模型工作，可作 P0 期間獨立小批 | 交付逐筆建議及 diff；由使用者決定 approve／reject；不以清空佇列為目標。人工確認的退回理由進正式流程 |
-| B04 | 待診斷／S–M | Synthesis 判定格式與新版狀態驗收：先檢查新取得的 229-Part 文件兩次原 critique，定位模型漏寫判定或 parser 缺口，再做最小修正 | 現有 parser 重播已確認仍 None | 同份回應可重現；合法格式不破、漏 verdict 仍 NeedsReview；保留 bounded retry；用一份代表性短長文驗證新版 status／history／artifact，不重跑 229 Parts 才驗一條 parser |
+| B04 | 診斷／呈現修正與隔離驗證完成（11/04），真模型／live 待驗／S–M | Synthesis 判定格式與新版狀態驗收：先檢查新取得的 229-Part 文件兩次原 critique，定位模型漏寫判定或 parser 缺口，再做最小修正 | 現有 parser 重播已確認仍 None | 同份回應可重現；合法格式不破、漏 verdict 仍 NeedsReview；保留 bounded retry；用一份代表性短長文驗證新版 status／history／artifact，不重跑 229 Parts 才驗一條 parser |
 | B05 | 待稽核／M | 長文與 learning artifacts 的效能／品質收尾報告：Part 完整性、耗時分位數、實際 HTTP attempts、queue／wait、pending／deferred／quarantine 及至少 15 個 Parts 人工抽查 | 可在 A01–A04 間穿插；先查可用資料版本 | 229-Part 文件與數學書分開；不同題材不能當 routing A/B。若原數學書前後資料已過期，明示缺口，不補造比較；圖表須有內容正確性、互補性與 ownership 檢查 |
 | B06 | 待評估、按欠帳決定／M | 檢查 artifact deferred／pending 是否長期無喚醒；只有證明存在可處理欠帳，再設計持久化恢復／排程接點 | B05 | 沿現有 slot ledger、TTL、basis 與衝突保護；不把 deferred 當永久 skipped，不重生人工區域。以現有 timer pump／busy lock 交付，不新增無管理 thread |
 
@@ -338,3 +338,17 @@ C01 已修並有隔離回歸測試；C02 不能只用 10/30 手動報告顯示�
 - [A05 追加觀察](A2_runtime_observation_2026-11-02.md#2026-11-04-追加唯讀觀察)：
   11/03、11/04 排程正常、各 0 判讀／套用；live 正向交易缺口仍在。C01 尚無本次
   重啟後手動自評樣本，保留 live 待驗。模型未換，未重新 ingestion 或強迫維護排程。
+
+
+## 17. 2026-11-04 B04 缺判定診斷與品質警示修復
+
+- [B04 查核報告](Synthesis_Critique_Audit_2026-11-04.md)：兩次原 critique 的 prompt
+  已要求 verdict，但輸出只有總結／建議，parser 重播 None 正確；不把讚語當 keep。
+  兩次 input token 皆 32768，保留 context 容量線索，尚不能確定截斷位置與漏判原因。
+- 修復 unparseable 頁首不實的「發現缺陷」措辭，改明示尚未取得判定；NeedsReview、
+  原 critique 與完整 retry／error 歷史保留，不批量改寫舊頁或重跑 229 Parts。
+- 5 個 hermetic 案例（修前 2 failed／3 passed）：兩種摘要形狀及兩個合成 Part 的
+  loop→頁面→artifact trace／FakeRAG 邊界，驗 missing／keep／outage 三路徑。
+  原始 parser、prompt、retry 上限未變；真模型短長文與 live 新版狀態仍待樣本。
+- `make check` exit 0：ruff clean、mypy 174 source files clean，2133 passed、1 skipped、
+  1 個既有 Chroma warning；`git diff --check` exit 0。依先前授權提交、merge main／push。
