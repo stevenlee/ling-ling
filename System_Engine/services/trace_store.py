@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from core.config import DATABASE_DIR
+from core.runtime_identity import runtime_config, runtime_identity
 
 
 _CURRENT_RUN_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -248,7 +249,13 @@ class TraceStore:
                     trigger_type,
                     "running",
                     started_at,
-                    _json_dumps(metadata or {}),
+                    _json_dumps(
+                        {
+                            **(metadata or {}),
+                            "runtime": runtime_identity(),
+                            "runtime_config": runtime_config(),
+                        }
+                    ),
                 ),
             )
 

@@ -36,6 +36,7 @@ def main():
 
     # 1. Acquire PID Lock
     acquire_pid_lock(PID_FILE)
+    ui.set_status("正在初始化服務…")
 
     # 2. Initialize core dependencies
     ensure_directories()

@@ -303,6 +303,10 @@ class LLMClient:
         return raw_result
 
     def trace_run(self, **kwargs):
+        kwargs["metadata"] = {
+            **(kwargs.get("metadata") or {}),
+            "llm": {"provider": self.provider, "model": self.model},
+        }
         return self.trace_store.run(**kwargs)
 
     def current_trace_ids(self) -> list[str]:

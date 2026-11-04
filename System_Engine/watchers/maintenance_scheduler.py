@@ -21,6 +21,7 @@ from core.config import (
     settings,
 )
 from core.state import global_busy_state
+from core.runtime_identity import runtime_identity
 from core.ui import ui
 from maintenance.retrieval_bench import run_retrieval_bench
 
@@ -600,6 +601,7 @@ class MaintenanceScheduler(threading.Thread):
                     "last_run_at": now.isoformat(timespec="seconds"),
                     "last_status": status,
                     "last_summary": summary,
+                    "last_runtime": runtime_identity(),
                 }
                 self._save_state()
             ui.set_status("Ling Ling is waiting... (๑´ㅂ`๑)zZ... (Ctrl-C to Quit)", is_busy=False)

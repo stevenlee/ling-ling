@@ -8,6 +8,7 @@ from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
+from core.runtime_identity import runtime_config, runtime_identity
 
 console = Console()
 
@@ -56,7 +57,9 @@ class LingLingUI:
 
     def banner(self, build_date):
         banner_text = Text()
-        banner_text.append(f"\n🌸 Ling-Ling Mentor System (build {build_date}) 🌸\n", style="bold magenta")
+        banner_text.append(
+            f"\n🌸 Ling-Ling Mentor System (build {build_date}) 🌸\n", style="bold magenta"
+        )
         banner_text.append("玲玲小老師上線囉！(๑˃̵ᴗ˂̵)و\n", style="italic cyan")
         console.print(Panel(banner_text, border_style="bright_magenta"))
 
@@ -73,7 +76,9 @@ class LingLingUI:
         console.print(f"[bold yellow]🔔 NOTE[/bold yellow] | {message}")
 
     def cmd_received(self, cmd_name):
-        console.print(f"\n[bold yellow]📥 收到指令：[/bold yellow][white on blue] {cmd_name} [/white on blue]")
+        console.print(
+            f"\n[bold yellow]📥 收到指令：[/bold yellow][white on blue] {cmd_name} [/white on blue]"
+        )
 
     def set_status(self, message, is_busy=True):
         with self._lock:
@@ -92,10 +97,16 @@ class LingLingUI:
             import json
             from datetime import datetime
             from core.config import DAEMON_STATUS_FILE
+
             DAEMON_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
             payload = json.dumps(
-                {"busy": bool(is_busy), "message": str(message),
-                 "ts": datetime.now().isoformat(timespec="seconds")},
+                {
+                    "busy": bool(is_busy),
+                    "message": str(message),
+                    "ts": datetime.now().isoformat(timespec="seconds"),
+                    "runtime": runtime_identity(),
+                    "runtime_config": runtime_config(),
+                },
                 ensure_ascii=False,
             )
             tmp = DAEMON_STATUS_FILE.with_name(DAEMON_STATUS_FILE.name + ".tmp")
