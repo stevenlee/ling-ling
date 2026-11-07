@@ -157,6 +157,58 @@ def test_llm_health_red_on_errors(tmp_path):
     assert any("synthesis" in o for o in r.observations)
 
 
+def _health_with_stages(by_stage):
+    return {
+        "total": sum(s["total"] for s in by_stage.values()),
+        "failed": sum(s.get("failed", 0) for s in by_stage.values()),
+        "truncated": sum(s.get("truncated", 0) for s in by_stage.values()),
+        "error_rate": 0.0,
+        "total_tokens": 1,
+        "by_stage": by_stage,
+    }
+
+
+def test_llm_health_red_when_one_stage_is_silently_truncated(tmp_path):
+    # Live 2026-11: extract_claims hit max_tokens on ~99% of calls while every
+    # call was recorded as succeeded, so the error-rate lamp stayed green.
+    health = _health_with_stages(
+        {
+            "extract_claims": {"total": 20, "failed": 0, "truncated": 19, "tokens": 1},
+            "answer_query": {"total": 200, "failed": 0, "truncated": 0, "tokens": 1},
+        }
+    )
+    r = run_self_assessment(FakeTrace(health=health), **_paths(tmp_path))
+    ax = _axis(r, "LLM 健康")
+
+    assert ax.lamp == RED
+    assert ax.detail["max_truncation_rate"] == 0.95
+    assert any("extract_claims" in o and "截斷" in o for o in r.observations)
+
+
+def test_llm_health_ignores_truncation_below_min_sample(tmp_path):
+    health = _health_with_stages(
+        {"rare_stage": {"total": 3, "failed": 0, "truncated": 3, "tokens": 1}}
+    )
+    r = run_self_assessment(FakeTrace(health=health), **_paths(tmp_path))
+
+    assert _axis(r, "LLM 健康").lamp == GREEN
+    assert not any("截斷" in o for o in r.observations)
+
+
+def test_llm_health_accepts_legacy_health_without_truncation(tmp_path):
+    health = {
+        "total": 10,
+        "failed": 0,
+        "error_rate": 0.0,
+        "total_tokens": 1,
+        "by_stage": {"synthesis": {"total": 10, "failed": 0, "tokens": 1}},
+    }
+    ax = _axis(run_self_assessment(FakeTrace(health=health), **_paths(tmp_path)), "LLM 健康")
+
+    assert ax.lamp == GREEN
+    assert ax.detail["max_truncation_rate"] == 0.0
+
+
 # ── retrieval axis ────────────────────────────────────────────────────────
 
 
@@ -208,6 +260,61 @@ def test_cortex_red_on_dogmatic(tmp_path, monkeypatch):
     ax = _axis(r, "Cortex 信念")
     assert ax.lamp == RED
     assert any("教條" in o for o in r.observations)
+
+
+class _CleanCortexReport:
+    contradictions = []
+    dogmatic = []
+    thin_evidence = []
+    falsified = []
+    total_pages = 5
+
+
+def test_cortex_flags_insights_quarantined_out_of_consolidation(tmp_path, monkeypatch):
+    p = _paths(tmp_path)
+    failures = {
+        f"i{n}.md": {"attempts": 90, "stage": "extraction", "quarantined": True} for n in range(3)
+    }
+    failures["retrying.md"] = {"attempts": 1, "stage": "extraction", "quarantined": False}
+    p["cortex_state_file"].write_text(json.dumps({"failures": failures}), encoding="utf-8")
+    monkeypatch.setattr("services.cortex_tensions.scan_tensions", lambda d: _CleanCortexReport())
+
+    r = run_self_assessment(FakeTrace(), **p)
+    ax = _axis(r, "Cortex 信念")
+
+    assert ax.lamp == YELLOW
+    assert ax.detail["quarantined_insights"] == 3
+    assert any("3 則洞察被隔離" in o and "extraction ×3" in o for o in r.observations)
+
+
+def test_cortex_quarantine_survives_corrupt_failure_ledger(tmp_path, monkeypatch):
+    p = _paths(tmp_path)
+    p["cortex_state_file"].write_text(
+        json.dumps({"failures": ["not", "a", "dict"]}), encoding="utf-8"
+    )
+    monkeypatch.setattr("services.cortex_tensions.scan_tensions", lambda d: _CleanCortexReport())
+
+    r = run_self_assessment(FakeTrace(), **p)
+    ax = _axis(r, "Cortex 信念")
+
+    assert ax.lamp == GREEN
+    assert ax.detail["quarantined_insights"] == 0
+
+
+def test_cortex_quarantine_still_reported_when_tension_scan_fails(tmp_path, monkeypatch):
+    p = _paths(tmp_path)
+    failures = {f"i{n}.md": {"stage": "extraction", "quarantined": True} for n in range(4)}
+    p["cortex_state_file"].write_text(json.dumps({"failures": failures}), encoding="utf-8")
+
+    def boom(d):
+        raise RuntimeError("cortex dir unreadable")
+
+    monkeypatch.setattr("services.cortex_tensions.scan_tensions", boom)
+
+    r = run_self_assessment(FakeTrace(), **p)
+
+    assert _axis(r, "Cortex 信念").lamp == YELLOW
+    assert any("4 則洞察被隔離" in o for o in r.observations)
 
 
 # ── insight-quality axis ──────────────────────────────────────────────────

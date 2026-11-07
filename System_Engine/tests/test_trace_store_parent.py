@@ -200,3 +200,44 @@ def test_ts_indexes_present_and_used(tmp_path):
     )
     assert "SCAN" not in plan("DELETE FROM llm_calls WHERE ts<?", ("2026-01-01",))
     con.close()
+
+
+class TestLLMCallHealthTruncation:
+    def _record(self, ts, stage, metadata):
+        ts.record_llm_call(
+            provider="p",
+            model="m",
+            system_prompt="s",
+            user_msg="u",
+            response_text="r",
+            stage=stage,
+            metadata=metadata,
+        )
+
+    def test_counts_length_finish_as_truncated_even_when_succeeded(self, tmp_path):
+        ts = _trace_store(tmp_path)
+        self._record(ts, "extract_claims", {"finish_reason": "length"})
+        self._record(ts, "extract_claims", {"finish_reason": "stop"})
+        self._record(ts, "answer_query", {})
+
+        health = ts.llm_call_health(since_days=1)
+
+        assert health["failed"] == 0
+        assert health["truncated"] == 1
+        assert health["by_stage"]["extract_claims"]["truncated"] == 1
+        assert health["by_stage"]["answer_query"]["truncated"] == 0
+
+    def test_malformed_metadata_row_does_not_blank_the_report(self, tmp_path):
+        ts = _trace_store(tmp_path)
+        self._record(ts, "extract_claims", {"finish_reason": "length"})
+        self._record(ts, "extract_claims", {})
+        conn = sqlite3.connect(str(ts.db_path))
+        conn.execute(
+            "UPDATE llm_calls SET metadata_json = '{not json' WHERE metadata_json NOT LIKE '%length%'"
+        )
+        conn.commit()
+
+        health = ts.llm_call_health(since_days=1)
+
+        assert health["total"] == 2
+        assert health["truncated"] == 1

@@ -58,6 +58,12 @@ _VERDICT_REVISE_YELLOW = 0.25  # >=25% revise+reject across reports → yellow
 _VERDICT_REVISE_RED = 0.50  # >=50% → red
 _LLM_ERROR_YELLOW = 0.05  # >=5% failed LLM calls → yellow
 _LLM_ERROR_RED = 0.15  # >=15% → red
+# Truncation is judged per stage: one stage capped on every call is a silent
+# outage of that capability even when it is a small share of all traffic.
+_LLM_TRUNC_MIN_CALLS = 5  # fewer calls than this → too noisy to judge a stage
+_LLM_TRUNC_YELLOW = 0.10  # >=10% of a stage's calls hit the output cap → yellow
+_LLM_TRUNC_RED = 0.30  # >=30% → red
+_CORTEX_QUARANTINE_YELLOW = 3  # >=3 insights quarantined out of consolidation → yellow
 _REFUTE_REFUTED_YELLOW = 0.30  # >=30% of refute-checked insights refuted → yellow
 
 
@@ -100,6 +106,8 @@ def _axis_metric(ax: "Axis") -> dict:
     keep = (
         "rate",
         "error_rate",
+        "max_truncation_rate",
+        "quarantined_insights",
         "gate_error",
         "unparseable",
         "content_bad",
@@ -275,17 +283,45 @@ def _axis_llm_health(trace_store, window_days: int, obs: list) -> Axis:
         ax.lamp = GREEN
         ax.summary = f"近 {window_days} 天無 LLM 呼叫紀錄。"
         return ax
-    ax.lamp = (
+    err_lamp = (
         RED if err_rate >= _LLM_ERROR_RED else YELLOW if err_rate >= _LLM_ERROR_YELLOW else GREEN
     )
     ax.summary = f"{total} 次呼叫，失敗率 {err_rate:.0%}，token {health.get('total_tokens', 0):,}。"
-    if ax.lamp != GREEN:
-        worst = sorted(health.get("by_stage", {}).items(), key=lambda kv: -(kv[1]["failed"]))
+    by_stage = health.get("by_stage", {}) or {}
+    if err_lamp != GREEN:
+        worst = sorted(by_stage.items(), key=lambda kv: -(kv[1].get("failed", 0)))
         for stage, s in worst[:3]:
-            if s["failed"]:
+            if s.get("failed"):
                 obs.append(
                     f"stage `{stage}`：{s['total']} 次中 {s['failed']} 次失敗 — 檢視該 stage 的呼叫。"
                 )
+
+    # Truncated calls are recorded as succeeded, so the error rate is blind to
+    # them; judge each stage's truncation rate on its own.
+    trunc_lamp = GREEN
+    max_trunc_rate = 0.0
+    truncated_stages = []
+    for stage, s in by_stage.items():
+        n, cut = int(s.get("total", 0) or 0), int(s.get("truncated", 0) or 0)
+        if n < _LLM_TRUNC_MIN_CALLS or not cut:
+            continue
+        rate = cut / n
+        max_trunc_rate = max(max_trunc_rate, rate)
+        if rate >= _LLM_TRUNC_YELLOW:
+            truncated_stages.append((rate, stage, n, cut))
+    if max_trunc_rate >= _LLM_TRUNC_RED:
+        trunc_lamp = RED
+    elif max_trunc_rate >= _LLM_TRUNC_YELLOW:
+        trunc_lamp = YELLOW
+    ax.detail = {**health, "max_truncation_rate": round(max_trunc_rate, 4)}
+    if health.get("truncated"):
+        ax.summary += f" 撞到輸出上限被截斷 {health['truncated']} 次。"
+    for rate, stage, n, cut in sorted(truncated_stages, reverse=True)[:3]:
+        obs.append(
+            f"stage `{stage}`：{n} 次中 {cut} 次（{rate:.0%}）撞到輸出上限被截斷，"
+            "仍記為成功 — 檢查 max_tokens 是否留了推理 token 的空間。"
+        )
+    ax.lamp = min(err_lamp, trunc_lamp, key=lambda lamp: _RANK[lamp])
     return ax
 
 
@@ -320,14 +356,45 @@ def _axis_retrieval(bench_history_file: Path, obs: list) -> Axis:
     return ax
 
 
-def _axis_cortex(cortex_dir: Path, ledger_file: Path, obs: list) -> Axis:
+def _consolidation_quarantine(cortex_state_file: Path) -> dict:
+    """Insights the consolidation failure ledger has quarantined.
+
+    A quarantined insight never reaches Cortex until it is fixed, so a growing
+    count means Cortex has silently stopped learning even when the tensions
+    scan looks healthy. Read at the consumer seam: the ledger is persisted
+    state and may be absent, old-format or corrupt.
+    """
+    state = _read_json(cortex_state_file, {})
+    failures = state.get("failures") if isinstance(state, dict) else None
+    stages: Counter = Counter()
+    if isinstance(failures, dict):
+        for entry in failures.values():
+            if isinstance(entry, dict) and entry.get("quarantined"):
+                stages[str(entry.get("stage") or "unknown")] += 1
+    return {"count": sum(stages.values()), "by_stage": dict(stages)}
+
+
+def _axis_cortex(
+    cortex_dir: Path, ledger_file: Path, obs: list, cortex_state_file: Path | None = None
+) -> Axis:
     ax = Axis("Cortex 信念")
+    quarantine = _consolidation_quarantine(cortex_state_file or CORTEX_STATE_FILE)
+    n_quarantined = quarantine["count"]
+    if n_quarantined:
+        stages = "、".join(f"{s} ×{n}" for s, n in sorted(quarantine["by_stage"].items()))
+        obs.append(
+            f"Cortex consolidation 有 {n_quarantined} 則洞察被隔離（{stages}）— "
+            "這些洞察進不了 Cortex，檢查該階段的 LLM 呼叫是否截斷或格式錯誤。"
+        )
     try:
         from services.cortex_tensions import scan_tensions
 
         report = scan_tensions(cortex_dir)
     except Exception as e:
         ax.summary = f"無法掃描 tensions：{e}"
+        ax.detail = {"quarantined_insights": n_quarantined}
+        if n_quarantined >= _CORTEX_QUARANTINE_YELLOW:
+            ax.lamp = YELLOW
         return ax
     led = _read_json(ledger_file, {})
     strict = bool(led.get("adjudication_strict")) if isinstance(led, dict) else False
@@ -348,11 +415,20 @@ def _axis_cortex(cortex_dir: Path, ledger_file: Path, obs: list) -> Axis:
     ax.detail["a2_enabled"] = bool(settings.EVIDENCE_TRACEBACK_ENABLED)
     ax.detail["a2_apply"] = bool(settings.EVIDENCE_TRACEBACK_APPLY)
     # Dogmatic (confident + unfalsifiable) is the echo-chamber fuel → weigh it.
-    ax.lamp = RED if n_dog else YELLOW if (n_contra or n_thin) else GREEN
+    ax.detail["quarantined_insights"] = n_quarantined
+    ax.lamp = (
+        RED
+        if n_dog
+        else YELLOW
+        if (n_contra or n_thin or n_quarantined >= _CORTEX_QUARANTINE_YELLOW)
+        else GREEN
+    )
     ax.summary = (
         f"{report.total_pages} 條主張；矛盾 {n_contra}、教條 {n_dog}、"
         f"薄證據 {n_thin}、已證偽 {n_fals}。"
     )
+    if n_quarantined:
+        ax.summary += f" 被隔離、未能消化的洞察 {n_quarantined} 則。"
     if n_dog:
         obs.append(f"Cortex 有 {n_dog} 條教條主張（高信心+低可證偽）— 同溫層燃料，考慮針對性證偽。")
     if "by_status" in snapshot:
@@ -542,7 +618,7 @@ def run_self_assessment(
         _axis_report_quality(trace_store, window_days, obs),
         _axis_llm_health(trace_store, window_days, obs),
         _axis_retrieval(bench_history_file, obs),
-        _axis_cortex(cortex_dir, ledger_file, obs),
+        _axis_cortex(cortex_dir, ledger_file, obs, cortex_state_file),
         _axis_decay(decay_file, obs),
         _axis_insight_quality(insights_dir, obs),
         _axis_semantic_entropy(rag, insight_signals_file, cortex_state_file, history_file, obs),

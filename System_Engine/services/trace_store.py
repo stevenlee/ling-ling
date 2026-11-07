@@ -595,11 +595,24 @@ class TraceStore:
     def llm_call_health(self, since_days: int = 7) -> dict:
         """Aggregate LLM-call health over the window, grouped by stage.
 
-        Returns {total, failed, error_rate, total_tokens, by_stage:
-        {stage: {total, failed, tokens}}}. SQL-side aggregation — cheap even
-        when the call log is large. For the self-assessment meta-report.
+        Returns {total, failed, truncated, error_rate, total_tokens, by_stage:
+        {stage: {total, failed, truncated, tokens}}}. SQL-side aggregation —
+        cheap even when the call log is large. For the self-assessment
+        meta-report.
+
+        ``truncated`` counts calls whose provider reported
+        ``finish_reason == "length"``. Such calls are recorded as succeeded,
+        so ``failed`` alone cannot see an output cap that silently cuts every
+        reply short (reasoning tokens count against the cap).
         """
-        out = {"total": 0, "failed": 0, "error_rate": 0.0, "total_tokens": 0, "by_stage": {}}
+        out = {
+            "total": 0,
+            "failed": 0,
+            "truncated": 0,
+            "error_rate": 0.0,
+            "total_tokens": 0,
+            "by_stage": {},
+        }
         try:
             with self._connect() as conn:
                 rows = conn.execute(
@@ -607,6 +620,9 @@ class TraceStore:
                     SELECT stage,
                            COUNT(*) AS n,
                            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                           SUM(CASE WHEN json_valid(metadata_json)
+                                     AND json_extract(metadata_json, '$.finish_reason') = 'length'
+                                    THEN 1 ELSE 0 END) AS truncated,
                            COALESCE(SUM(total_tokens), 0) AS tokens
                     FROM llm_calls WHERE ts >= ? GROUP BY stage
                     """,
@@ -615,9 +631,16 @@ class TraceStore:
             for row in rows:
                 stage = row["stage"] or "unknown"
                 n, failed, tokens = int(row["n"]), int(row["failed"] or 0), int(row["tokens"] or 0)
-                out["by_stage"][stage] = {"total": n, "failed": failed, "tokens": tokens}
+                truncated = int(row["truncated"] or 0)
+                out["by_stage"][stage] = {
+                    "total": n,
+                    "failed": failed,
+                    "truncated": truncated,
+                    "tokens": tokens,
+                }
                 out["total"] += n
                 out["failed"] += failed
+                out["truncated"] += truncated
                 out["total_tokens"] += tokens
             out["error_rate"] = out["failed"] / out["total"] if out["total"] else 0.0
         except Exception as e:
