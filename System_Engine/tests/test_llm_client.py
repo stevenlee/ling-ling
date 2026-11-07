@@ -289,6 +289,44 @@ class TestPartDigest:
         assert "(empty digest)" in LLMClient.format_digest_for_prompt(None)
         assert "(empty digest)" not in LLMClient.format_digest_for_prompt("x")
 
+    @staticmethod
+    def _digest_client(monkeypatch, response, calls):
+        client = LLMClient.__new__(LLMClient)
+        monkeypatch.setattr(client, "_get_lang_hint", lambda: "Traditional Chinese")
+
+        def fake_complete_text(**kwargs):
+            calls.append(kwargs)
+            return response
+
+        monkeypatch.setattr(client, "_complete_text", fake_complete_text)
+        return client
+
+    def test_digest_leaves_reasoning_models_thinking_room(self, monkeypatch):
+        calls = []
+        client = self._digest_client(
+            monkeypatch, '{"part": 1, "thesis": "T", "key_points": ["a"]}', calls
+        )
+
+        digest = client.generate_part_digest("Doc", 1, 1, "raw chunk", "part note")
+
+        assert digest["thesis"] == "T"
+        assert "degraded" not in digest
+        assert calls and all(call["max_tokens"] is None for call in calls)
+
+    def test_reasoning_cut_off_before_json_degrades_digest(self, monkeypatch):
+        truncated = (
+            '*   Document Title: Doc\n    *   Part: 1/1\n    ```json\n{"part": 1, "thesis": "cut'
+        )
+        calls = []
+        client = self._digest_client(monkeypatch, truncated, calls)
+
+        digest = client.generate_part_digest(
+            "Doc", 1, 1, "raw chunk", "# Heading\nA prose line long enough to keep."
+        )
+
+        assert digest["degraded"] is True
+        assert digest["highlights"] == []
+
 
 class TestPartDigestFallback:
     # Shape observed live on cloud_act Part 1: the old fallback shipped the

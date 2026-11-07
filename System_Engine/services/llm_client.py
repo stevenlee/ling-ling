@@ -862,7 +862,10 @@ class LLMClient:
                 system_prompt=system_prompt,
                 user_msg=prompt,
                 temperature=0.2,
-                max_tokens=1800,
+                # Reasoning tokens count against the cap: at 1800, gemma4:26b
+                # truncated over half of digests (reasoning or JSON cut off),
+                # leaving degraded fallbacks with no facets or highlights.
+                max_tokens=None,
                 trace_context={
                     "stage": "generate_part_digest",
                     "metadata": {
