@@ -1485,7 +1485,10 @@ class LLMClient:
                 system_prompt=system_prompt,
                 user_msg=insight_text,
                 temperature=0.2,
-                max_tokens=1024,
+                # Reasoning tokens count against the cap: at 1024, gemma4:26b
+                # exhausted it mid-thought on ~99% of calls, so every insight
+                # failed extraction and was quarantined.
+                max_tokens=None,
                 trace_context={"stage": "extract_claims", "metadata": {}},
             )
             if not isinstance(parsed, list):

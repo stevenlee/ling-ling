@@ -696,6 +696,26 @@ class TestExtractClaimsAppliesWhen:
 
         assert result == {"valid": False, "claims": []}
 
+    def test_extraction_leaves_reasoning_models_thinking_room(self, monkeypatch):
+        calls = []
+        client = LLMClient.__new__(LLMClient)
+
+        def fake_complete_text(**kwargs):
+            calls.append(kwargs)
+            return '[{"claim": "This claim is definitely long enough to pass."}]'
+
+        monkeypatch.setattr(client, "_complete_text", fake_complete_text)
+        result = client.extract_claims_result("text")
+
+        assert result["valid"] is True
+        assert calls and all(call["max_tokens"] is None for call in calls)
+
+    def test_reasoning_cut_off_before_json_is_a_failure_not_a_verdict(self, monkeypatch):
+        truncated = "*   Input: an insight report.\n    *   Goal: extract at most 3 claims.\n    *   Candidate 1: 對齊"
+        result = self._client(monkeypatch, truncated).extract_claims_result("text")
+
+        assert result == {"valid": False, "claims": []}
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
