@@ -53,3 +53,47 @@ Cortex 狀態為 19 active、14 fading、89 dormant。仍有效的舊 EvidenceTr
 
 後續每項改動先回答：已發生什麼問題、既有機制為何不足、修改成本是否值得。
 未驗證如實記錄，不自動轉為開發工作。集中驗證與必要重啟，避免每個小段都擾動 daemon。
+
+## 2026-11-07 補記：推理 token 截斷與 M1 盲點
+
+屬「修復已證實風險」。
+
+**發生了什麼。** gemma4:26b 的推理 token 也計入 `max_tokens`。固定上限會讓回應停在
+推理途中或 JSON 寫到一半，provider 回 `finish_reason=length`，但 trace 狀態仍記為
+`succeeded`，不會拋例外。
+
+- `extract_claims`（上限 1024）：至少自 2026-10-12 起約 96% 的呼叫被截斷。claim 抽取
+  全數失敗，29 則洞察被隔離，Cortex 這段期間沒有新增 claim。先前稽核看到的
+  「Cortex 薄證據／零 merge」主因即在此。
+- `generate_part_digest`（上限 1800）：43 次 digest 中 22 次兩次嘗試都被截斷，頁面
+  拿到 degraded fallback（沒有 highlights／evidence／terms、跳過 facet 索引）；
+  facet backfill 有 20 頁因此達到 `max_attempts` 被永久隔離。
+
+**已交付。**
+
+- `26cb022`、`9a7aa29`：兩個呼叫改為 `max_tokens=None`，沿用既有的推理模型慣例，
+  並附回歸測試。已合併並推送 main，daemon 已重啟載入。
+- 實測恢復情況：
+  - facet：touch 20 頁的 `pages/`／`Notes/` 副本（只改 mtime，內容 hash 不變）後，
+    20/20 重新 digest 並寫入 facet；每次用量 2094–8557 token，全數超過舊上限。
+  - Cortex：首次重試即產出 3 條新 claim、4/4 adjudications；同日隔離數 29→19，
+    其餘在各自的 TTL 到期後陸續 half-open 重試。
+- M1 補上盲點：
+  - 「LLM 健康」原本只計 `status=failed`，看不到截斷。現在由 `llm_call_health`
+    統計 `finish_reason=length`，逐 stage 判斷；樣本 ≥5 時，截斷率 ≥10% 亮黃燈、
+    ≥30% 亮紅燈，並點名 stage。
+  - 「Cortex 信念」新增 consolidation 被隔離的洞察數；≥3 則亮黃燈，>0 即列入觀察。
+  - 以正式資料唯讀副本試跑：LLM 健康為紅燈，正確點名 `extract_claims` 97% 與
+    `generate_part_digest` 66%。
+
+**解讀注意。** 2026-10-12 至 11-07 期間的 A2 命中率、M1 的 Cortex 指標與 Cortex 規模，
+都是在 Cortex 幾乎沒有新輸入的狀態下產生的，不能當成正常基線。M1 的 7 天窗格在
+修正後一週內仍會因舊呼叫亮紅燈，屬預期現象。
+
+**未做／待觀察。**
+
+- 確認其餘被隔離的洞察是否全數恢復；仍失敗者才視為真正的 poison input，逐筆處理。
+- 其他偶發截斷（`answer_query`、`adjudicate_claims`、`generate_entity_page`、
+  `generate_synthesis` 各數次）尚未抽查；有實際傷害才立案。不全面移除 token 上限。
+- 9 頁帶 `digest_degraded: true` 的書籍分頁尚未確認成因。
+- 隔離／half-open 重試策略不變：這次正是靠它在修正後自動恢復。
