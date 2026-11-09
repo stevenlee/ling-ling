@@ -188,6 +188,27 @@ def gemini_usage_counts(response: Any) -> tuple[int | None, int | None, int | No
     return prompt, completion, total
 
 
+# Gemini reports why generation ended on each candidate, not on the response,
+# with its own vocabulary. Normalize to the OpenAI-style values the trace
+# consumers (M1 truncation lamp) already read.
+_GEMINI_FINISH_REASONS = {"MAX_TOKENS": "length", "STOP": "stop"}
+
+
+def gemini_finish_reason(response: Any) -> str | None:
+    """Finish reason of the first candidate, normalized; None when absent."""
+    candidates = getattr(response, "candidates", None)
+    if not candidates:
+        return None
+    try:
+        raw = getattr(candidates[0], "finish_reason", None)
+    except (IndexError, TypeError):
+        return None
+    if raw is None:
+        return None
+    name = str(getattr(raw, "value", raw)).upper()
+    return _GEMINI_FINISH_REASONS.get(name, name.lower())
+
+
 def openai_chat(
     provider: str,
     client: Any,
@@ -270,7 +291,7 @@ def complete_once(
         prompt_tokens, completion_tokens, total_tokens = gemini_usage_counts(response)
         provider_metadata = {
             "response_channel": "content",
-            "finish_reason": getattr(response, "finish_reason", None),
+            "finish_reason": gemini_finish_reason(response),
         }
     else:
         text, usage, provider_metadata = openai_chat(
