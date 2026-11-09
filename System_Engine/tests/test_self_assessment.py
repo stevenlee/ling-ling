@@ -319,6 +319,8 @@ def test_cortex_flags_insights_still_quarantined(tmp_path, monkeypatch):
         for n in range(3)
     }
     failures["expired.md"] = _quarantine_entry(idir, "expired.md", until="2000-01-01T00:00:00")
+    failures["invalid.md"] = _quarantine_entry(idir, "invalid.md", until=future)
+    (idir / "invalid.md").write_bytes(b"\xff")
     ledger = json.dumps({"failures": failures})
     p["cortex_state_file"].write_text(ledger, encoding="utf-8")
     monkeypatch.setattr("services.cortex_tensions.scan_tensions", lambda d: _CleanCortexReport())

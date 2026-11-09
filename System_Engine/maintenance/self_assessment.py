@@ -388,6 +388,9 @@ def _consolidation_quarantine(
                 text = (insights_dir / str(name)).read_text(encoding="utf-8")
             except OSError:
                 continue  # file gone: nothing left to block
+            except UnicodeDecodeError:
+                logging.warning("self_assessment: cannot decode insight %s as UTF-8", name)
+                continue
             if _is_quarantined(
                 entry,
                 _insight_hash(text),
