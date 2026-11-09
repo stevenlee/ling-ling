@@ -717,6 +717,7 @@ def _is_quarantined(
     content_hash: str,
     max_attempts: int,
     quarantine_hours: int,
+    now: datetime | None = None,
 ) -> bool:
     if not isinstance(entry, dict) or entry.get("content_hash") != content_hash:
         return False
@@ -737,7 +738,8 @@ def _is_quarantined(
         deadline = (attempted_at + timedelta(hours=quarantine_hours)).isoformat(timespec="seconds")
     try:
         deadline_at = datetime.fromisoformat(str(deadline))
-        now = datetime.now(deadline_at.tzinfo) if deadline_at.tzinfo else datetime.now()
+        if now is None:
+            now = datetime.now(deadline_at.tzinfo) if deadline_at.tzinfo else datetime.now()
         return now < deadline_at
     except ValueError:
         return False

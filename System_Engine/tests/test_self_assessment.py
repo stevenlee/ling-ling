@@ -1,7 +1,9 @@
 """Metacognition M1: unified self-assessment evaluator."""
 
+import hashlib
 import json
 import os
+from datetime import datetime
 
 os.environ.setdefault("LLM_PROVIDER", "vllm")
 
@@ -270,13 +272,55 @@ class _CleanCortexReport:
     total_pages = 5
 
 
-def test_cortex_flags_insights_quarantined_out_of_consolidation(tmp_path, monkeypatch):
-    p = _paths(tmp_path)
-    failures = {
-        f"i{n}.md": {"attempts": 90, "stage": "extraction", "quarantined": True} for n in range(3)
+def _quarantine_entry(insights_dir, name, *, until, text="insight body", stage="extraction"):
+    """Write an insight file and its ledger entry keyed to that content's hash."""
+    insights_dir.mkdir(parents=True, exist_ok=True)
+    (insights_dir / name).write_text(text, encoding="utf-8")
+    return {
+        "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "attempts": 90,
+        "stage": stage,
+        "quarantined": True,
+        "quarantined_until": until,
     }
-    failures["retrying.md"] = {"attempts": 1, "stage": "extraction", "quarantined": False}
-    p["cortex_state_file"].write_text(json.dumps({"failures": failures}), encoding="utf-8")
+
+
+def test_consolidation_quarantine_counts_only_still_blocked_insights(tmp_path):
+    # Contract change (Codex review): the ledger's `quarantined` flag alone no
+    # longer counts. M1 uses consolidation's own predicate, so an entry whose
+    # TTL passed, whose content changed, or whose file is gone is retryable
+    # and must not be reported as blocked.
+    from maintenance.self_assessment import _consolidation_quarantine
+
+    idir = tmp_path / "insights"
+    now = datetime(2026, 11, 9, 12, 0, 0)
+    failures = {
+        "blocked.md": _quarantine_entry(idir, "blocked.md", until="2026-11-10T00:00:00"),
+        "expired.md": _quarantine_entry(idir, "expired.md", until="2026-11-09T11:59:59"),
+        "edited.md": _quarantine_entry(idir, "edited.md", until="2026-11-10T00:00:00"),
+        "deleted.md": _quarantine_entry(idir, "deleted.md", until="2026-11-10T00:00:00"),
+    }
+    (idir / "edited.md").write_text("insight body, revised", encoding="utf-8")
+    (idir / "deleted.md").unlink()
+    state_file = tmp_path / "cortex_state.json"
+    state_file.write_text(json.dumps({"failures": failures}), encoding="utf-8")
+
+    result = _consolidation_quarantine(state_file, idir, now=now)
+
+    assert result == {"count": 1, "by_stage": {"extraction": 1}}
+
+
+def test_cortex_flags_insights_still_quarantined(tmp_path, monkeypatch):
+    p = _paths(tmp_path)
+    idir = p["insights_dir"]
+    future = "2999-01-01T00:00:00"
+    failures = {
+        f"i{n}.md": _quarantine_entry(idir, f"i{n}.md", until=future, text=f"body {n}")
+        for n in range(3)
+    }
+    failures["expired.md"] = _quarantine_entry(idir, "expired.md", until="2000-01-01T00:00:00")
+    ledger = json.dumps({"failures": failures})
+    p["cortex_state_file"].write_text(ledger, encoding="utf-8")
     monkeypatch.setattr("services.cortex_tensions.scan_tensions", lambda d: _CleanCortexReport())
 
     r = run_self_assessment(FakeTrace(), **p)
@@ -285,6 +329,7 @@ def test_cortex_flags_insights_quarantined_out_of_consolidation(tmp_path, monkey
     assert ax.lamp == YELLOW
     assert ax.detail["quarantined_insights"] == 3
     assert any("3 則洞察被隔離" in o and "extraction ×3" in o for o in r.observations)
+    assert p["cortex_state_file"].read_text(encoding="utf-8") == ledger  # read-only
 
 
 def test_cortex_quarantine_survives_corrupt_failure_ledger(tmp_path, monkeypatch):
@@ -303,7 +348,11 @@ def test_cortex_quarantine_survives_corrupt_failure_ledger(tmp_path, monkeypatch
 
 def test_cortex_quarantine_still_reported_when_tension_scan_fails(tmp_path, monkeypatch):
     p = _paths(tmp_path)
-    failures = {f"i{n}.md": {"stage": "extraction", "quarantined": True} for n in range(4)}
+    idir = p["insights_dir"]
+    failures = {
+        f"i{n}.md": _quarantine_entry(idir, f"i{n}.md", until="2999-01-01T00:00:00", text=f"b{n}")
+        for n in range(4)
+    }
     p["cortex_state_file"].write_text(json.dumps({"failures": failures}), encoding="utf-8")
 
     def boom(d):

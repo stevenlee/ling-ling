@@ -356,29 +356,64 @@ def _axis_retrieval(bench_history_file: Path, obs: list) -> Axis:
     return ax
 
 
-def _consolidation_quarantine(cortex_state_file: Path) -> dict:
-    """Insights the consolidation failure ledger has quarantined.
+def _consolidation_quarantine(
+    cortex_state_file: Path, insights_dir: Path, now: datetime | None = None
+) -> dict:
+    """Insights consolidation is still refusing to retry right now.
 
-    A quarantined insight never reaches Cortex until it is fixed, so a growing
-    count means Cortex has silently stopped learning even when the tensions
-    scan looks healthy. Read at the consumer seam: the ledger is persisted
-    state and may be absent, old-format or corrupt.
+    A blocked insight never reaches Cortex, so a growing count means Cortex
+    has silently stopped learning even when the tensions scan looks healthy.
+    The ledger's ``quarantined`` flag is not the verdict: an entry whose file
+    changed, whose TTL passed, or whose file is gone is already retryable.
+    Judge each entry with consolidation's own predicate against the current
+    file content. Strictly read-only — the ledger is never written back.
     """
+    # Late import: share the scheduler's exact predicate without pulling the
+    # Cortex stack into M1's import path; a failure here must not sink M1.
+    from maintenance.cortex_consolidation import (
+        CORTEX_CONSOLIDATION_MAX_ATTEMPTS,
+        CORTEX_CONSOLIDATION_QUARANTINE_HOURS,
+        _insight_hash,
+        _is_quarantined,
+    )
+
     state = _read_json(cortex_state_file, {})
     failures = state.get("failures") if isinstance(state, dict) else None
     stages: Counter = Counter()
     if isinstance(failures, dict):
-        for entry in failures.values():
-            if isinstance(entry, dict) and entry.get("quarantined"):
+        for name, entry in failures.items():
+            if not isinstance(entry, dict):
+                continue
+            try:
+                text = (insights_dir / str(name)).read_text(encoding="utf-8")
+            except OSError:
+                continue  # file gone: nothing left to block
+            if _is_quarantined(
+                entry,
+                _insight_hash(text),
+                CORTEX_CONSOLIDATION_MAX_ATTEMPTS,
+                CORTEX_CONSOLIDATION_QUARANTINE_HOURS,
+                now=now,
+            ):
                 stages[str(entry.get("stage") or "unknown")] += 1
     return {"count": sum(stages.values()), "by_stage": dict(stages)}
 
 
 def _axis_cortex(
-    cortex_dir: Path, ledger_file: Path, obs: list, cortex_state_file: Path | None = None
+    cortex_dir: Path,
+    ledger_file: Path,
+    obs: list,
+    cortex_state_file: Path | None = None,
+    insights_dir: Path | None = None,
 ) -> Axis:
     ax = Axis("Cortex 信念")
-    quarantine = _consolidation_quarantine(cortex_state_file or CORTEX_STATE_FILE)
+    try:
+        quarantine = _consolidation_quarantine(
+            cortex_state_file or CORTEX_STATE_FILE, insights_dir or INSIGHTS_DIR
+        )
+    except Exception as e:
+        logging.warning(f"self_assessment: consolidation quarantine check failed: {e}")
+        quarantine = {"count": 0, "by_stage": {}}
     n_quarantined = quarantine["count"]
     if n_quarantined:
         stages = "、".join(f"{s} ×{n}" for s, n in sorted(quarantine["by_stage"].items()))
@@ -618,7 +653,7 @@ def run_self_assessment(
         _axis_report_quality(trace_store, window_days, obs),
         _axis_llm_health(trace_store, window_days, obs),
         _axis_retrieval(bench_history_file, obs),
-        _axis_cortex(cortex_dir, ledger_file, obs, cortex_state_file),
+        _axis_cortex(cortex_dir, ledger_file, obs, cortex_state_file, insights_dir),
         _axis_decay(decay_file, obs),
         _axis_insight_quality(insights_dir, obs),
         _axis_semantic_entropy(rag, insight_signals_file, cortex_state_file, history_file, obs),
