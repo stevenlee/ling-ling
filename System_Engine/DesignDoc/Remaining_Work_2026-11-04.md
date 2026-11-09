@@ -90,10 +90,27 @@ Cortex 狀態為 19 active、14 fading、89 dormant。仍有效的舊 EvidenceTr
 都是在 Cortex 幾乎沒有新輸入的狀態下產生的，不能當成正常基線。M1 的 7 天窗格在
 修正後一週內仍會因舊呼叫亮紅燈，屬預期現象。
 
-**未做／待觀察。**
+**隔離／half-open 重試策略不變**：這次正是靠它在修正後自動恢復。
 
-- 確認其餘被隔離的洞察是否全數恢復；仍失敗者才視為真正的 poison input，逐筆處理。
-- 其他偶發截斷（`answer_query`、`adjudicate_claims`、`generate_entity_page`、
-  `generate_synthesis` 各數次）尚未抽查；有實際傷害才立案。不全面移除 token 上限。
-- 9 頁帶 `digest_degraded: true` 的書籍分頁尚未確認成因。
-- 隔離／half-open 重試策略不變：這次正是靠它在修正後自動恢復。
+### 2026-11-09 追蹤結果
+
+**恢復已完成。** Cortex consolidation 的 failures 29→0、processed 70→99、Cortex 頁面
+152→209；facet backfill 的隔離與失敗中頁面皆為 0。修正後的 `extract_claims` 與
+`generate_part_digest` 沒有再出現 `finish_reason=length`，因此不存在需要逐筆處理的
+poison input。
+
+**其他偶發截斷：不改。** 修正後只剩 `adjudicate_claims` 出現截斷（158 次中 7 次，約 4%）。
+原因不是上限過小，而是偶發的推理失控迴圈：輸入約 270 token，卻一路產出到 provider 的
+16384 token 硬上限，每次約耗時 5 分鐘。7 次都在下一次重試正常回應，判決結果沒有受影響。
+`answer_query` 的 8 次是同一現象，全部發生在 11-03／04 洞察流程的內部呼叫（並非使用者
+提問），之後未再出現。`generate_entity_page`、`critique_text`、`generate_synthesis`
+的截斷都在修正前、各 1–2 次。現有的有限重試已足以處理；M1 的 10% 門檻會在比例上升時
+點名，所以不全面移除 token 上限，也不另加防護。
+
+**9 頁 `digest_degraded: true` 書籍分頁：已知限制，不修。** 這些頁面都是 2026-07 匯入，
+早於 trace 開始記錄（10-12），無法確認成因。另外發現一個小的不一致：facet backfill 從
+Part Digest Appendix 解析 digest，但降級標記只寫在 frontmatter 的 `digest_degraded`，
+因此繞過了 `_facets_from_digest` 的降級防護，這 9 頁都已用降級內容建立 5 筆 facet。
+影響為 5494 個分頁中的 9 頁（0.16%），抽查內容為正常段落文字，沒有觀察到檢索問題，
+依本計畫原則暫不修。若日後出現實際檢索問題，最小修正為：backfill 也檢查
+`digest_degraded`，遇到降級頁面改走 LLM digest（9 次呼叫）。
