@@ -383,6 +383,7 @@ class DynamicSettings:
         ("max_output", "MAX_OUTPUT", int),
         ("memory_limit", "MEMORY_LIMIT", int),
         ("search_depth", "SEARCH_DEPTH", int),
+        ("section_locate_max_parts", "SECTION_LOCATE_MAX_PARTS", int),
         ("strict_mode", "STRICT_MODE", bool),
         ("digest_limit", "DIGEST_LIMIT", int),
         ("digest_overlap", "DIGEST_OVERLAP", int),
@@ -465,6 +466,9 @@ class DynamicSettings:
         self.MAX_OUTPUT = 4096
         self.MEMORY_LIMIT = 32768
         self.SEARCH_DEPTH = 3
+        # Section-addressed Q&A ("§2.1 of <doc>"): max located Part pages to load;
+        # a 32k-token context holds about four Parts beside the RAG notes.
+        self.SECTION_LOCATE_MAX_PARTS = 4
         self.STRICT_MODE = True
         # Phase 6: auto-attach learning artifacts to synthesis/insight output,
         # and the optional deterministic Mermaid graph on argument maps. Default

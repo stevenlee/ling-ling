@@ -20,6 +20,7 @@ creativity: 0.4
 max_output: 16384
 memory_limit: 32768
 search_depth: 3
+section_locate_max_parts: 4
 strict_mode: true
 visual_router: true
 ontology_bias: false
@@ -49,6 +50,7 @@ This file controls Ling Ling's behavior and performance. Changes take effect imm
 - **max_output**: Maximum tokens per response (approx. 3000-5000 characters).
 - **memory_limit**: Context window size (crucial for Ollama).
 - **search_depth**: Number of related notes to retrieve during RAG (1-10).
+- **section_locate_max_parts**: 問題指定章節（如「§2.1」、「Appendix A」）時，最多載入幾個對應的 Part 頁面（預設 4；32k context 約可容納 4 個 Part 加上 RAG 結果）。超過時會在 context 註明只載入前幾個。
 - **strict_mode**: If `true`, the AI will follow templates strictly and reduce "chatty" personality.
 
 ### 🍽️ Digestion (Chunking)

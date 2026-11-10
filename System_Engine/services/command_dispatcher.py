@@ -30,7 +30,9 @@ from core.config import (
     LOAD_SOURCES_MAX_CHARS_PER_SOURCE,
     settings,
 )
+from core.parser import strip_body_frontmatter
 from services.builtin_adapters import _resolve_source_paths
+from services.section_locator import locate_section_parts
 
 # Declarative intent routing table.
 # Order matters: longer prefixes (e.g. "patrol-tags") must appear before shorter
@@ -153,6 +155,49 @@ def load_linked_sources(target_entities: list[str]) -> list[str]:
             text = text[:max_chars].rstrip() + "\n\n<!-- truncated by PromptWatcher default Q&A -->"
         loaded_sources.append(f"## Source: {title}\n\n{text}")
     return loaded_sources
+
+
+def load_section_sources(
+    query_content: str, target_entities: list[str]
+) -> tuple[list[str], set[str]]:
+    """Load the Parts holding a section the question names ("§2.1 of <doc>").
+
+    Returns ``(sources, located_docs)``: formatted source blocks and the
+    document titles they came from, so the caller can skip loading those
+    whole documents (a truncated whole-document load is mostly the opening
+    and crowds the located section out of the context). Fail-soft: a lookup
+    failure leaves ordinary Q&A untouched.
+    """
+    try:
+        parts, total = locate_section_parts(query_content, target_entities)
+    except Exception as e:
+        logging.warning(f"Section locate failed, answering without it: {e}")
+        return [], set()
+    if not parts:
+        return [], set()
+
+    explicit = {t.split("|")[0].strip() for t in target_entities}
+    max_chars = LOAD_SOURCES_MAX_CHARS_PER_SOURCE
+    sources: list[str] = []
+    if total > len(parts):
+        sources.append(
+            f"> 章節定位：問題指定的章節共涵蓋 {total} 個 Part，"
+            f"此處只載入前 {len(parts)} 個；回答時請說明內容可能不完整。"
+        )
+    for part in parts:
+        if part.title in explicit:
+            continue  # already loaded as an explicit link
+        try:
+            text, _ = strip_body_frontmatter(part.path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as e:
+            logging.warning(f"Section locate: cannot read {part.title}: {e}")
+            continue
+        if max_chars > 0 and len(text) > max_chars:
+            text = text[:max_chars].rstrip() + "\n\n<!-- truncated by section locate -->"
+        sources.append(
+            f"## Source: {part.title}（章節定位：§{part.label}｜{part.heading}）\n\n{text}"
+        )
+    return sources, {part.path.parent.name for part in parts}
 
 
 class CommandDispatcher:
@@ -297,7 +342,11 @@ class CommandDispatcher:
     def _handle_chat(
         self, query_content: str, lower_query: str, target_entities: list[str], filepath: Path
     ) -> None:
-        loaded_sources = load_linked_sources(target_entities)
+        section_sources, located_docs = load_section_sources(query_content, target_entities)
+        # A whole-document link to a document whose section was located is
+        # replaced by the located Parts; explicit Part links are kept.
+        linked = [t for t in target_entities if t.split("|")[0].strip() not in located_docs]
+        loaded_sources = load_linked_sources(linked) + section_sources
         relevant = self.rag.query_similar_notes(query_content, top_k=settings.SEARCH_DEPTH)
         context_parts = []
         if loaded_sources:
